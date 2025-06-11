@@ -22,17 +22,7 @@ const StudentForm = () => {
   });
 
   const [error, setError] = useState(null);
-
-  const colors = {
-    darkGreen: '#2d4a3d',
-    lightGreen: '#7a9b8a',
-    dustyRose: '#c19a9a',
-    coral: '#d85c5c',
-    red: '#d63447',
-    cream: '#f5f2e8',
-    olive: '#6b7c5c',
-    black: '#2c2c2c',
-  };
+  const [success, setSuccess] = useState(null);
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -50,9 +40,10 @@ const StudentForm = () => {
     }
 
     if (error) setError(null);
+    if (success) setSuccess(null);
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
 
     if (formData.password !== formData.confirmPassword) {
@@ -60,243 +51,112 @@ const StudentForm = () => {
       return;
     }
 
-    console.log('Form submitted:', formData);
+    try {
+      const response = await fetch('http://localhost:3000/api/students', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(formData)
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Something went wrong');
+      }
+
+      setSuccess('Student registered successfully!');
+      setFormData({
+        lastName: '',
+        firstName: '',
+        phoneNumber: '',
+        gender: '',
+        education: '',
+        email: '',
+        address: '',
+        dob: '',
+        tradingLevel: 'Beginner',
+        device: [],
+        learningStyle: [],
+        city: '',
+        province: '',
+        username: '',
+        password: '',
+        confirmPassword: '',
+      });
+    } catch (err) {
+      console.error(err);
+      setError(err.message);
+    }
   };
 
-  const styles = {
-    container: {
-        maxWidth: '900px',
-        margin: '40px auto',
-        backgroundColor: '#fff',
-        padding: '32px',
-        borderRadius: '10px',
-        boxShadow: '0 6px 12px rgba(0, 0, 0, 0.1)',
-        fontFamily: 'Arial, sans-serif',
-    },
-    heading: {
-        textAlign: 'center',
-        color: colors.darkGreen,
-        marginBottom: '30px',
-        fontSize: '28px',
-    },
-    fieldset: {
-        border: '1px solid #ddd',
-        padding: '20px',
-        marginBottom: '30px',
-        borderRadius: '8px',
-    },
-    legend: {
-        fontWeight: 'bold',
-        color: colors.olive,
-        fontSize: '18px',
-        marginBottom: '20px',
-    },
-    formRow: {
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: '20px'
-    },
-    formGroup: {
-        flex: '1 1 45%',
-        minWidth: '200px',
-    },
-    fullWidthGroup: {
-        flex: '1 1 100%',
-    },
-    label: {
-        display: 'block',
-        fontWeight: 'bold',
-        marginBottom: '6px',
-        color: colors.black,
-    },
-    input: {
-        width: '80%',
-        padding: '10px',
-        marginBottom: '16px',
-        border: '1px solid #ccc',
-        borderRadius: '4px',
-        fontSize: '16px',
-        transition: 'border-color 0.2s',
-    },
-    select: {
-        width: '85%',
-        padding: '10px',
-        marginBottom: '16px',
-        border: '1px solid #ccc',
-        borderRadius: '4px',
-        backgroundColor: '#fff',
-        fontSize: '16px',
-    },
-    checkboxGroup: {
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '10px',
-        marginBottom: '16px',
-    },
-    checkboxLabel: {
-        fontWeight: 'normal',
-        color: colors.black,
-        display: 'flex',
-        alignItems: 'center',
-        gap: '8px',
-        fontSize: '15px',
-    },
-    error: {
-        color: colors.red,
-        marginBottom: '16px',
-        textAlign: 'center',
-    },
-    button: {
-        backgroundColor: colors.coral,
-        color: 'white',
-        padding: '14px 20px',
-        border: 'none',
-        borderRadius: '5px',
-        fontSize: '18px',
-        cursor: 'pointer',
-        display: 'block',
-        width: '100%',
-        marginTop: '20px',
-        transition: 'background-color 0.2s ease',
-    },
-    responsive: `
-        @media (max-width: 768px) {
-        .formRow {
-            flex-direction: column;
-        }
-        .formGroup {
-            flex: 1 1 100%;
-        }
-        }
-    `
-    };
-
-
   return (
-    <div style={styles.container}>
-      <h1 style={styles.heading}>Enrollment Form</h1>
+    <div style={{ maxWidth: '900px', margin: '40px auto', padding: '32px', backgroundColor: '#fff', borderRadius: '10px', boxShadow: '0 6px 12px rgba(0,0,0,0.1)' }}>
+      <h1 style={{ textAlign: 'center', color: '#2d4a3d', marginBottom: '30px' }}>Enrollment Form</h1>
       <form onSubmit={handleSubmit}>
-        {error && <div style={styles.error}>{error}</div>}
+        {error && <div style={{ color: '#d63447', textAlign: 'center', marginBottom: '16px' }}>{error}</div>}
+        {success && <div style={{ color: 'green', textAlign: 'center', marginBottom: '16px' }}>{success}</div>}
 
-        <fieldset style={styles.fieldset}>
-        <legend style={styles.legend}>Student Information</legend>
-        <div style={styles.formRow}>
-            <div style={styles.formGroup}>
-            <label style={styles.label}>Last Name</label>
-            <input style={styles.input} name="lastName" value={formData.lastName} onChange={handleChange} required />
-            </div>
-
-            <div style={styles.formGroup}>
-            <label style={styles.label}>First Name</label>
-            <input style={styles.input} name="firstName" value={formData.firstName} onChange={handleChange} required />
-            </div>
-
-            <div style={styles.formGroup}>
-            <label style={styles.label}>Phone Number</label>
-            <input style={styles.input} name="phoneNumber" value={formData.phoneNumber} onChange={handleChange} />
-            </div>
-
-            <div style={styles.formGroup}>
-            <label style={styles.label}>Sex</label>
-            <select name="gender" style={styles.select} value={formData.gender} onChange={handleChange}>
-                <option value="">--Select--</option>
-                <option value="Female">Female</option>
-                <option value="Male">Male</option>
-            </select>
-            </div>
-
-            <div style={styles.formGroup}>
-            <label style={styles.label}>Educational Background</label>
-            <input style={styles.input} name="education" value={formData.education} onChange={handleChange} />
-            </div>
-
-            <div style={styles.formGroup}>
-            <label style={styles.label}>Email Address</label>
-            <input type="email" style={styles.input} name="email" value={formData.email} onChange={handleChange} />
-            </div>
-
-            <div style={styles.formGroup}>
-            <label style={styles.label}>Place of Birth</label>
-            <input style={styles.input} name="placeOfBirth" value={formData.placeOfBirth} onChange={handleChange} />
-            </div>
-
-            <div style={styles.formGroup}>
-            <label style={styles.label}>Date of Birth</label>
-            <input type="date" style={styles.input} name="dob" value={formData.dob} onChange={handleChange} />
-            </div>
-        </div>
+        {/* Personal Info */}
+        <fieldset>
+          <legend>Student Information</legend>
+          <input name="lastName" placeholder="Last Name" value={formData.lastName} onChange={handleChange} required />
+          <input name="firstName" placeholder="First Name" value={formData.firstName} onChange={handleChange} required />
+          <input name="phoneNumber" placeholder="Phone Number" value={formData.phoneNumber} onChange={handleChange} />
+          <select name="gender" value={formData.gender} onChange={handleChange} required>
+            <option value="">--Select Gender--</option>
+            <option value="Female">Female</option>
+            <option value="Male">Male</option>
+          </select>
+          <input name="education" placeholder="Educational Background" value={formData.education} onChange={handleChange} />
+          <input name="email" type="email" placeholder="Email Address" value={formData.email} onChange={handleChange} />
+          <input name="placeOfBirth" placeholder="Place of Birth" value={formData.placeOfBirth} onChange={handleChange} />
+          <input name="dob" type="date" value={formData.dob} onChange={handleChange} />
         </fieldset>
 
-        <fieldset style={styles.fieldset}>
-          <legend style={styles.legend}>Preferences</legend>
-
-          <label style={styles.label}>Trading Level</label>
-          <select name="tradingLevel" style={styles.select} value={formData.tradingLevel} onChange={handleChange}>
+        {/* Preferences */}
+        <fieldset>
+          <legend>Preferences</legend>
+          <label>Trading Level</label>
+          <select name="tradingLevel" value={formData.tradingLevel} onChange={handleChange}>
             <option value="Beginner">Beginner</option>
             <option value="Intermediate">Intermediate</option>
             <option value="Advanced">Advanced</option>
           </select>
 
-          <div style={styles.checkboxGroup}>
-            <label style={styles.label}>Available Devices</label>
-            {['Mobile Phone', 'Tablet', 'Laptop'].map(device => (
-              <label key={device} style={styles.checkboxLabel}>
-                <input
-                  type="checkbox"
-                  name="device"
-                  value={device}
-                  checked={formData.device.includes(device)}
-                  onChange={handleChange}
-                />{' '}
-                {device}
-              </label>
+          <div>
+            <label>Available Devices:</label><br />
+            {['Mobile Phone', 'Tablet', 'Laptop'].map(d => (
+              <label key={d}><input type="checkbox" name="device" value={d} checked={formData.device.includes(d)} onChange={handleChange} /> {d}</label>
             ))}
           </div>
 
-          <div style={styles.checkboxGroup}>
-            <label style={styles.label}>Learning Style</label>
-            {['In person', 'Online'].map(style => (
-              <label key={style} style={styles.checkboxLabel}>
-                <input
-                  type="checkbox"
-                  name="learningStyle"
-                  value={style}
-                  checked={formData.learningStyle.includes(style)}
-                  onChange={handleChange}
-                />{' '}
-                {style}
-              </label>
+          <div>
+            <label>Learning Style:</label><br />
+            {['In person', 'Online'].map(ls => (
+              <label key={ls}><input type="checkbox" name="learningStyle" value={ls} checked={formData.learningStyle.includes(ls)} onChange={handleChange} /> {ls}</label>
             ))}
           </div>
         </fieldset>
 
-        <fieldset style={styles.fieldset}>
-          <legend style={styles.legend}>Address Information</legend>
-
-          <label style={styles.label}>Address</label>
-          <input style={styles.input} name="address" value={formData.address} onChange={handleChange} />
-
-          <label style={styles.label}>City</label>
-          <input style={styles.input} name="city" value={formData.city} onChange={handleChange} />
-
-          <label style={styles.label}>Province</label>
-          <input style={styles.input} name="province" value={formData.province} onChange={handleChange} />
+        {/* Address Info */}
+        <fieldset>
+          <legend>Address Information</legend>
+          <input name="address" placeholder="Street Address" value={formData.address} onChange={handleChange} />
+          <input name="city" placeholder="City" value={formData.city} onChange={handleChange} />
+          <input name="province" placeholder="Province" value={formData.province} onChange={handleChange} />
         </fieldset>
 
-        <fieldset style={styles.fieldset}>
-          <legend style={styles.legend}>Account Information</legend>
-
-          <label style={styles.label}>Username</label>
-          <input style={styles.input} name="username" value={formData.username} onChange={handleChange} required />
-
-          <label style={styles.label}>Password</label>
-          <input type="password" style={styles.input} name="password" value={formData.password} onChange={handleChange} required />
-
-          <label style={styles.label}>Confirm Password</label>
-          <input type="password" style={styles.input} name="confirmPassword" value={formData.confirmPassword} onChange={handleChange} required />
+        {/* Account Info */}
+        <fieldset>
+          <legend>Account Information</legend>
+          <input name="username" placeholder="Username" value={formData.username} onChange={handleChange} required />
+          <input name="password" type="password" placeholder="Password" value={formData.password} onChange={handleChange} required />
+          <input name="confirmPassword" type="password" placeholder="Confirm Password" value={formData.confirmPassword} onChange={handleChange} required />
         </fieldset>
 
-        <button type="submit" style={styles.button}>Submit</button>
+        <button type="submit" style={{ backgroundColor: '#d85c5c', color: 'white', padding: '12px', border: 'none', borderRadius: '6px', fontSize: '16px', marginTop: '20px' }}>Submit</button>
       </form>
     </div>
   );

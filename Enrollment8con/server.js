@@ -12,9 +12,6 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { body, validationResult } from 'express-validator';
 
-
-// Allow all origins (development only – restrict in production!)
-
 dotenv.config();
 
 const app = express();
@@ -51,12 +48,11 @@ const authLimiter = rateLimit({
 });
 
 app.use(limiter);
-// app.use('/api/auth', authLimiter);
 
 // Core middleware
 app.use(cors({
   origin: 'http://localhost:5173',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // include OPTIONS
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 }));
@@ -143,7 +139,9 @@ const authenticateToken = async (req, res, next) => {
     
     const [userRows] = await pool.execute(`
       SELECT a.account_id, a.username, a.account_status, ar.role_id, r.role_name, r.permissions,
-             p.first_name, p.last_name, p.person_id
+             p.first_name, p.last_name, 
+             COALESCE(s.student_id, st.staff_id) as user_id,
+             CASE WHEN s.student_id IS NOT NULL THEN s.person_id ELSE st.person_id END as person_id
       FROM accounts a
       JOIN account_roles ar ON a.account_id = ar.account_id
       JOIN roles r ON ar.role_id = r.role_id
@@ -164,7 +162,8 @@ const authenticateToken = async (req, res, next) => {
       permissions: userRows[0].permissions,
       firstName: userRows[0].first_name,
       lastName: userRows[0].last_name,
-      personId: userRows[0].person_id
+      personId: userRows[0].person_id,
+      userId: userRows[0].user_id
     };
 
     next();
@@ -230,83 +229,83 @@ app.post('/api/auth', [
   try {
     const { username, password } = req.body;
 
-    // Admin auto-setup and login
-    if (username === 'admin' && password === 'admin123') {
-      const [existingAdmin] = await pool.execute(
-        'SELECT * FROM accounts WHERE username = ?',
-        ['admin']
-      );
+    // // Admin auto-setup and login
+    // if (username === 'admin' && password === 'admin123') {
+    //   const [existingAdmin] = await pool.execute(
+    //     'SELECT * FROM accounts WHERE username = ?',
+    //     ['admin']
+    //   );
 
-      let adminId;
+    //   let adminId;
 
-      if (existingAdmin.length === 0) {
-        const hash = await bcrypt.hash('admin123', 10);
-        const [insertResult] = await pool.execute(
-          `INSERT INTO accounts (username, password_hash, token, account_status)
-           VALUES (?, ?, '', 'active')`,
-          ['admin', hash]
-        );
-        adminId = insertResult.insertId;
+    //   if (existingAdmin.length === 0) {
+    //     const hash = await bcrypt.hash('admin123', 10);
+    //     const [insertResult] = await pool.execute(
+    //       `INSERT INTO accounts (username, password_hash, token, account_status)
+    //        VALUES (?, ?, '', 'active')`,
+    //       ['admin', hash]
+    //     );
+    //     adminId = insertResult.insertId;
 
-        await pool.execute(
-          `INSERT INTO account_roles (account_id, role_id, is_active)
-           VALUES (?, ?, TRUE)`,
-          [adminId, 1] // assuming role_id 1 is 'admin'
-        );
-      } else {
-        adminId = existingAdmin[0].account_id;
-      }
+    //     await pool.execute(
+    //       `INSERT INTO account_roles (account_id, role_id, is_active)
+    //        VALUES (?, ?, TRUE)`,
+    //       [adminId, 1]
+    //     );
+    //   } else {
+    //     adminId = existingAdmin[0].account_id;
+    //   }
 
-      const [[existingTokenRow]] = await pool.execute(
-        `SELECT token FROM accounts WHERE account_id = ?`,
-        [adminId]
-      );
+    //   const [[existingTokenRow]] = await pool.execute(
+    //     `SELECT token FROM accounts WHERE account_id = ?`,
+    //     [adminId]
+    //   );
 
-      let token = existingTokenRow.token;
-      let shouldUpdate = true;
+    //   let token = existingTokenRow.token;
+    //   let shouldUpdate = true;
 
-      if (token) {
-        try {
-          jwt.verify(token, JWT_SECRET);
-          shouldUpdate = false;
-        } catch (err) {
-          shouldUpdate = true;
-        }
-      }
+    //   if (token) {
+    //     try {
+    //       jwt.verify(token, JWT_SECRET);
+    //       shouldUpdate = false;
+    //     } catch (err) {
+    //       shouldUpdate = true;
+    //     }
+    //   }
 
-      if (shouldUpdate) {
-        token = jwt.sign({
-          accountId: adminId,
-          username: 'admin',
-          role: 'admin'
-        }, JWT_SECRET, { expiresIn: '8h' });
+    //   if (shouldUpdate) {
+    //     token = jwt.sign({
+    //       accountId: adminId,
+    //       username: 'admin',
+    //       role: 'admin'
+    //     }, JWT_SECRET, { expiresIn: '8h' });
 
-        await pool.execute(
-          `UPDATE accounts SET token = ? WHERE account_id = ?`,
-          [token, adminId]
-        );
-      }
+    //     await pool.execute(
+    //       `UPDATE accounts SET token = ? WHERE account_id = ?`,
+    //       [token, adminId]
+    //     );
+    //   }
 
-      return res.json({
-        token,
-        user: {
-          accountId: adminId,
-          username: 'admin',
-          role: 'admin',
-          firstName: 'System',
-          lastName: 'Administrator',
-          permissions: 'all',
-          profile: {}
-        }
-      });
-    }
+    //   return res.json({
+    //     token,
+    //     user: {
+    //       accountId: adminId,
+    //       username: 'admin',
+    //       role: 'admin',
+    //       firstName: 'System',
+    //       lastName: 'Administrator',
+    //       permissions: 'all',
+    //       profile: {}
+    //     }
+    //   });
+    // }
 
     // Regular users
     const [userRows] = await pool.execute(`
       SELECT a.account_id, a.username, a.password_hash, a.account_status, 
              a.failed_login_attempts, a.locked_until,
              ar.role_id, r.role_name, r.permissions,
-             p.first_name, p.last_name, p.person_id
+             p.first_name, p.last_name
       FROM accounts a
       JOIN account_roles ar ON a.account_id = ar.account_id
       JOIN roles r ON ar.role_id = r.role_id
@@ -375,7 +374,7 @@ app.post('/api/auth', [
         accountId: user.account_id,
         username: user.username,
         role: user.role_name
-      }, JWT_SECRET, { expiresIn: '8h' });
+      }, JWT_SECRET, { expiresIn: '24h' });
 
       await pool.execute(
         `UPDATE accounts SET token = ? WHERE account_id = ?`,
@@ -417,8 +416,6 @@ app.post('/api/auth', [
     res.status(500).json({ error: 'Authentication failed' });
   }
 });
-
-
 app.post('/api/auth/login', [
   body('token').notEmpty().isString()
 ], validateInput, async (req, res) => {
@@ -479,7 +476,6 @@ app.post('/api/auth/login', [
   }
 });
 
-// logout endpoint
 app.post('/api/auth/logout', authenticateToken, async (req, res) => {
   try {
     const accountId = req.user.accountId;
@@ -494,48 +490,214 @@ app.post('/api/auth/logout', authenticateToken, async (req, res) => {
   }
 });
 
+// ============================================================================
+// STUDENT ROUTES (Fixed for proper schema)
+// ============================================================================
 
-app.post('/api/auth/change-password', [
-  authenticateToken,
-  body('currentPassword').isLength({ min: 6 }),
-  body('newPassword').isLength({ min: 6 }).matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
-], validateInput, async (req, res) => {
+app.get('/api/students', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
   try {
-    const { currentPassword, newPassword } = req.body;
-    const accountId = req.user.accountId;
+    const { name_sort, graduation_status, trading_level, search } = req.query;
+    
+    let query = `
+      SELECT s.student_id, s.graduation_status, s.academic_standing, s.gpa, s.registration_date,
+             p.first_name, p.last_name, p.birth_date, p.birth_place, p.gender,
+             tl.level_name as current_trading_level,
+             COUNT(DISTINCT se.enrollment_id) as total_enrollments
+      FROM students s
+      JOIN persons p ON s.person_id = p.person_id
+      LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
+      LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
+      LEFT JOIN student_enrollments se ON s.student_id = se.student_id
+      WHERE 1=1
+    `;
+    const params = [];
 
-    const [userRows] = await pool.execute(
-      'SELECT password_hash FROM accounts WHERE account_id = ?',
-      [accountId]
-    );
-
-    if (userRows.length === 0) {
-      return res.status(404).json({ error: 'Account not found' });
+    if (graduation_status) {
+      query += ' AND s.graduation_status = ?';
+      params.push(graduation_status);
     }
 
-    const isValidPassword = await bcrypt.compare(currentPassword, userRows[0].password_hash);
-    if (!isValidPassword) {
-      return res.status(401).json({ error: 'Current password is incorrect' });
+    if (trading_level) {
+      query += ' AND tl.level_name = ?';
+      params.push(trading_level);
     }
 
-    const saltRounds = 12;
-    const newPasswordHash = await bcrypt.hash(newPassword, saltRounds);
+    if (search) {
+      query += ' AND (p.first_name LIKE ? OR p.last_name LIKE ? OR s.student_id LIKE ?)';
+      const searchParam = `%${search}%`;
+      params.push(searchParam, searchParam, searchParam);
+    }
 
-    await pool.execute(
-      'UPDATE accounts SET password_hash = ? WHERE account_id = ?',
-      [newPasswordHash, accountId]
-    );
+    query += ' GROUP BY s.student_id, p.first_name, p.last_name, p.birth_date, p.birth_place, p.gender, s.graduation_status, s.academic_standing, s.gpa, s.registration_date, tl.level_name';
 
-    res.json({ message: 'Password changed successfully' });
+    if (name_sort) {
+      query += ` ORDER BY p.first_name ${name_sort === 'ascending' ? 'ASC' : 'DESC'}`;
+    } else {
+      query += ' ORDER BY s.registration_date DESC';
+    }
+
+    const [students] = await pool.execute(query, params);
+    res.json(students);
+  } catch (error) {
+    console.error('Students fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch students' });
+  }
+});
+
+app.post('/api/students', [
+  authenticateToken,
+  authorize(['admin', 'staff']),
+  body('first_name').trim().isLength({ min: 1, max: 50 }).escape(),
+  body('last_name').trim().isLength({ min: 1, max: 50 }).escape(),
+  body('birth_date').isISO8601(),
+  body('birth_place').trim().isLength({ min: 1, max: 100 }).escape(),
+  body('gender').isIn(['Male', 'Female', 'Other']),
+  body('email').isEmail().normalizeEmail(),
+  body('education').trim().isLength({ min: 1, max: 100 }).escape()
+], validateInput, async (req, res) => {
+  const connection = await pool.getConnection();
+  
+  try {
+    await connection.beginTransaction();
+
+    const { 
+      first_name, middle_name, last_name, birth_date, birth_place, gender,
+      email, education, phone, address, username, password, trading_level_id 
+    } = req.body;
+
+    // Insert into persons table
+    const [personResult] = await connection.execute(`
+      INSERT INTO persons (first_name, middle_name, last_name, birth_date, birth_place, gender, email, education)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `, [first_name, middle_name || null, last_name, birth_date, birth_place, gender, email, education]);
+
+    const person_id = personResult.insertId;
+
+    let account_id = null;
+    if (username && password) {
+      const saltRounds = 12;
+      const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+      const [accountResult] = await connection.execute(`
+        INSERT INTO accounts (username, password_hash, token, account_status)
+        VALUES (?, ?, '', 'active')
+      `, [username, hashedPassword]);
+
+      account_id = accountResult.insertId;
+
+      // Assign student role
+      await connection.execute(`
+        INSERT INTO account_roles (account_id, role_id, is_active)
+        VALUES (?, (SELECT role_id FROM roles WHERE role_name = 'student'), TRUE)
+      `, [account_id]);
+    }
+
+    // Generate unique student ID
+    const student_id = `S${Date.now()}`;
+
+    // Insert into students table
+    await connection.execute(`
+      INSERT INTO students (student_id, person_id, account_id, registration_date)
+      VALUES (?, ?, ?, CURRENT_DATE)
+    `, [student_id, person_id, account_id]);
+
+    // Insert contact information
+    if (phone) {
+      await connection.execute(`
+        INSERT INTO contact_info (person_id, student_id, contact_type, contact_value, is_primary)
+        VALUES (?, ?, 'phone', ?, TRUE)
+      `, [person_id, student_id, phone]);
+    }
+
+    if (address) {
+      await connection.execute(`
+        INSERT INTO contact_info (person_id, student_id, contact_type, contact_value, is_primary)
+        VALUES (?, ?, 'address', ?, TRUE)
+      `, [person_id, student_id, address]);
+    }
+
+    // Add email to contact_info as well
+    await connection.execute(`
+      INSERT INTO contact_info (person_id, student_id, contact_type, contact_value, is_primary)
+      VALUES (?, ?, 'email', ?, TRUE)
+    `, [person_id, student_id, email]);
+
+    // Assign trading level if provided
+    if (trading_level_id) {
+      const [staffRows] = await connection.execute(`
+        SELECT staff_id FROM staff WHERE account_id = ?
+      `, [req.user.accountId]);
+      
+      const assigned_by = staffRows[0]?.staff_id || null;
+
+      await connection.execute(`
+        INSERT INTO student_trading_levels (student_id, level_id, assigned_by, is_current)
+        VALUES (?, ?, ?, TRUE)
+      `, [student_id, trading_level_id, assigned_by]);
+    }
+
+    await connection.commit();
+    res.status(201).json({ 
+      student_id, 
+      person_id, 
+      account_id,
+      message: 'Student created successfully' 
+    });
 
   } catch (error) {
-    console.error('Password change error:', error);
-    res.status(500).json({ error: 'Password change failed' });
+    await connection.rollback();
+    console.error('Student creation error:', error);
+    
+    if (error.code === 'ER_DUP_ENTRY') {
+      res.status(409).json({ error: 'Username already exists' });
+    } else {
+      res.status(500).json({ error: 'Failed to create student' });
+    }
+  } finally {
+    connection.release();
+  }
+});
+
+app.get('/api/students/:studentId', authenticateToken, authorize(['admin', 'staff', 'student']), authorizeStudentAccess, async (req, res) => {
+  try {
+    const { studentId } = req.params;
+
+    const [students] = await pool.execute(`
+      SELECT s.student_id, s.graduation_status, s.academic_standing, s.gpa, s.registration_date,
+             p.person_id, p.first_name, p.middle_name, p.last_name, p.birth_date, p.birth_place, p.gender, p.email, p.education,
+             tl.level_name as current_trading_level, tl.level_id,
+             a.username, a.account_status
+      FROM students s
+      JOIN persons p ON s.person_id = p.person_id
+      LEFT JOIN accounts a ON s.account_id = a.account_id
+      LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
+      LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
+      WHERE s.student_id = ?
+    `, [studentId]);
+
+    if (students.length === 0) {
+      return res.status(404).json({ error: 'Student not found' });
+    }
+
+    const [contacts] = await pool.execute(`
+      SELECT contact_type, contact_value, is_primary
+      FROM contact_info
+      WHERE student_id = ?
+    `, [studentId]);
+
+    res.json({
+      ...students[0],
+      contacts
+    });
+
+  } catch (error) {
+    console.error('Student fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch student details' });
   }
 });
 
 // ============================================================================
-// DASHBOARD ROUTES
+// DASHBOARD ROUTES (Fixed)
 // ============================================================================
 
 app.get('/api/dashboard/metrics', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
@@ -646,202 +808,7 @@ app.get('/api/dashboard/student/:studentId', authenticateToken, authorize(['stud
 });
 
 // ============================================================================
-// STUDENT ROUTES
-// ============================================================================
-
-app.get('/api/students', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
-  try {
-    const { name_sort, graduation_status, trading_level, search } = req.query;
-    
-    let query = `
-      SELECT s.student_id, s.graduation_status, s.academic_standing, s.gpa, s.registration_date,
-             p.first_name, p.last_name, p.birth_date, p.gender,
-             tl.level_name as current_trading_level,
-             COUNT(DISTINCT se.enrollment_id) as total_enrollments
-      FROM students s
-      JOIN persons p ON s.person_id = p.person_id
-      LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
-      LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
-      LEFT JOIN student_enrollments se ON s.student_id = se.student_id
-      WHERE 1=1
-    `;
-    const params = [];
-
-    if (graduation_status) {
-      query += ' AND s.graduation_status = ?';
-      params.push(graduation_status);
-    }
-
-    if (trading_level) {
-      query += ' AND tl.level_name = ?';
-      params.push(trading_level);
-    }
-
-    if (search) {
-      query += ' AND (p.first_name LIKE ? OR p.last_name LIKE ? OR s.student_id LIKE ?)';
-      const searchParam = `%${search}%`;
-      params.push(searchParam, searchParam, searchParam);
-    }
-
-    query += ' GROUP BY s.student_id, p.first_name, p.last_name, p.birth_date, p.gender, s.graduation_status, s.academic_standing, s.gpa, s.registration_date, tl.level_name';
-
-    if (name_sort) {
-      query += ` ORDER BY p.first_name ${name_sort === 'ascending' ? 'ASC' : 'DESC'}`;
-    } else {
-      query += ' ORDER BY s.registration_date DESC';
-    }
-
-    const [students] = await pool.execute(query, params);
-    res.json(students);
-  } catch (error) {
-    console.error('Students fetch error:', error);
-    res.status(500).json({ error: 'Failed to fetch students' });
-  }
-});
-
-app.get('/api/students/:studentId', authenticateToken, authorize(['admin', 'staff', 'student']), authorizeStudentAccess, async (req, res) => {
-  try {
-    const { studentId } = req.params;
-
-    const [students] = await pool.execute(`
-      SELECT s.student_id, s.graduation_status, s.academic_standing, s.gpa, s.registration_date,
-             p.person_id, p.first_name, p.middle_name, p.last_name, p.birth_date, p.birth_place, p.gender,
-             tl.level_name as current_trading_level, tl.level_id,
-             a.username, a.account_status
-      FROM students s
-      JOIN persons p ON s.person_id = p.person_id
-      LEFT JOIN accounts a ON s.account_id = a.account_id
-      LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
-      LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
-      WHERE s.student_id = ?
-    `, [studentId]);
-
-    if (students.length === 0) {
-      return res.status(404).json({ error: 'Student not found' });
-    }
-
-    const [contacts] = await pool.execute(`
-      SELECT contact_type, contact_value, is_primary
-      FROM contact_info
-      WHERE person_id = ?
-    `, [students[0].person_id]);
-
-    res.json({
-      ...students[0],
-      contacts
-    });
-
-  } catch (error) {
-    console.error('Student fetch error:', error);
-    res.status(500).json({ error: 'Failed to fetch student details' });
-  }
-});
-
-app.post('/api/students', [
-  authenticateToken,
-  authorize(['admin', 'staff']),
-  body('first_name').trim().isLength({ min: 1, max: 50 }).escape(),
-  body('last_name').trim().isLength({ min: 1, max: 50 }).escape(),
-  body('birth_date').isISO8601(),
-  body('gender').isIn(['Male', 'Female', 'Other']),
-  body('email').isEmail().normalizeEmail(),
-  body('phone').optional().isMobilePhone(),
-  body('address').optional().trim().isLength({ max: 500 })
-], validateInput, async (req, res) => {
-  const connection = await pool.getConnection();
-  
-  try {
-    await connection.beginTransaction();
-
-    const { 
-      first_name, middle_name, last_name, birth_date, birth_place, gender,
-      email, phone, address, username, password, trading_level_id 
-    } = req.body;
-
-    const student_id = `STU${Date.now()}`;
-
-    const [personResult] = await connection.execute(`
-      INSERT INTO persons (first_name, middle_name, last_name, birth_date, birth_place, gender)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `, [first_name, middle_name || null, last_name, birth_date, birth_place || '', gender]);
-
-    const person_id = personResult.insertId;
-
-    let account_id = null;
-    if (username && password) {
-      const saltRounds = 12;
-      const password_hash = await bcrypt.hash(password, saltRounds);
-
-      const [accountResult] = await connection.execute(`
-        INSERT INTO accounts (username, password_hash)
-        VALUES (?, ?)
-      `, [username, password_hash]);
-
-      account_id = accountResult.insertId;
-
-      await connection.execute(`
-        INSERT INTO account_roles (account_id, role_id)
-        VALUES (?, (SELECT role_id FROM roles WHERE role_name = 'student'))
-      `, [account_id]);
-    }
-
-    await connection.execute(`
-      INSERT INTO students (student_id, person_id, account_id)
-      VALUES (?, ?, ?)
-    `, [student_id, person_id, account_id]);
-
-    if (email) {
-      await connection.execute(`
-        INSERT INTO contact_info (person_id, contact_type, contact_value, is_primary)
-        VALUES (?, 'email', ?, TRUE)
-      `, [person_id, email]);
-    }
-
-    if (phone) {
-      await connection.execute(`
-        INSERT INTO contact_info (person_id, contact_type, contact_value, is_primary)
-        VALUES (?, 'phone', ?, TRUE)
-      `, [person_id, phone]);
-    }
-
-    if (address) {
-      await connection.execute(`
-        INSERT INTO contact_info (person_id, contact_type, contact_value, is_primary)
-        VALUES (?, 'address', ?, TRUE)
-      `, [person_id, address]);
-    }
-
-    if (trading_level_id) {
-      await connection.execute(`
-        INSERT INTO student_trading_levels (student_id, level_id, assigned_by)
-        VALUES (?, ?, (SELECT staff_id FROM staff WHERE account_id = ?))
-      `, [student_id, trading_level_id, req.user.accountId]);
-    }
-
-    await connection.commit();
-    res.status(201).json({ 
-      student_id, 
-      person_id, 
-      account_id,
-      message: 'Student created successfully' 
-    });
-
-  } catch (error) {
-    await connection.rollback();
-    console.error('Student creation error:', error);
-    
-    if (error.code === 'ER_DUP_ENTRY') {
-      res.status(409).json({ error: 'Username already exists' });
-    } else {
-      res.status(500).json({ error: 'Failed to create student' });
-    }
-  } finally {
-    connection.release();
-  }
-});
-
-// ============================================================================
-// PAYMENT ROUTES
+// PAYMENT ROUTES (Fixed)
 // ============================================================================
 
 app.get('/api/payments', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
@@ -901,10 +868,17 @@ app.post('/api/payments', [
   try {
     const { account_id, method_id, payment_amount, reference_number, notes } = req.body;
     
+    // Get staff_id for processed_by
+    const [staffRows] = await pool.execute(
+      'SELECT staff_id FROM staff WHERE account_id = ?',
+      [req.user.accountId]
+    );
+    const staffId = staffRows[0]?.staff_id;
+
     const [result] = await pool.execute(`
       CALL sp_process_payment(?, ?, ?, ?, ?, @result);
       SELECT @result as result;
-    `, [account_id, method_id, payment_amount, reference_number || null, req.user.accountId]);
+    `, [account_id, method_id, payment_amount, reference_number || null, staffId]);
 
     const processingResult = result[1][0].result;
 
@@ -946,7 +920,7 @@ app.get('/api/students/:studentId/payments', authenticateToken, authorize(['admi
 });
 
 // ============================================================================
-// DOCUMENT ROUTES
+// DOCUMENT ROUTES (Fixed)
 // ============================================================================
 
 app.get('/api/documents', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
@@ -1017,6 +991,7 @@ app.post('/api/documents/upload', [
     const fileBuffer = fs.readFileSync(req.file.path);
     const fileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
 
+    // Mark previous documents as not current
     await pool.execute(`
       UPDATE student_documents 
       SET is_current = FALSE 
@@ -1104,7 +1079,7 @@ app.get('/api/students/:studentId/documents', authenticateToken, authorize(['adm
 });
 
 // ============================================================================
-// COMPETENCY AND PROGRESS ROUTES
+// COMPETENCY AND PROGRESS ROUTES (Fixed)
 // ============================================================================
 
 app.get('/api/competency-assessments', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
@@ -1225,7 +1200,7 @@ app.get('/api/students/:studentId/progress', authenticateToken, authorize(['admi
 });
 
 // ============================================================================
-// SCHOLARSHIP ROUTES
+// SCHOLARSHIP ROUTES (Fixed)
 // ============================================================================
 
 app.get('/api/scholarships', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
@@ -1306,7 +1281,7 @@ app.get('/api/students/:studentId/scholarships', authenticateToken, authorize(['
 });
 
 // ============================================================================
-// COURSE AND ENROLLMENT ROUTES
+// COURSE AND ENROLLMENT ROUTES (Fixed)
 // ============================================================================
 
 app.get('/api/courses', authenticateToken, async (req, res) => {
@@ -1410,7 +1385,7 @@ app.get('/api/students/:studentId/enrollments', authenticateToken, authorize(['a
 });
 
 // ============================================================================
-// REFERRAL ROUTES
+// REFERRAL ROUTES (Fixed)
 // ============================================================================
 
 app.get('/api/referrals', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
@@ -1480,7 +1455,7 @@ app.post('/api/referrals', [
 });
 
 // ============================================================================
-// UTILITY ROUTES
+// UTILITY ROUTES (Fixed)
 // ============================================================================
 
 app.get('/api/trading-levels', authenticateToken, async (req, res) => {
@@ -1545,14 +1520,14 @@ app.get('/api/competencies', authenticateToken, async (req, res) => {
 });
 
 // ============================================================================
-// USER PROFILE ROUTES
+// USER PROFILE ROUTES (Fixed)
 // ============================================================================
 
 app.get('/api/profile', authenticateToken, async (req, res) => {
   try {
     const [userProfile] = await pool.execute(`
       SELECT a.account_id, a.username, a.account_status,
-             p.first_name, p.middle_name, p.last_name, p.birth_date, p.gender,
+             p.first_name, p.middle_name, p.last_name, p.birth_date, p.birth_place, p.gender,
              r.role_name, r.permissions
       FROM accounts a
       JOIN account_roles ar ON a.account_id = ar.account_id
@@ -1570,14 +1545,8 @@ app.get('/api/profile', authenticateToken, async (req, res) => {
     const [contacts] = await pool.execute(`
       SELECT contact_type, contact_value, is_primary
       FROM contact_info
-      WHERE person_id = (
-        SELECT COALESCE(st.person_id, s.person_id)
-        FROM accounts a
-        LEFT JOIN staff st ON a.account_id = st.account_id
-        LEFT JOIN students s ON a.account_id = s.account_id
-        WHERE a.account_id = ?
-      )
-    `, [req.user.accountId]);
+      WHERE person_id = ?
+    `, [req.user.personId]);
 
     res.json({
       ...userProfile[0],
@@ -1604,21 +1573,7 @@ app.put('/api/profile', [
 
     const { first_name, middle_name, last_name, email, phone, address } = req.body;
 
-    const [personRows] = await connection.execute(`
-      SELECT COALESCE(st.person_id, s.person_id) as person_id
-      FROM accounts a
-      LEFT JOIN staff st ON a.account_id = st.account_id
-      LEFT JOIN students s ON a.account_id = s.account_id
-      WHERE a.account_id = ?
-    `, [req.user.accountId]);
-
-    if (personRows.length === 0) {
-      await connection.rollback();
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    const person_id = personRows[0].person_id;
-
+    // Update person information
     if (first_name || middle_name || last_name) {
       await connection.execute(`
         UPDATE persons 
@@ -1626,31 +1581,32 @@ app.put('/api/profile', [
             middle_name = COALESCE(?, middle_name),
             last_name = COALESCE(?, last_name)
         WHERE person_id = ?
-      `, [first_name, middle_name, last_name, person_id]);
+      `, [first_name, middle_name, last_name, req.user.personId]);
     }
 
+    // Update or insert contact information
     if (email) {
       await connection.execute(`
-        INSERT INTO contact_info (person_id, contact_type, contact_value, is_primary)
-        VALUES (?, 'email', ?, TRUE)
+        INSERT INTO contact_info (person_id, student_id, contact_type, contact_value, is_primary)
+        VALUES (?, ?, 'email', ?, TRUE)
         ON DUPLICATE KEY UPDATE contact_value = VALUES(contact_value)
-      `, [person_id, email]);
+      `, [req.user.personId, req.user.userId, email]);
     }
 
     if (phone) {
       await connection.execute(`
-        INSERT INTO contact_info (person_id, contact_type, contact_value, is_primary)
-        VALUES (?, 'phone', ?, TRUE)
+        INSERT INTO contact_info (person_id, student_id, contact_type, contact_value, is_primary)
+        VALUES (?, ?, 'phone', ?, TRUE)
         ON DUPLICATE KEY UPDATE contact_value = VALUES(contact_value)
-      `, [person_id, phone]);
+      `, [req.user.personId, req.user.userId, phone]);
     }
 
     if (address) {
       await connection.execute(`
-        INSERT INTO contact_info (person_id, contact_type, contact_value, is_primary)
-        VALUES (?, 'address', ?, TRUE)
+        INSERT INTO contact_info (person_id, student_id, contact_type, contact_value, is_primary)
+        VALUES (?, ?, 'address', ?, TRUE)
         ON DUPLICATE KEY UPDATE contact_value = VALUES(contact_value)
-      `, [person_id, address]);
+      `, [req.user.personId, req.user.userId, address]);
     }
 
     await connection.commit();
@@ -1666,7 +1622,7 @@ app.put('/api/profile', [
 });
 
 // ============================================================================
-// ADMIN ROUTES
+// ADMIN ROUTES (Fixed)
 // ============================================================================
 
 app.get('/api/admin/accounts', authenticateToken, authorize(['admin']), async (req, res) => {
@@ -1719,7 +1675,9 @@ app.post('/api/admin/staff', [
   authorize(['admin']),
   body('first_name').trim().isLength({ min: 1, max: 50 }).escape(),
   body('last_name').trim().isLength({ min: 1, max: 50 }).escape(),
+  body('birth_place').trim().isLength({ min: 1, max: 100 }).escape(),
   body('email').isEmail().normalizeEmail(),
+  body('education').trim().isLength({ min: 1, max: 100 }).escape(),
   body('username').trim().isLength({ min: 3, max: 50 }).escape(),
   body('password').isLength({ min: 6 }),
   body('role').isIn(['staff', 'admin'])
@@ -1730,49 +1688,52 @@ app.post('/api/admin/staff', [
     await connection.beginTransaction();
 
     const { 
-      first_name, middle_name, last_name, birth_date, gender,
-      email, phone, username, password, role, employee_id
+      first_name, middle_name, last_name, birth_date, birth_place, gender,
+      email, education, phone, username, password, role, employee_id
     } = req.body;
 
+    // Insert into persons table
     const [personResult] = await connection.execute(`
-      INSERT INTO persons (first_name, middle_name, last_name, birth_date, gender)
-      VALUES (?, ?, ?, ?, ?)
-    `, [first_name, middle_name || null, last_name, birth_date || null, gender || 'Other']);
+      INSERT INTO persons (first_name, middle_name, last_name, birth_date, birth_place, gender, email, education)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `, [first_name, middle_name || null, last_name, birth_date || null, birth_place, gender || 'Other', email, education]);
 
     const person_id = personResult.insertId;
 
+    // Create account
     const saltRounds = 12;
-    const password_hash = await bcrypt.hash(password, saltRounds);
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
 
     const [accountResult] = await connection.execute(`
-      INSERT INTO accounts (username, password_hash)
-      VALUES (?, ?)
-    `, [username, password_hash]);
+      INSERT INTO accounts (username, password_hash, token, account_status)
+      VALUES (?, ?, '', 'active')
+    `, [username, hashedPassword]);
 
     const account_id = accountResult.insertId;
 
+    // Assign role
     await connection.execute(`
-      INSERT INTO account_roles (account_id, role_id)
-      VALUES (?, (SELECT role_id FROM roles WHERE role_name = ?))
+      INSERT INTO account_roles (account_id, role_id, is_active)
+      VALUES (?, (SELECT role_id FROM roles WHERE role_name = ?), TRUE)
     `, [account_id, role]);
 
+    // Insert into staff table
     await connection.execute(`
-      INSERT INTO staff (person_id, account_id, employee_id)
-      VALUES (?, ?, ?)
+      INSERT INTO staff (person_id, account_id, employee_id, hire_date)
+      VALUES (?, ?, ?, CURRENT_DATE)
     `, [person_id, account_id, employee_id || `EMP${Date.now()}`]);
 
-    if (email) {
-      await connection.execute(`
-        INSERT INTO contact_info (person_id, contact_type, contact_value, is_primary)
-        VALUES (?, 'email', ?, TRUE)
-      `, [person_id, email]);
-    }
+    // Insert contact information
+    await connection.execute(`
+      INSERT INTO contact_info (person_id, student_id, contact_type, contact_value, is_primary)
+      VALUES (?, ?, 'email', ?, TRUE)
+    `, [person_id, `ST${person_id}`, email]);
 
     if (phone) {
       await connection.execute(`
-        INSERT INTO contact_info (person_id, contact_type, contact_value, is_primary)
-        VALUES (?, 'phone', ?, TRUE)
-      `, [person_id, phone]);
+        INSERT INTO contact_info (person_id, student_id, contact_type, contact_value, is_primary)
+        VALUES (?, ?, 'phone', ?, TRUE)
+      `, [person_id, `ST${person_id}`, phone]);
     }
 
     await connection.commit();
@@ -1797,7 +1758,7 @@ app.post('/api/admin/staff', [
 });
 
 // ============================================================================
-// SYSTEM INFORMATION ROUTES
+// SYSTEM INFORMATION ROUTES (Fixed)
 // ============================================================================
 
 app.get('/api/system/stats', authenticateToken, authorize(['admin']), async (req, res) => {
@@ -1818,6 +1779,384 @@ app.get('/api/system/stats', authenticateToken, authorize(['admin']), async (req
   } catch (error) {
     console.error('System stats error:', error);
     res.status(500).json({ error: 'Failed to fetch system statistics' });
+  }
+});
+
+// ============================================================================
+// STUDENT BACKGROUND AND PREFERENCES ROUTES (New)
+// ============================================================================
+
+app.get('/api/students/:studentId/background', authenticateToken, authorize(['admin', 'staff', 'student']), authorizeStudentAccess, async (req, res) => {
+  try {
+    const { studentId } = req.params;
+
+    const [background] = await pool.execute(`
+      SELECT sb.background_id, sb.education_level, sb.highest_degree, sb.institution, sb.graduation_year,
+             sb.work_experience_years, sb.current_occupation, sb.industry, sb.annual_income_range,
+             sb.financial_experience, sb.prior_trading_experience, sb.investment_portfolio_value,
+             sb.relevant_skills, sb.certifications
+      FROM student_backgrounds sb
+      WHERE sb.student_id = ?
+    `, [studentId]);
+
+    res.json(background[0] || {});
+  } catch (error) {
+    console.error('Student background fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch student background' });
+  }
+});
+
+app.post('/api/students/:studentId/background', [
+  authenticateToken,
+  authorize(['admin', 'staff', 'student']),
+  authorizeStudentAccess,
+  body('education_level').optional().isIn(['elementary', 'high_school', 'vocational', 'college', 'graduate', 'post_graduate']),
+  body('work_experience_years').optional().isInt({ min: 0 }),
+  body('annual_income_range').optional().isIn(['below_100k', '100k_300k', '300k_500k', '500k_1m', 'above_1m'])
+], validateInput, async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const {
+      education_level, highest_degree, institution, graduation_year, work_experience_years,
+      current_occupation, industry, annual_income_range, financial_experience,
+      prior_trading_experience, investment_portfolio_value, relevant_skills, certifications
+    } = req.body;
+
+    await pool.execute(`
+      INSERT INTO student_backgrounds (
+        student_id, education_level, highest_degree, institution, graduation_year,
+        work_experience_years, current_occupation, industry, annual_income_range,
+        financial_experience, prior_trading_experience, investment_portfolio_value,
+        relevant_skills, certifications
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        education_level = VALUES(education_level),
+        highest_degree = VALUES(highest_degree),
+        institution = VALUES(institution),
+        graduation_year = VALUES(graduation_year),
+        work_experience_years = VALUES(work_experience_years),
+        current_occupation = VALUES(current_occupation),
+        industry = VALUES(industry),
+        annual_income_range = VALUES(annual_income_range),
+        financial_experience = VALUES(financial_experience),
+        prior_trading_experience = VALUES(prior_trading_experience),
+        investment_portfolio_value = VALUES(investment_portfolio_value),
+        relevant_skills = VALUES(relevant_skills),
+        certifications = VALUES(certifications)
+    `, [
+      studentId, education_level, highest_degree, institution, graduation_year,
+      work_experience_years, current_occupation, industry, annual_income_range,
+      financial_experience, prior_trading_experience, investment_portfolio_value,
+      relevant_skills, certifications
+    ]);
+
+    res.json({ message: 'Student background updated successfully' });
+  } catch (error) {
+    console.error('Student background update error:', error);
+    res.status(500).json({ error: 'Failed to update student background' });
+  }
+});
+
+app.get('/api/students/:studentId/preferences', authenticateToken, authorize(['admin', 'staff', 'student']), authorizeStudentAccess, async (req, res) => {
+  try {
+    const { studentId } = req.params;
+
+    const [preferences] = await pool.execute(`
+      SELECT lp.preference_id, lp.learning_style, lp.delivery_preference, lp.device_type,
+             lp.internet_speed, lp.preferred_schedule, lp.study_hours_per_week, lp.accessibility_needs
+      FROM learning_preferences lp
+      WHERE lp.student_id = ?
+    `, [studentId]);
+
+    res.json(preferences[0] || {});
+  } catch (error) {
+    console.error('Student preferences fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch student preferences' });
+  }
+});
+
+app.post('/api/students/:studentId/preferences', [
+  authenticateToken,
+  authorize(['admin', 'staff', 'student']),
+  authorizeStudentAccess,
+  body('learning_style').optional().isIn(['visual', 'auditory', 'kinesthetic', 'reading_writing', 'mixed']),
+  body('delivery_preference').optional().isIn(['in-person', 'online', 'hybrid', 'self-paced']),
+  body('preferred_schedule').optional().isIn(['morning', 'afternoon', 'evening', 'weekend', 'flexible'])
+], validateInput, async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const {
+      learning_style, delivery_preference, device_type, internet_speed,
+      preferred_schedule, study_hours_per_week, accessibility_needs
+    } = req.body;
+
+    await pool.execute(`
+      INSERT INTO learning_preferences (
+        student_id, learning_style, delivery_preference, device_type, internet_speed,
+        preferred_schedule, study_hours_per_week, accessibility_needs
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        learning_style = VALUES(learning_style),
+        delivery_preference = VALUES(delivery_preference),
+        device_type = VALUES(device_type),
+        internet_speed = VALUES(internet_speed),
+        preferred_schedule = VALUES(preferred_schedule),
+        study_hours_per_week = VALUES(study_hours_per_week),
+        accessibility_needs = VALUES(accessibility_needs)
+    `, [
+      studentId, learning_style, delivery_preference, device_type, internet_speed,
+      preferred_schedule, study_hours_per_week, accessibility_needs
+    ]);
+
+    res.json({ message: 'Student preferences updated successfully' });
+  } catch (error) {
+    console.error('Student preferences update error:', error);
+    res.status(500).json({ error: 'Failed to update student preferences' });
+  }
+});
+
+// ============================================================================
+// STUDENT GOALS ROUTES (New)
+// ============================================================================
+
+app.get('/api/students/:studentId/goals', authenticateToken, authorize(['admin', 'staff', 'student']), authorizeStudentAccess, async (req, res) => {
+  try {
+    const { studentId } = req.params;
+
+    const [goals] = await pool.execute(`
+      SELECT sg.goal_id, sg.goal_type, sg.goal_title, sg.goal_description, sg.target_date,
+             sg.target_amount, sg.priority_level, sg.status, sg.progress_percentage,
+             sg.created_at, sg.updated_at
+      FROM student_goals sg
+      WHERE sg.student_id = ?
+      ORDER BY sg.priority_level DESC, sg.created_at DESC
+    `, [studentId]);
+
+    res.json(goals);
+  } catch (error) {
+    console.error('Student goals fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch student goals' });
+  }
+});
+
+app.post('/api/students/:studentId/goals', [
+  authenticateToken,
+  authorize(['admin', 'staff', 'student']),
+  authorizeStudentAccess,
+  body('goal_type').isIn(['career', 'financial', 'personal', 'academic', 'skill']),
+  body('goal_title').trim().isLength({ min: 1, max: 100 }),
+  body('goal_description').trim().isLength({ min: 1, max: 1000 }),
+  body('priority_level').optional().isIn(['low', 'medium', 'high', 'critical'])
+], validateInput, async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const {
+      goal_type, goal_title, goal_description, target_date,
+      target_amount, priority_level
+    } = req.body;
+
+    await pool.execute(`
+      INSERT INTO student_goals (
+        student_id, goal_type, goal_title, goal_description, target_date,
+        target_amount, priority_level
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [
+      studentId, goal_type, goal_title, goal_description, target_date || null,
+      target_amount || null, priority_level || 'medium'
+    ]);
+
+    res.status(201).json({ message: 'Student goal created successfully' });
+  } catch (error) {
+    console.error('Student goal creation error:', error);
+    res.status(500).json({ error: 'Failed to create student goal' });
+  }
+});
+
+app.put('/api/students/:studentId/goals/:goalId', [
+  authenticateToken,
+  authorize(['admin', 'staff', 'student']),
+  authorizeStudentAccess,
+  body('status').optional().isIn(['active', 'achieved', 'paused', 'cancelled', 'expired']),
+  body('progress_percentage').optional().isFloat({ min: 0, max: 100 })
+], validateInput, async (req, res) => {
+  try {
+    const { studentId, goalId } = req.params;
+    const { status, progress_percentage, goal_title, goal_description } = req.body;
+
+    await pool.execute(`
+      UPDATE student_goals 
+      SET status = COALESCE(?, status),
+          progress_percentage = COALESCE(?, progress_percentage),
+          goal_title = COALESCE(?, goal_title),
+          goal_description = COALESCE(?, goal_description),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE goal_id = ? AND student_id = ?
+    `, [status, progress_percentage, goal_title, goal_description, goalId, studentId]);
+
+    res.json({ message: 'Student goal updated successfully' });
+  } catch (error) {
+    console.error('Student goal update error:', error);
+    res.status(500).json({ error: 'Failed to update student goal' });
+  }
+});
+
+// ============================================================================
+// PASSWORD CHANGE ROUTE (Fixed)
+// ============================================================================
+
+app.post('/api/auth/change-password', [
+  authenticateToken,
+  body('currentPassword').isLength({ min: 6 }),
+  body('newPassword').isLength({ min: 6 }).matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
+], validateInput, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const accountId = req.user.accountId;
+
+    const [userRows] = await pool.execute(
+      'SELECT password_hash FROM accounts WHERE account_id = ?',
+      [accountId]
+    );
+
+    if (userRows.length === 0) {
+      return res.status(404).json({ error: 'Account not found' });
+    }
+
+    const isValidPassword = await bcrypt.compare(currentPassword, userRows[0].password_hash);
+    if (!isValidPassword) {
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+
+    const saltRounds = 12;
+    const newPasswordHash = await bcrypt.hash(newPassword, saltRounds);
+
+    await pool.execute(
+      'UPDATE accounts SET password_hash = ? WHERE account_id = ?',
+      [newPasswordHash, accountId]
+    );
+
+    res.json({ message: 'Password changed successfully' });
+
+  } catch (error) {
+    console.error('Password change error:', error);
+    res.status(500).json({ error: 'Password change failed' });
+  }
+});
+
+// ============================================================================
+// STUDENT REGISTRATION ENDPOINT (Public - Fixed)
+// ============================================================================
+
+app.post('/api/register', [
+  body('firstName').trim().isLength({ min: 1, max: 50 }).escape(),
+  body('lastName').trim().isLength({ min: 1, max: 50 }).escape(),
+  body('email').isEmail().normalizeEmail(),
+  body('phoneNumber').isMobilePhone(),
+  body('dob').isISO8601(),
+  body('address').trim().isLength({ min: 1, max: 500 }),
+  body('city').trim().isLength({ min: 1, max: 100 }),
+  body('province').trim().isLength({ min: 1, max: 100 }),
+  body('gender').isIn(['Male', 'Female', 'Other']),
+  body('education').trim().isLength({ min: 1, max: 100 }),
+  body('tradingLevel').trim().isLength({ min: 1, max: 50 }),
+  body('username').trim().isLength({ min: 3, max: 15 }),
+  body('password').isLength({ min: 6 })
+], validateInput, async (req, res) => {
+  const connection = await pool.getConnection();
+  
+  try {
+    await connection.beginTransaction();
+
+    const {
+      firstName, lastName, email, phoneNumber, dob, address, city, province,
+      gender, education, tradingLevel, device, learningStyle, username, password
+    } = req.body;
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 12);
+
+    // 1. Insert into accounts
+    const [accountResult] = await connection.execute(`
+      INSERT INTO accounts (username, password_hash, token, account_status, created_at, updated_at)
+      VALUES (?, ?, '', 'active', NOW(), NOW())
+    `, [username, hashedPassword]);
+    const accountId = accountResult.insertId;
+
+    // 2. Assign student role
+    await connection.execute(`
+      INSERT INTO account_roles (account_id, role_id, is_active)
+      VALUES (?, (SELECT role_id FROM roles WHERE role_name = 'student'), TRUE)
+    `, [accountId]);
+
+    // 3. Insert into persons
+    const fullAddress = `${address}, ${city}, ${province}`;
+    const [personResult] = await connection.execute(`
+      INSERT INTO persons (first_name, last_name, birth_date, birth_place, gender, email, education)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [firstName, lastName, dob, city, gender, email, education]);
+    const personId = personResult.insertId;
+
+    // 4. Generate unique student ID and insert into students
+    const studentId = `S${Date.now()}_${personId}`;
+    await connection.execute(`
+      INSERT INTO students (student_id, person_id, account_id, registration_date)
+      VALUES (?, ?, ?, CURRENT_DATE)
+    `, [studentId, personId, accountId]);
+
+    // 5. Insert contact information
+    await connection.execute(`
+      INSERT INTO contact_info (person_id, student_id, contact_type, contact_value, is_primary)
+      VALUES 
+        (?, ?, 'phone', ?, TRUE),
+        (?, ?, 'address', ?, TRUE),
+        (?, ?, 'email', ?, TRUE)
+    `, [
+      personId, studentId, phoneNumber,
+      personId, studentId, fullAddress,
+      personId, studentId, email
+    ]);
+
+    // 6. Insert trading level
+    const [levelRows] = await connection.execute(`
+      SELECT level_id FROM trading_levels WHERE level_name = ?
+    `, [tradingLevel]);
+    
+    if (levelRows.length > 0) {
+      const levelId = levelRows[0].level_id;
+      await connection.execute(`
+        INSERT INTO student_trading_levels (student_id, level_id, is_current)
+        VALUES (?, ?, TRUE)
+      `, [studentId, levelId]);
+    }
+
+    // 7. Insert learning preferences if provided
+    if (device || learningStyle) {
+      const deviceArray = Array.isArray(device) ? device : [device];
+      const learningStyleArray = Array.isArray(learningStyle) ? learningStyle : [learningStyle];
+      
+      await connection.execute(`
+        INSERT INTO learning_preferences (student_id, device_type, learning_style)
+        VALUES (?, ?, ?)
+      `, [studentId, deviceArray.join(','), learningStyleArray.join(',')]);
+    }
+
+    await connection.commit();
+    res.status(201).json({ 
+      message: 'Student successfully registered.',
+      student_id: studentId 
+    });
+
+  } catch (error) {
+    await connection.rollback();
+    console.error('Registration error:', error);
+    
+    if (error.code === 'ER_DUP_ENTRY') {
+      res.status(409).json({ error: 'Username or email already exists' });
+    } else {
+      res.status(500).json({ error: 'Failed to register student' });
+    }
+  } finally {
+    connection.release();
   }
 });
 

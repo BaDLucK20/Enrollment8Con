@@ -676,7 +676,7 @@ function UniversalDashboard() {
           </div> */}
         </div>
       )
-    };
+    }
     break;
 
     case 'PendingPayments':
