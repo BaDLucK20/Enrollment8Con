@@ -4,6 +4,8 @@ import LoginPage from './components/Login'
 import PendingPayment from './components/PendingPayment'
 import CompletedPayment from './components/CompletedPayment'
 import PaymentHistory from './components/PaymentHistory'
+import StudentForm from './components/AddStudent'
+import StaffForm from './components/AddStaff'
 // import Logout from './components/Logout'
 
 function App() {
@@ -14,7 +16,10 @@ function App() {
       <Route path="/PendingPayment" element={<PendingPayment/>} />
       <Route path="/CompletedPayment" element={<CompletedPayment/>} />
       <Route path="/PaymentHistory" element={<PaymentHistory/>} />
+      <Route path="/AddStudent" element={<StudentForm/>} />
+      <Route path="/AddStaff" element={<StaffForm/>} />
       <Route path="/Dashboard" element={<UniversalDashboard />} />
+
     </Routes>
   )
 }

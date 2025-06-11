@@ -5,35 +5,85 @@ import path from 'path';
 import fs from 'fs';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import { body, validationResult } from 'express-validator';
+
+
+// Allow all origins (development only – restrict in production!)
 
 dotenv.config();
 
-
 const app = express();
 const PORT = process.env.PORT || 3000;
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(64).toString('hex');
 
-// Middleware
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// ============================================================================
+// MIDDLEWARE CONFIGURATION
+// ============================================================================
+
+// Security middleware
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "https:"],
+    },
+  },
+}));
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: 'Too many requests from this IP, please try again later.',
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: 'Too many login attempts, please try again later.',
+});
+
+app.use(limiter);
+// app.use('/api/auth', authLimiter);
+
+// Core middleware
+app.use(cors({
+  origin: 'http://localhost:5173',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // include OPTIONS
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(express.static('public'));
 app.use('/uploads', express.static('uploads'));
 
-// Database connection
-const dbConfig = {
+// Database connection pool
+const pool = mysql.createPool({
   host: process.env.DB_HOST || 'localhost',
   user: process.env.DB_USER || 'root',
   password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'schema',
+  database: process.env.DB_NAME,
   port: process.env.DB_PORT || 3306,
   waitForConnections: true,
   connectionLimit: 10,
-  queueLimit: 0
-};
+  queueLimit: 0,
+  acquireTimeout: 60000,
+  timeout: 60000,
+  reconnect: true
+});
 
-const pool = mysql.createPool(dbConfig);
+// ============================================================================
+// FILE UPLOAD CONFIGURATION
+// ============================================================================
 
-// File upload configuration
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = 'uploads/documents';
@@ -44,11 +94,12 @@ const storage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+    const sanitizedFilename = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
+    cb(null, file.fieldname + '-' + uniqueSuffix + '-' + sanitizedFilename);
   }
 });
 
-const upload = multer({ 
+const upload = multer({
   storage: storage,
   fileFilter: (req, file, cb) => {
     const allowedTypes = /jpeg|jpg|png|gif|pdf|doc|docx|xls|xlsx/;
@@ -61,147 +112,464 @@ const upload = multer({
       cb(new Error('Only images and documents are allowed'));
     }
   },
-  limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+  limits: { fileSize: 10 * 1024 * 1024 }
 });
 
-// Database initialization
-async function initializeDatabase() {
-  try {
-    const connection = await pool.getConnection();
-    
-    // Create tables if they don't exist
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS students (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        student_id VARCHAR(50) UNIQUE,
-        first_name VARCHAR(100),
-        last_name VARCHAR(100),
-        email VARCHAR(100),
-        contact_number VARCHAR(20),
-        address TEXT,
-        batch VARCHAR(50),
-        competency_level ENUM('basic', 'common', 'core') DEFAULT 'basic',
-        graduation_eligible BOOLEAN DEFAULT FALSE,
-        enrollment_status ENUM('enrolled', 'graduated', 'dropped') DEFAULT 'enrolled',
-        enrollment_date DATE,
-        graduation_date DATE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-      )
-    `);
+// ============================================================================
+// MIDDLEWARE UTILITIES
+// ============================================================================
 
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS payments (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        student_id INT,
-        payment_type VARCHAR(100),
-        amount DECIMAL(10, 2),
-        payment_date DATE,
-        status ENUM('complete', 'incomplete', 'pending') DEFAULT 'pending',
-        tuition_fee_details TEXT,
-        additional_notes TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE
-      )
-    `);
-
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS documents (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        student_id INT,
-        document_name VARCHAR(255),
-        file_path VARCHAR(500),
-        file_type VARCHAR(50),
-        upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending',
-        approved_by VARCHAR(100),
-        approved_at TIMESTAMP NULL,
-        FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE
-      )
-    `);
-
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS competency_assessments (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        student_id INT,
-        competency_type ENUM('basic', 'common', 'core'),
-        assessment_date DATE,
-        score DECIMAL(5, 2),
-        passed BOOLEAN DEFAULT FALSE,
-        batch VARCHAR(50),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE
-      )
-    `);
-
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS scholarships (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        sponsor_name VARCHAR(200),
-        sponsor_type VARCHAR(100),
-        contact_person VARCHAR(200),
-        email VARCHAR(100),
-        description TEXT,
-        amount DECIMAL(10, 2),
-        eligibility_criteria TEXT,
-        active BOOLEAN DEFAULT TRUE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS referrals (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        referrer_student_id INT,
-        referred_student_name VARCHAR(200),
-        referred_student_email VARCHAR(100),
-        referred_student_phone VARCHAR(20),
-        competency_level ENUM('basic', 'common', 'core'),
-        status ENUM('pending', 'enrolled', 'rejected') DEFAULT 'pending',
-        referral_date DATE,
-        notes TEXT,
-        FOREIGN KEY (referrer_student_id) REFERENCES students(id)
-      )
-    `);
-
-    connection.release();
-    console.log('Database initialized successfully');
-  } catch (error) {
-    console.error('Database initialization error:', error);
+const validateInput = (req, res, next) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ 
+      error: 'Validation failed', 
+      details: errors.array() 
+    });
   }
-}
+  next();
+};
 
-// Dashboard Metrics
-app.get('/api/dashboard/metrics', async (req, res) => {
+const authenticateToken = async (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Access token required' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    
+    const [userRows] = await pool.execute(`
+      SELECT a.account_id, a.username, a.account_status, ar.role_id, r.role_name, r.permissions,
+             p.first_name, p.last_name, p.person_id
+      FROM accounts a
+      JOIN account_roles ar ON a.account_id = ar.account_id
+      JOIN roles r ON ar.role_id = r.role_id
+      LEFT JOIN staff st ON a.account_id = st.account_id
+      LEFT JOIN students s ON a.account_id = s.account_id
+      LEFT JOIN persons p ON (st.person_id = p.person_id OR s.person_id = p.person_id)
+      WHERE a.account_id = ? AND a.account_status = 'active' AND ar.is_active = TRUE
+    `, [decoded.accountId]);
+
+    if (userRows.length === 0) {
+      return res.status(401).json({ error: 'Invalid token or inactive account' });
+    }
+
+    req.user = {
+      accountId: userRows[0].account_id,
+      username: userRows[0].username,
+      role: userRows[0].role_name,
+      permissions: userRows[0].permissions,
+      firstName: userRows[0].first_name,
+      lastName: userRows[0].last_name,
+      personId: userRows[0].person_id
+    };
+
+    next();
+  } catch (error) {
+    console.error('Token verification error:', error);
+    return res.status(403).json({ error: 'Invalid or expired token' });
+  }
+};
+
+const authorize = (allowedRoles) => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    if (allowedRoles.includes(req.user.role)) {
+      next();
+    } else {
+      res.status(403).json({ error: 'Insufficient permissions' });
+    }
+  };
+};
+
+const authorizeStudentAccess = async (req, res, next) => {
+  if (req.user.role === 'admin') {
+    return next();
+  }
+
+  if (req.user.role === 'student') {
+    const studentId = req.params.studentId || req.body.student_id;
+    
+    if (!studentId) {
+      return res.status(400).json({ error: 'Student ID required' });
+    }
+
+    try {
+      const [studentRows] = await pool.execute(`
+        SELECT s.student_id 
+        FROM students s 
+        WHERE s.student_id = ? AND s.account_id = ?
+      `, [studentId, req.user.accountId]);
+
+      if (studentRows.length === 0) {
+        return res.status(403).json({ error: 'Access denied to this student record' });
+      }
+    } catch (error) {
+      console.error('Student access control error:', error);
+      return res.status(500).json({ error: 'Authorization check failed' });
+    }
+  }
+
+  next();
+};
+
+// ============================================================================
+// AUTHENTICATION ROUTES
+// ============================================================================
+
+app.post('/api/auth', [
+  body('username').trim().isLength({ min: 3, max: 50 }).escape(),
+  body('password').isLength({ min: 6 })
+], validateInput, async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    // Admin auto-setup and login
+    if (username === 'admin' && password === 'admin123') {
+      const [existingAdmin] = await pool.execute(
+        'SELECT * FROM accounts WHERE username = ?',
+        ['admin']
+      );
+
+      let adminId;
+
+      if (existingAdmin.length === 0) {
+        const hash = await bcrypt.hash('admin123', 10);
+        const [insertResult] = await pool.execute(
+          `INSERT INTO accounts (username, password_hash, token, account_status)
+           VALUES (?, ?, '', 'active')`,
+          ['admin', hash]
+        );
+        adminId = insertResult.insertId;
+
+        await pool.execute(
+          `INSERT INTO account_roles (account_id, role_id, is_active)
+           VALUES (?, ?, TRUE)`,
+          [adminId, 1] // assuming role_id 1 is 'admin'
+        );
+      } else {
+        adminId = existingAdmin[0].account_id;
+      }
+
+      const [[existingTokenRow]] = await pool.execute(
+        `SELECT token FROM accounts WHERE account_id = ?`,
+        [adminId]
+      );
+
+      let token = existingTokenRow.token;
+      let shouldUpdate = true;
+
+      if (token) {
+        try {
+          jwt.verify(token, JWT_SECRET);
+          shouldUpdate = false;
+        } catch (err) {
+          shouldUpdate = true;
+        }
+      }
+
+      if (shouldUpdate) {
+        token = jwt.sign({
+          accountId: adminId,
+          username: 'admin',
+          role: 'admin'
+        }, JWT_SECRET, { expiresIn: '8h' });
+
+        await pool.execute(
+          `UPDATE accounts SET token = ? WHERE account_id = ?`,
+          [token, adminId]
+        );
+      }
+
+      return res.json({
+        token,
+        user: {
+          accountId: adminId,
+          username: 'admin',
+          role: 'admin',
+          firstName: 'System',
+          lastName: 'Administrator',
+          permissions: 'all',
+          profile: {}
+        }
+      });
+    }
+
+    // Regular users
+    const [userRows] = await pool.execute(`
+      SELECT a.account_id, a.username, a.password_hash, a.account_status, 
+             a.failed_login_attempts, a.locked_until,
+             ar.role_id, r.role_name, r.permissions,
+             p.first_name, p.last_name, p.person_id
+      FROM accounts a
+      JOIN account_roles ar ON a.account_id = ar.account_id
+      JOIN roles r ON ar.role_id = r.role_id
+      LEFT JOIN staff st ON a.account_id = st.account_id
+      LEFT JOIN students s ON a.account_id = s.account_id
+      LEFT JOIN persons p ON (st.person_id = p.person_id OR s.person_id = p.person_id)
+      WHERE a.username = ? AND ar.is_active = TRUE
+    `, [username]);
+
+    if (userRows.length === 0) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    const user = userRows[0];
+
+    if (user.locked_until && new Date() < new Date(user.locked_until)) {
+      return res.status(423).json({ error: 'Account is temporarily locked' });
+    }
+
+    if (user.account_status !== 'active') {
+      return res.status(401).json({ error: 'Account is not active' });
+    }
+
+    const isValidPassword = await bcrypt.compare(password, user.password_hash);
+    if (!isValidPassword) {
+      await pool.execute(`
+        UPDATE accounts 
+        SET failed_login_attempts = failed_login_attempts + 1,
+            locked_until = CASE 
+              WHEN failed_login_attempts >= 4 THEN DATE_ADD(NOW(), INTERVAL 15 MINUTE)
+              ELSE NULL 
+            END
+        WHERE account_id = ?`,
+        [user.account_id]
+      );
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // Reset login attempts
+    await pool.execute(`
+      UPDATE accounts 
+      SET failed_login_attempts = 0, locked_until = NULL, last_login = NOW()
+      WHERE account_id = ?`,
+      [user.account_id]
+    );
+
+    const [[existingTokenRow]] = await pool.execute(
+      `SELECT token FROM accounts WHERE account_id = ?`,
+      [user.account_id]
+    );
+
+    let token = existingTokenRow.token;
+    let shouldUpdate = true;
+
+    if (token) {
+      try {
+        jwt.verify(token, JWT_SECRET);
+        shouldUpdate = false;
+      } catch (err) {
+        shouldUpdate = true;
+      }
+    }
+
+    if (shouldUpdate) {
+      token = jwt.sign({
+        accountId: user.account_id,
+        username: user.username,
+        role: user.role_name
+      }, JWT_SECRET, { expiresIn: '8h' });
+
+      await pool.execute(
+        `UPDATE accounts SET token = ? WHERE account_id = ?`,
+        [token, user.account_id]
+      );
+    }
+
+    let profileData = {};
+    if (user.role_name === 'student') {
+      const [studentData] = await pool.execute(`
+        SELECT student_id, graduation_status, academic_standing
+        FROM students WHERE account_id = ?`,
+        [user.account_id]
+      );
+      profileData = studentData[0] || {};
+    } else if (user.role_name === 'staff' || user.role_name === 'admin') {
+      const [staffData] = await pool.execute(`
+        SELECT staff_id, employee_id, employment_status
+        FROM staff WHERE account_id = ?`,
+        [user.account_id]
+      );
+      profileData = staffData[0] || {};
+    }
+
+    return res.json({
+      token,
+      user: {
+        accountId: user.account_id,
+        username: user.username,
+        role: user.role_name,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        permissions: user.permissions,
+        profile: profileData
+      }
+    });
+  } catch (error) {
+    console.error('Auth error:', error);
+    res.status(500).json({ error: 'Authentication failed' });
+  }
+});
+
+
+app.post('/api/auth/login', [
+  body('token').notEmpty().isString()
+], validateInput, async (req, res) => {
+  try {
+    const { token } = req.body;
+
+    if (!token) return res.status(400).json({ error: 'Token required' });
+
+    const payload = jwt.verify(token, JWT_SECRET);
+
+    const [rows] = await pool.execute(`
+      SELECT a.account_id, a.username, a.token, a.account_status,
+             ar.role_id, r.role_name, r.permissions,
+             p.first_name, p.last_name
+      FROM accounts a
+      JOIN account_roles ar ON a.account_id = ar.account_id AND ar.is_active = TRUE
+      JOIN roles r ON ar.role_id = r.role_id
+      LEFT JOIN staff st ON a.account_id = st.account_id
+      LEFT JOIN students s ON a.account_id = s.account_id
+      LEFT JOIN persons p ON (st.person_id = p.person_id OR s.person_id = p.person_id)
+      WHERE a.account_id = ? AND a.token = ?
+    `, [payload.accountId, token]);
+
+    if (rows.length === 0) return res.status(401).json({ error: 'Invalid or expired token' });
+
+    const user = rows[0];
+
+    let profileData = {};
+    if (user.role_name === 'student') {
+      const [studentData] = await pool.execute(`
+        SELECT student_id, graduation_status, academic_standing
+        FROM students WHERE account_id = ?
+      `, [user.account_id]);
+      profileData = studentData[0] || {};
+    } else if (user.role_name === 'staff' || user.role_name === 'admin') {
+      const [staffData] = await pool.execute(`
+        SELECT staff_id, employee_id, employment_status
+        FROM staff WHERE account_id = ?
+      `, [user.account_id]);
+      profileData = staffData[0] || {};
+    }
+
+    return res.json({
+      token,
+      user: {
+        accountId: user.account_id,
+        username: user.username,
+        role: user.role_name,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        permissions: user.permissions,
+        profile: profileData
+      }
+    });
+  } catch (err) {
+    console.error('Login token validation error:', err);
+    res.status(401).json({ error: 'Invalid token' });
+  }
+});
+
+// logout endpoint
+app.post('/api/auth/logout', authenticateToken, async (req, res) => {
+  try {
+    const accountId = req.user.accountId;
+
+    // Remove token from DB
+    await pool.execute(`UPDATE accounts SET token = NULL WHERE account_id = ?`, [accountId]);
+
+    res.json({ message: 'Logged out successfully' });
+  } catch (error) {
+    console.error('Logout error:', error);
+    res.status(500).json({ error: 'Logout failed' });
+  }
+});
+
+
+app.post('/api/auth/change-password', [
+  authenticateToken,
+  body('currentPassword').isLength({ min: 6 }),
+  body('newPassword').isLength({ min: 6 }).matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
+], validateInput, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const accountId = req.user.accountId;
+
+    const [userRows] = await pool.execute(
+      'SELECT password_hash FROM accounts WHERE account_id = ?',
+      [accountId]
+    );
+
+    if (userRows.length === 0) {
+      return res.status(404).json({ error: 'Account not found' });
+    }
+
+    const isValidPassword = await bcrypt.compare(currentPassword, userRows[0].password_hash);
+    if (!isValidPassword) {
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+
+    const saltRounds = 12;
+    const newPasswordHash = await bcrypt.hash(newPassword, saltRounds);
+
+    await pool.execute(
+      'UPDATE accounts SET password_hash = ? WHERE account_id = ?',
+      [newPasswordHash, accountId]
+    );
+
+    res.json({ message: 'Password changed successfully' });
+
+  } catch (error) {
+    console.error('Password change error:', error);
+    res.status(500).json({ error: 'Password change failed' });
+  }
+});
+
+// ============================================================================
+// DASHBOARD ROUTES
+// ============================================================================
+
+app.get('/api/dashboard/metrics', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
   try {
     const [enrolledCount] = await pool.execute(
-      'SELECT COUNT(*) as count FROM students WHERE enrollment_status = "enrolled"'
+      `SELECT COUNT(*) as count FROM students WHERE graduation_status = 'enrolled'`
     );
     
     const [graduatedCount] = await pool.execute(
-      'SELECT COUNT(*) as count FROM students WHERE enrollment_status = "graduated"'
+      `SELECT COUNT(*) as count FROM students WHERE graduation_status = 'graduated'`
     );
     
     const [pendingPayments] = await pool.execute(
-      'SELECT COUNT(*) as count FROM payments WHERE status = "pending"'
+      `SELECT COUNT(*) as count FROM payments WHERE payment_status = 'pending'`
     );
     
     const [totalRevenue] = await pool.execute(
-      'SELECT SUM(amount) as total FROM payments WHERE status = "complete"'
+      `SELECT SUM(payment_amount) as total FROM payments WHERE payment_status = 'confirmed'`
     );
 
     const [monthlyEnrollments] = await pool.execute(`
-      SELECT MONTH(enrollment_date) as month, COUNT(*) as count 
+      SELECT MONTH(registration_date) as month, COUNT(*) as count 
       FROM students 
-      WHERE YEAR(enrollment_date) = YEAR(CURDATE())
-      GROUP BY MONTH(enrollment_date)
+      WHERE YEAR(registration_date) = YEAR(CURDATE())
+      GROUP BY MONTH(registration_date)
       ORDER BY month
     `);
 
     const [competencyBreakdown] = await pool.execute(`
-      SELECT competency_level, COUNT(*) as count 
-      FROM students 
-      GROUP BY competency_level
+      SELECT tl.level_name, COUNT(*) as count 
+      FROM students s
+      LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
+      LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
+      GROUP BY tl.level_name
     `);
 
     res.json({
@@ -214,342 +582,1313 @@ app.get('/api/dashboard/metrics', async (req, res) => {
     });
   } catch (error) {
     console.error('Dashboard metrics error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Failed to fetch dashboard metrics' });
   }
 });
 
-// Student Routes
-app.get('/api/students', async (req, res) => {
+app.get('/api/dashboard/student/:studentId', authenticateToken, authorize(['student', 'admin', 'staff']), authorizeStudentAccess, async (req, res) => {
   try {
-    const { name_sort, competency, batch } = req.query;
+    const { studentId } = req.params;
+
+    const [studentInfo] = await pool.execute(`
+      SELECT s.student_id, s.graduation_status, s.academic_standing, s.gpa,
+             p.first_name, p.last_name, p.birth_date,
+             tl.level_name as current_trading_level
+      FROM students s
+      JOIN persons p ON s.person_id = p.person_id
+      LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
+      LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
+      WHERE s.student_id = ?
+    `, [studentId]);
+
+    const [enrollments] = await pool.execute(`
+      SELECT se.enrollment_id, se.enrollment_status, se.completion_percentage,
+             c.course_name, co.batch_identifier, co.start_date, co.end_date
+      FROM student_enrollments se
+      JOIN course_offerings co ON se.offering_id = co.offering_id
+      JOIN courses c ON co.course_id = c.course_id
+      WHERE se.student_id = ?
+      ORDER BY co.start_date DESC
+    `, [studentId]);
+
+    const [financialSummary] = await pool.execute(`
+      SELECT 
+        COALESCE(SUM(sa.total_due), 0) as total_due,
+        COALESCE(SUM(sa.amount_paid), 0) as amount_paid,
+        COALESCE(SUM(sa.balance), 0) as balance
+      FROM student_accounts sa
+      WHERE sa.student_id = ?
+    `, [studentId]);
+
+    const [recentProgress] = await pool.execute(`
+      SELECT sp.score, sp.max_score, sp.percentage_score, sp.passed, sp.attempt_date,
+             comp.competency_name, ct.type_name as competency_type
+      FROM student_progress sp
+      JOIN student_enrollments se ON sp.enrollment_id = se.enrollment_id
+      JOIN competencies comp ON sp.competency_id = comp.competency_id
+      JOIN competency_types ct ON comp.competency_type_id = ct.competency_type_id
+      WHERE se.student_id = ?
+      ORDER BY sp.attempt_date DESC
+      LIMIT 5
+    `, [studentId]);
+
+    res.json({
+      student: studentInfo[0] || {},
+      enrollments,
+      financial: financialSummary[0] || { total_due: 0, amount_paid: 0, balance: 0 },
+      recent_progress: recentProgress
+    });
+
+  } catch (error) {
+    console.error('Student dashboard error:', error);
+    res.status(500).json({ error: 'Failed to fetch student dashboard' });
+  }
+});
+
+// ============================================================================
+// STUDENT ROUTES
+// ============================================================================
+
+app.get('/api/students', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
+  try {
+    const { name_sort, graduation_status, trading_level, search } = req.query;
     
-    let query = 'SELECT * FROM students WHERE 1=1';
+    let query = `
+      SELECT s.student_id, s.graduation_status, s.academic_standing, s.gpa, s.registration_date,
+             p.first_name, p.last_name, p.birth_date, p.gender,
+             tl.level_name as current_trading_level,
+             COUNT(DISTINCT se.enrollment_id) as total_enrollments
+      FROM students s
+      JOIN persons p ON s.person_id = p.person_id
+      LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
+      LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
+      LEFT JOIN student_enrollments se ON s.student_id = se.student_id
+      WHERE 1=1
+    `;
     const params = [];
 
-    if (competency) {
-      query += ' AND competency_level = ?';
-      params.push(competency);
+    if (graduation_status) {
+      query += ' AND s.graduation_status = ?';
+      params.push(graduation_status);
     }
 
-    if (batch) {
-      query += ' AND batch = ?';
-      params.push(batch);
+    if (trading_level) {
+      query += ' AND tl.level_name = ?';
+      params.push(trading_level);
     }
+
+    if (search) {
+      query += ' AND (p.first_name LIKE ? OR p.last_name LIKE ? OR s.student_id LIKE ?)';
+      const searchParam = `%${search}%`;
+      params.push(searchParam, searchParam, searchParam);
+    }
+
+    query += ' GROUP BY s.student_id, p.first_name, p.last_name, p.birth_date, p.gender, s.graduation_status, s.academic_standing, s.gpa, s.registration_date, tl.level_name';
 
     if (name_sort) {
-      query += ` ORDER BY first_name ${name_sort === 'ascending' ? 'ASC' : 'DESC'}`;
+      query += ` ORDER BY p.first_name ${name_sort === 'ascending' ? 'ASC' : 'DESC'}`;
+    } else {
+      query += ' ORDER BY s.registration_date DESC';
     }
 
     const [students] = await pool.execute(query, params);
     res.json(students);
   } catch (error) {
     console.error('Students fetch error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Failed to fetch students' });
   }
 });
 
-app.post('/api/students', async (req, res) => {
+app.get('/api/students/:studentId', authenticateToken, authorize(['admin', 'staff', 'student']), authorizeStudentAccess, async (req, res) => {
   try {
-    const { first_name, last_name, email, contact_number, address, batch, competency_level } = req.body;
-    
+    const { studentId } = req.params;
+
+    const [students] = await pool.execute(`
+      SELECT s.student_id, s.graduation_status, s.academic_standing, s.gpa, s.registration_date,
+             p.person_id, p.first_name, p.middle_name, p.last_name, p.birth_date, p.birth_place, p.gender,
+             tl.level_name as current_trading_level, tl.level_id,
+             a.username, a.account_status
+      FROM students s
+      JOIN persons p ON s.person_id = p.person_id
+      LEFT JOIN accounts a ON s.account_id = a.account_id
+      LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
+      LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
+      WHERE s.student_id = ?
+    `, [studentId]);
+
+    if (students.length === 0) {
+      return res.status(404).json({ error: 'Student not found' });
+    }
+
+    const [contacts] = await pool.execute(`
+      SELECT contact_type, contact_value, is_primary
+      FROM contact_info
+      WHERE person_id = ?
+    `, [students[0].person_id]);
+
+    res.json({
+      ...students[0],
+      contacts
+    });
+
+  } catch (error) {
+    console.error('Student fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch student details' });
+  }
+});
+
+app.post('/api/students', [
+  authenticateToken,
+  authorize(['admin', 'staff']),
+  body('first_name').trim().isLength({ min: 1, max: 50 }).escape(),
+  body('last_name').trim().isLength({ min: 1, max: 50 }).escape(),
+  body('birth_date').isISO8601(),
+  body('gender').isIn(['Male', 'Female', 'Other']),
+  body('email').isEmail().normalizeEmail(),
+  body('phone').optional().isMobilePhone(),
+  body('address').optional().trim().isLength({ max: 500 })
+], validateInput, async (req, res) => {
+  const connection = await pool.getConnection();
+  
+  try {
+    await connection.beginTransaction();
+
+    const { 
+      first_name, middle_name, last_name, birth_date, birth_place, gender,
+      email, phone, address, username, password, trading_level_id 
+    } = req.body;
+
     const student_id = `STU${Date.now()}`;
-    
-    const [result] = await pool.execute(`
-      INSERT INTO students (student_id, first_name, last_name, email, contact_number, address, batch, competency_level, enrollment_date)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURDATE())
-    `, [student_id, first_name, last_name, email, contact_number, address, batch, competency_level]);
 
-    res.status(201).json({ id: result.insertId, student_id, message: 'Student created successfully' });
+    const [personResult] = await connection.execute(`
+      INSERT INTO persons (first_name, middle_name, last_name, birth_date, birth_place, gender)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `, [first_name, middle_name || null, last_name, birth_date, birth_place || '', gender]);
+
+    const person_id = personResult.insertId;
+
+    let account_id = null;
+    if (username && password) {
+      const saltRounds = 12;
+      const password_hash = await bcrypt.hash(password, saltRounds);
+
+      const [accountResult] = await connection.execute(`
+        INSERT INTO accounts (username, password_hash)
+        VALUES (?, ?)
+      `, [username, password_hash]);
+
+      account_id = accountResult.insertId;
+
+      await connection.execute(`
+        INSERT INTO account_roles (account_id, role_id)
+        VALUES (?, (SELECT role_id FROM roles WHERE role_name = 'student'))
+      `, [account_id]);
+    }
+
+    await connection.execute(`
+      INSERT INTO students (student_id, person_id, account_id)
+      VALUES (?, ?, ?)
+    `, [student_id, person_id, account_id]);
+
+    if (email) {
+      await connection.execute(`
+        INSERT INTO contact_info (person_id, contact_type, contact_value, is_primary)
+        VALUES (?, 'email', ?, TRUE)
+      `, [person_id, email]);
+    }
+
+    if (phone) {
+      await connection.execute(`
+        INSERT INTO contact_info (person_id, contact_type, contact_value, is_primary)
+        VALUES (?, 'phone', ?, TRUE)
+      `, [person_id, phone]);
+    }
+
+    if (address) {
+      await connection.execute(`
+        INSERT INTO contact_info (person_id, contact_type, contact_value, is_primary)
+        VALUES (?, 'address', ?, TRUE)
+      `, [person_id, address]);
+    }
+
+    if (trading_level_id) {
+      await connection.execute(`
+        INSERT INTO student_trading_levels (student_id, level_id, assigned_by)
+        VALUES (?, ?, (SELECT staff_id FROM staff WHERE account_id = ?))
+      `, [student_id, trading_level_id, req.user.accountId]);
+    }
+
+    await connection.commit();
+    res.status(201).json({ 
+      student_id, 
+      person_id, 
+      account_id,
+      message: 'Student created successfully' 
+    });
+
   } catch (error) {
+    await connection.rollback();
     console.error('Student creation error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-app.put('/api/students/:id', async (req, res) => {
-  try {
-    const { first_name, last_name, email, contact_number, address, batch, competency_level } = req.body;
     
-    await pool.execute(`
-      UPDATE students 
-      SET first_name = ?, last_name = ?, email = ?, contact_number = ?, address = ?, batch = ?, competency_level = ?
-      WHERE id = ?
-    `, [first_name, last_name, email, contact_number, address, batch, competency_level, req.params.id]);
-
-    res.json({ message: 'Student updated successfully' });
-  } catch (error) {
-    console.error('Student update error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    if (error.code === 'ER_DUP_ENTRY') {
+      res.status(409).json({ error: 'Username already exists' });
+    } else {
+      res.status(500).json({ error: 'Failed to create student' });
+    }
+  } finally {
+    connection.release();
   }
 });
 
-// Payment Routes
-app.get('/api/payments', async (req, res) => {
+// ============================================================================
+// PAYMENT ROUTES
+// ============================================================================
+
+app.get('/api/payments', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
   try {
-    const { name_sort, status } = req.query;
+    const { name_sort, status, student_search } = req.query;
     
     let query = `
-      SELECT p.*, s.student_id, s.first_name, s.last_name
+      SELECT p.payment_id, p.payment_amount, p.processing_fee, p.payment_date, p.payment_status,
+             p.reference_number, pm.method_name,
+             sa.total_due, sa.balance,
+             s.student_id, per.first_name, per.last_name,
+             c.course_name, co.batch_identifier
       FROM payments p
-      JOIN students s ON p.student_id = s.id
+      JOIN payment_methods pm ON p.method_id = pm.method_id
+      JOIN student_accounts sa ON p.account_id = sa.account_id
+      JOIN students s ON sa.student_id = s.student_id
+      JOIN persons per ON s.person_id = per.person_id
+      JOIN course_offerings co ON sa.offering_id = co.offering_id
+      JOIN courses c ON co.course_id = c.course_id
       WHERE 1=1
     `;
     const params = [];
 
     if (status) {
-      query += ' AND p.status = ?';
+      query += ' AND p.payment_status = ?';
       params.push(status);
     }
 
+    if (student_search) {
+      query += ' AND (per.first_name LIKE ? OR per.last_name LIKE ? OR s.student_id LIKE ?)';
+      const searchParam = `%${student_search}%`;
+      params.push(searchParam, searchParam, searchParam);
+    }
+
     if (name_sort) {
-      query += ` ORDER BY s.first_name ${name_sort === 'ascending' ? 'ASC' : 'DESC'}`;
+      query += ` ORDER BY per.first_name ${name_sort === 'ascending' ? 'ASC' : 'DESC'}`;
+    } else {
+      query += ' ORDER BY p.payment_date DESC';
     }
 
     const [payments] = await pool.execute(query, params);
     res.json(payments);
   } catch (error) {
     console.error('Payments fetch error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Failed to fetch payments' });
   }
 });
 
-app.post('/api/payments', async (req, res) => {
+app.post('/api/payments', [
+  authenticateToken,
+  authorize(['admin', 'staff']),
+  body('account_id').isInt(),
+  body('method_id').isInt(),
+  body('payment_amount').isFloat({ min: 0.01 }),
+  body('reference_number').optional().trim().isLength({ max: 50 })
+], validateInput, async (req, res) => {
   try {
-    const { student_id, payment_type, amount, tuition_fee_details, additional_notes } = req.body;
+    const { account_id, method_id, payment_amount, reference_number, notes } = req.body;
     
-    await pool.execute(`
-      INSERT INTO payments (student_id, payment_type, amount, payment_date, tuition_fee_details, additional_notes)
-      VALUES (?, ?, ?, CURDATE(), ?, ?)
-    `, [student_id, payment_type, amount, tuition_fee_details, additional_notes]);
+    const [result] = await pool.execute(`
+      CALL sp_process_payment(?, ?, ?, ?, ?, @result);
+      SELECT @result as result;
+    `, [account_id, method_id, payment_amount, reference_number || null, req.user.accountId]);
 
-    res.status(201).json({ message: 'Payment recorded successfully' });
+    const processingResult = result[1][0].result;
+
+    if (processingResult.startsWith('SUCCESS')) {
+      res.status(201).json({ message: processingResult });
+    } else {
+      res.status(400).json({ error: processingResult });
+    }
+
   } catch (error) {
     console.error('Payment creation error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Failed to process payment' });
   }
 });
 
-// Document Routes
-app.get('/api/documents', async (req, res) => {
+app.get('/api/students/:studentId/payments', authenticateToken, authorize(['admin', 'staff', 'student']), authorizeStudentAccess, async (req, res) => {
   try {
-    const query = `
-      SELECT d.*, s.student_id, s.first_name, s.last_name
-      FROM documents d
-      JOIN students s ON d.student_id = s.id
-      ORDER BY d.upload_date DESC
-    `;
+    const { studentId } = req.params;
+
+    const [payments] = await pool.execute(`
+      SELECT p.payment_id, p.payment_amount, p.processing_fee, p.payment_date, p.payment_status,
+             p.reference_number, pm.method_name,
+             sa.total_due, sa.balance,
+             c.course_name, co.batch_identifier
+      FROM payments p
+      JOIN payment_methods pm ON p.method_id = pm.method_id
+      JOIN student_accounts sa ON p.account_id = sa.account_id
+      JOIN course_offerings co ON sa.offering_id = co.offering_id
+      JOIN courses c ON co.course_id = c.course_id
+      WHERE sa.student_id = ?
+      ORDER BY p.payment_date DESC
+    `, [studentId]);
+
+    res.json(payments);
+  } catch (error) {
+    console.error('Student payments fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch student payments' });
+  }
+});
+
+// ============================================================================
+// DOCUMENT ROUTES
+// ============================================================================
+
+app.get('/api/documents', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
+  try {
+    const { verification_status, student_search } = req.query;
     
-    const [documents] = await pool.execute(query);
+    let query = `
+      SELECT sd.document_id, sd.original_filename, sd.upload_date, sd.verification_status,
+             sd.verified_date, sd.is_current,
+             dt.type_name as document_type, dt.is_required,
+             s.student_id, per.first_name, per.last_name,
+             staff_per.first_name as verified_by_first_name, staff_per.last_name as verified_by_last_name
+      FROM student_documents sd
+      JOIN document_types dt ON sd.document_type_id = dt.document_type_id
+      JOIN students s ON sd.student_id = s.student_id
+      JOIN persons per ON s.person_id = per.person_id
+      LEFT JOIN staff st ON sd.verified_by = st.staff_id
+      LEFT JOIN persons staff_per ON st.person_id = staff_per.person_id
+      WHERE sd.is_current = TRUE
+    `;
+    const params = [];
+
+    if (verification_status) {
+      query += ' AND sd.verification_status = ?';
+      params.push(verification_status);
+    }
+
+    if (student_search) {
+      query += ' AND (per.first_name LIKE ? OR per.last_name LIKE ? OR s.student_id LIKE ?)';
+      const searchParam = `%${student_search}%`;
+      params.push(searchParam, searchParam, searchParam);
+    }
+
+    query += ' ORDER BY sd.upload_date DESC';
+
+    const [documents] = await pool.execute(query, params);
     res.json(documents);
   } catch (error) {
     console.error('Documents fetch error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Failed to fetch documents' });
   }
 });
 
-app.post('/api/documents/upload', upload.single('document'), async (req, res) => {
+app.post('/api/documents/upload', [
+  authenticateToken,
+  authorize(['admin', 'staff', 'student']),
+  upload.single('document')
+], async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    const { student_id } = req.body;
+    const { student_id, document_type_id } = req.body;
+
+    if (req.user.role === 'student') {
+      const [studentRows] = await pool.execute(
+        'SELECT student_id FROM students WHERE student_id = ? AND account_id = ?',
+        [student_id, req.user.accountId]
+      );
+      
+      if (studentRows.length === 0) {
+        fs.unlinkSync(req.file.path);
+        return res.status(403).json({ error: 'Access denied to this student record' });
+      }
+    }
+
+    const fileBuffer = fs.readFileSync(req.file.path);
+    const fileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
 
     await pool.execute(`
-      INSERT INTO documents (student_id, document_name, file_path, file_type)
-      VALUES (?, ?, ?, ?)
-    `, [student_id, req.file.originalname, req.file.path, req.file.mimetype]);
+      UPDATE student_documents 
+      SET is_current = FALSE 
+      WHERE student_id = ? AND document_type_id = ?
+    `, [student_id, document_type_id]);
+
+    let uploadedBy = null;
+    if (req.user.role !== 'student') {
+      const [staffRows] = await pool.execute(
+        'SELECT staff_id FROM staff WHERE account_id = ?',
+        [req.user.accountId]
+      );
+      uploadedBy = staffRows[0]?.staff_id || null;
+    }
+
+    await pool.execute(`
+      INSERT INTO student_documents (
+        student_id, document_type_id, original_filename, stored_filename, 
+        file_path, file_size_bytes, mime_type, file_hash, uploaded_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      student_id, document_type_id, req.file.originalname, req.file.filename,
+      req.file.path, req.file.size, req.file.mimetype, fileHash, uploadedBy
+    ]);
 
     res.status(201).json({ message: 'Document uploaded successfully' });
   } catch (error) {
     console.error('Document upload error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    if (req.file) {
+      fs.unlinkSync(req.file.path);
+    }
+    res.status(500).json({ error: 'Failed to upload document' });
   }
 });
 
-app.put('/api/documents/:id/status', async (req, res) => {
+app.put('/api/documents/:documentId/verify', [
+  authenticateToken,
+  authorize(['admin', 'staff']),
+  body('verification_status').isIn(['verified', 'rejected', 'requires_update']),
+  body('verification_notes').optional().trim().isLength({ max: 1000 })
+], validateInput, async (req, res) => {
   try {
-    const { status, approved_by } = req.body;
-    const documentId = req.params.id;
+    const { documentId } = req.params;
+    const { verification_status, verification_notes } = req.body;
+
+    const [staffRows] = await pool.execute(
+      'SELECT staff_id FROM staff WHERE account_id = ?',
+      [req.user.accountId]
+    );
+    
+    const staffId = staffRows[0]?.staff_id;
 
     await pool.execute(`
-      UPDATE documents 
-      SET status = ?, approved_by = ?, approved_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `, [status, approved_by || 'Admin', documentId]);
+      UPDATE student_documents 
+      SET verification_status = ?, verified_by = ?, verified_date = NOW(), verification_notes = ?
+      WHERE document_id = ?
+    `, [verification_status, staffId, verification_notes || null, documentId]);
 
-    res.json({ message: 'Document status updated successfully' });
+    res.json({ message: 'Document verification status updated successfully' });
   } catch (error) {
-    console.error('Document status update error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Document verification error:', error);
+    res.status(500).json({ error: 'Failed to update document verification' });
   }
 });
 
-// Competency Assessment Routes
-app.get('/api/competency-assessments', async (req, res) => {
+app.get('/api/students/:studentId/documents', authenticateToken, authorize(['admin', 'staff', 'student']), authorizeStudentAccess, async (req, res) => {
   try {
-    const { name_sort, competency, batch } = req.query;
+    const { studentId } = req.params;
+
+    const [documents] = await pool.execute(`
+      SELECT sd.document_id, sd.original_filename, sd.upload_date, sd.verification_status,
+             sd.verified_date, sd.verification_notes,
+             dt.type_name as document_type, dt.is_required, dt.category
+      FROM student_documents sd
+      JOIN document_types dt ON sd.document_type_id = dt.document_type_id
+      WHERE sd.student_id = ? AND sd.is_current = TRUE
+      ORDER BY dt.is_required DESC, sd.upload_date DESC
+    `, [studentId]);
+
+    res.json(documents);
+  } catch (error) {
+    console.error('Student documents fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch student documents' });
+  }
+});
+
+// ============================================================================
+// COMPETENCY AND PROGRESS ROUTES
+// ============================================================================
+
+app.get('/api/competency-assessments', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
+  try {
+    const { competency_type, student_search, passed } = req.query;
     
     let query = `
-      SELECT ca.*, s.student_id, s.first_name, s.last_name
-      FROM competency_assessments ca
-      JOIN students s ON ca.student_id = s.id
+      SELECT sp.progress_id, sp.score, sp.max_score, sp.percentage_score, sp.passed, 
+             sp.attempt_number, sp.attempt_date, sp.feedback,
+             comp.competency_name, ct.type_name as competency_type,
+             s.student_id, per.first_name, per.last_name,
+             c.course_name, co.batch_identifier,
+             staff_per.first_name as assessed_by_first_name, staff_per.last_name as assessed_by_last_name
+      FROM student_progress sp
+      JOIN student_enrollments se ON sp.enrollment_id = se.enrollment_id
+      JOIN students s ON se.student_id = s.student_id
+      JOIN persons per ON s.person_id = per.person_id
+      JOIN course_offerings co ON se.offering_id = co.offering_id
+      JOIN courses c ON co.course_id = c.course_id
+      JOIN competencies comp ON sp.competency_id = comp.competency_id
+      JOIN competency_types ct ON comp.competency_type_id = ct.competency_type_id
+      LEFT JOIN staff st ON sp.assessed_by = st.staff_id
+      LEFT JOIN persons staff_per ON st.person_id = staff_per.person_id
       WHERE 1=1
     `;
     const params = [];
 
-    if (competency) {
-      query += ' AND ca.competency_type = ?';
-      params.push(competency);
+    if (competency_type) {
+      query += ' AND ct.type_name = ?';
+      params.push(competency_type);
     }
 
-    if (batch) {
-      query += ' AND ca.batch = ?';
-      params.push(batch);
+    if (passed !== undefined) {
+      query += ' AND sp.passed = ?';
+      params.push(passed === 'true');
     }
 
-    if (name_sort) {
-      query += ` ORDER BY s.first_name ${name_sort === 'ascending' ? 'ASC' : 'DESC'}`;
+    if (student_search) {
+      query += ' AND (per.first_name LIKE ? OR per.last_name LIKE ? OR s.student_id LIKE ?)';
+      const searchParam = `%${student_search}%`;
+      params.push(searchParam, searchParam, searchParam);
     }
+
+    query += ' ORDER BY sp.attempt_date DESC';
 
     const [assessments] = await pool.execute(query, params);
     res.json(assessments);
   } catch (error) {
     console.error('Competency assessments fetch error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Failed to fetch competency assessments' });
   }
 });
 
-app.post('/api/competency-assessments', async (req, res) => {
+app.post('/api/competency-assessments', [
+  authenticateToken,
+  authorize(['admin', 'staff']),
+  body('enrollment_id').isInt(),
+  body('competency_id').isInt(),
+  body('score').isFloat({ min: 0 }),
+  body('max_score').isFloat({ min: 0.01 }),
+  body('feedback').optional().trim().isLength({ max: 1000 })
+], validateInput, async (req, res) => {
   try {
-    const { student_id, competency_type, score, batch } = req.body;
-    const passed = score >= 70; // Passing score is 70
+    const { enrollment_id, competency_id, score, max_score, feedback } = req.body;
+
+    const [attemptRows] = await pool.execute(`
+      SELECT COALESCE(MAX(attempt_number), 0) + 1 as next_attempt
+      FROM student_progress
+      WHERE enrollment_id = ? AND competency_id = ?
+    `, [enrollment_id, competency_id]);
+
+    const attempt_number = attemptRows[0].next_attempt;
+
+    const [staffRows] = await pool.execute(
+      'SELECT staff_id FROM staff WHERE account_id = ?',
+      [req.user.accountId]
+    );
+    
+    const staffId = staffRows[0]?.staff_id;
 
     await pool.execute(`
-      INSERT INTO competency_assessments (student_id, competency_type, assessment_date, score, passed, batch)
-      VALUES (?, ?, CURDATE(), ?, ?, ?)
-    `, [student_id, competency_type, score, passed, batch]);
+      INSERT INTO student_progress (enrollment_id, competency_id, attempt_number, score, max_score, assessed_by, feedback)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [enrollment_id, competency_id, attempt_number, score, max_score, staffId, feedback || null]);
 
     res.status(201).json({ message: 'Assessment recorded successfully' });
   } catch (error) {
     console.error('Assessment creation error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Failed to record assessment' });
   }
 });
 
-// Graduation Eligibility Routes
-app.get('/api/graduation-eligibility', async (req, res) => {
+app.get('/api/students/:studentId/progress', authenticateToken, authorize(['admin', 'staff', 'student']), authorizeStudentAccess, async (req, res) => {
   try {
-    const { name_sort, eligibility } = req.query;
-    
-    let query = 'SELECT * FROM students WHERE 1=1';
-    const params = [];
+    const { studentId } = req.params;
 
-    if (eligibility) {
-      const eligible = eligibility === 'basic' || eligibility === 'common' || eligibility === 'core';
-      query += ' AND graduation_eligible = ?';
-      params.push(eligible);
-    }
+    const [progress] = await pool.execute(`
+      SELECT sp.progress_id, sp.score, sp.max_score, sp.percentage_score, sp.passed, 
+             sp.attempt_number, sp.attempt_date, sp.feedback,
+             comp.competency_name, comp.competency_description,
+             ct.type_name as competency_type, ct.passing_score,
+             c.course_name, co.batch_identifier
+      FROM student_progress sp
+      JOIN student_enrollments se ON sp.enrollment_id = se.enrollment_id
+      JOIN course_offerings co ON se.offering_id = co.offering_id
+      JOIN courses c ON co.course_id = c.course_id
+      JOIN competencies comp ON sp.competency_id = comp.competency_id
+      JOIN competency_types ct ON comp.competency_type_id = ct.competency_type_id
+      WHERE se.student_id = ?
+      ORDER BY sp.attempt_date DESC
+    `, [studentId]);
 
-    if (name_sort) {
-      query += ` ORDER BY first_name ${name_sort === 'ascending' ? 'ASC' : 'DESC'}`;
-    }
-
-    const [students] = await pool.execute(query, params);
-    res.json(students);
+    res.json(progress);
   } catch (error) {
-    console.error('Graduation eligibility fetch error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Student progress fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch student progress' });
   }
 });
 
-// Scholarship Routes
-app.get('/api/scholarships', async (req, res) => {
+// ============================================================================
+// SCHOLARSHIP ROUTES
+// ============================================================================
+
+app.get('/api/scholarships', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
   try {
-    const [scholarships] = await pool.execute(
-      'SELECT * FROM scholarships WHERE active = TRUE ORDER BY created_at DESC'
-    );
+    const [scholarships] = await pool.execute(`
+      SELECT sp.sponsor_id, sp.sponsor_name, sp.contact_person, sp.contact_email, 
+             sp.industry, sp.total_commitment, sp.current_commitment, sp.students_sponsored, sp.is_active,
+             st.type_name as sponsor_type
+      FROM sponsors sp
+      JOIN sponsor_types st ON sp.sponsor_type_id = st.sponsor_type_id
+      WHERE sp.is_active = TRUE
+      ORDER BY sp.sponsor_name
+    `);
     res.json(scholarships);
   } catch (error) {
     console.error('Scholarships fetch error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Failed to fetch scholarships' });
   }
 });
 
-app.post('/api/scholarships', async (req, res) => {
+app.post('/api/scholarships', [
+  authenticateToken,
+  authorize(['admin', 'staff']),
+  body('sponsor_name').trim().isLength({ min: 1, max: 100 }),
+  body('sponsor_type_id').isInt(),
+  body('contact_person').trim().isLength({ min: 1, max: 100 }),
+  body('contact_email').isEmail(),
+  body('total_commitment').isFloat({ min: 0 })
+], validateInput, async (req, res) => {
   try {
-    const { sponsor_name, sponsor_type, contact_person, email, description, amount, eligibility_criteria } = req.body;
-    
-    await pool.execute(`
-      INSERT INTO scholarships (sponsor_name, sponsor_type, contact_person, email, description, amount, eligibility_criteria)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [sponsor_name, sponsor_type, contact_person, email, description, amount, eligibility_criteria]);
+    const { 
+      sponsor_name, sponsor_type_id, contact_person, contact_email, 
+      contact_phone, address, website, industry, total_commitment,
+      agreement_details, agreement_start_date, agreement_end_date
+    } = req.body;
 
-    res.status(201).json({ message: 'Scholarship created successfully' });
+    const sponsor_code = `SP${Date.now()}`;
+
+    await pool.execute(`
+      INSERT INTO sponsors (
+        sponsor_type_id, sponsor_name, sponsor_code, contact_person, contact_email,
+        contact_phone, address, website, industry, total_commitment,
+        agreement_details, agreement_start_date, agreement_end_date
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      sponsor_type_id, sponsor_name, sponsor_code, contact_person, contact_email,
+      contact_phone || null, address || null, website || null, industry || null, total_commitment,
+      agreement_details || null, agreement_start_date || null, agreement_end_date || null
+    ]);
+
+    res.status(201).json({ message: 'Scholarship sponsor created successfully', sponsor_code });
   } catch (error) {
     console.error('Scholarship creation error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Failed to create scholarship sponsor' });
   }
 });
 
-// Referral Routes
-app.get('/api/referrals', async (req, res) => {
+app.get('/api/students/:studentId/scholarships', authenticateToken, authorize(['admin', 'staff', 'student']), authorizeStudentAccess, async (req, res) => {
   try {
-    const { name_sort, competency } = req.query;
+    const { studentId } = req.params;
+
+    const [scholarships] = await pool.execute(`
+      SELECT ss.scholarship_id, ss.scholarship_type, ss.coverage_percentage, ss.coverage_amount,
+             ss.scholarship_status, ss.start_date, ss.end_date, ss.gpa_requirement,
+             sp.sponsor_name, st.type_name as sponsor_type
+      FROM student_scholarships ss
+      JOIN sponsors sp ON ss.sponsor_id = sp.sponsor_id
+      JOIN sponsor_types st ON sp.sponsor_type_id = st.sponsor_type_id
+      WHERE ss.student_id = ?
+      ORDER BY ss.start_date DESC
+    `, [studentId]);
+
+    res.json(scholarships);
+  } catch (error) {
+    console.error('Student scholarships fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch student scholarships' });
+  }
+});
+
+// ============================================================================
+// COURSE AND ENROLLMENT ROUTES
+// ============================================================================
+
+app.get('/api/courses', authenticateToken, async (req, res) => {
+  try {
+    const [courses] = await pool.execute(`
+      SELECT c.course_id, c.course_code, c.course_name, c.course_description,
+             c.duration_weeks, c.credits, c.is_active
+      FROM courses c
+      WHERE c.is_active = TRUE
+      ORDER BY c.course_name
+    `);
+    res.json(courses);
+  } catch (error) {
+    console.error('Courses fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch courses' });
+  }
+});
+
+app.get('/api/course-offerings', authenticateToken, async (req, res) => {
+  try {
+    const { status } = req.query;
     
     let query = `
-      SELECT r.*, s.student_id, s.first_name as referrer_first_name, s.last_name as referrer_last_name
-      FROM referrals r
-      JOIN students s ON r.referrer_student_id = s.id
+      SELECT co.offering_id, co.batch_identifier, co.start_date, co.end_date, co.status,
+             co.max_enrollees, co.current_enrollees, co.location,
+             c.course_code, c.course_name,
+             AVG(cp.amount) as average_price
+      FROM course_offerings co
+      JOIN courses c ON co.course_id = c.course_id
+      LEFT JOIN course_pricing cp ON co.offering_id = cp.offering_id AND cp.is_active = TRUE
       WHERE 1=1
     `;
     const params = [];
 
-    if (competency) {
-      query += ' AND r.competency_level = ?';
-      params.push(competency);
+    if (status) {
+      query += ' AND co.status = ?';
+      params.push(status);
     }
 
-    if (name_sort) {
-      query += ` ORDER BY s.first_name ${name_sort === 'ascending' ? 'ASC' : 'DESC'}`;
+    query += ' GROUP BY co.offering_id ORDER BY co.start_date DESC';
+
+    const [offerings] = await pool.execute(query, params);
+    res.json(offerings);
+  } catch (error) {
+    console.error('Course offerings fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch course offerings' });
+  }
+});
+
+app.post('/api/enrollments', [
+  authenticateToken,
+  authorize(['admin', 'staff']),
+  body('student_id').trim().isLength({ min: 1 }),
+  body('offering_id').isInt(),
+  body('pricing_type').isIn(['regular', 'early_bird', 'group', 'scholarship', 'special'])
+], validateInput, async (req, res) => {
+  try {
+    const { student_id, offering_id, pricing_type } = req.body;
+
+    const [result] = await pool.execute(`
+      CALL sp_enroll_student(?, ?, ?, @result);
+      SELECT @result as result;
+    `, [student_id, offering_id, pricing_type]);
+
+    const enrollmentResult = result[1][0].result;
+
+    if (enrollmentResult.startsWith('SUCCESS')) {
+      res.status(201).json({ message: enrollmentResult });
+    } else {
+      res.status(400).json({ error: enrollmentResult });
     }
+
+  } catch (error) {
+    console.error('Enrollment error:', error);
+    res.status(500).json({ error: 'Failed to enroll student' });
+  }
+});
+
+app.get('/api/students/:studentId/enrollments', authenticateToken, authorize(['admin', 'staff', 'student']), authorizeStudentAccess, async (req, res) => {
+  try {
+    const { studentId } = req.params;
+
+    const [enrollments] = await pool.execute(`
+      SELECT se.enrollment_id, se.enrollment_status, se.enrollment_date, se.completion_date,
+             se.final_grade, se.completion_percentage, se.attendance_percentage,
+             c.course_code, c.course_name, co.batch_identifier, co.start_date, co.end_date,
+             sa.total_due, sa.amount_paid, sa.balance
+      FROM student_enrollments se
+      JOIN course_offerings co ON se.offering_id = co.offering_id
+      JOIN courses c ON co.course_id = c.course_id
+      LEFT JOIN student_accounts sa ON se.student_id = sa.student_id AND se.offering_id = sa.offering_id
+      WHERE se.student_id = ?
+      ORDER BY co.start_date DESC
+    `, [studentId]);
+
+    res.json(enrollments);
+  } catch (error) {
+    console.error('Student enrollments fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch student enrollments' });
+  }
+});
+
+// ============================================================================
+// REFERRAL ROUTES
+// ============================================================================
+
+app.get('/api/referrals', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
+  try {
+    const { status, referrer_search } = req.query;
+    
+    let query = `
+      SELECT sr.referral_id, sr.referrer_name, sr.referrer_contact, sr.referral_date,
+             sr.referral_reward, sr.reward_type, sr.reward_paid, sr.conversion_date,
+             rs.source_name, rs.source_type,
+             s.student_id, per.first_name, per.last_name
+      FROM student_referrals sr
+      JOIN referral_sources rs ON sr.source_id = rs.source_id
+      JOIN students s ON sr.student_id = s.student_id
+      JOIN persons per ON s.person_id = per.person_id
+      LEFT JOIN students ref_s ON sr.referrer_student_id = ref_s.student_id
+      LEFT JOIN persons ref_per ON ref_s.person_id = ref_per.person_id
+      WHERE 1=1
+    `;
+    const params = [];
+
+    if (referrer_search) {
+      query += ' AND (sr.referrer_name LIKE ? OR ref_per.first_name LIKE ? OR ref_per.last_name LIKE ?)';
+      const searchParam = `%${referrer_search}%`;
+      params.push(searchParam, searchParam, searchParam);
+    }
+
+    query += ' ORDER BY sr.referral_date DESC';
 
     const [referrals] = await pool.execute(query, params);
     res.json(referrals);
   } catch (error) {
     console.error('Referrals fetch error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Failed to fetch referrals' });
   }
 });
 
-app.post('/api/referrals', async (req, res) => {
+app.post('/api/referrals', [
+  authenticateToken,
+  authorize(['admin', 'staff']),
+  body('student_id').trim().isLength({ min: 1 }),
+  body('source_id').isInt(),
+  body('referrer_name').optional().trim().isLength({ max: 100 }),
+  body('referrer_contact').optional().trim().isLength({ max: 100 })
+], validateInput, async (req, res) => {
   try {
-    const { referrer_student_id, referred_student_name, referred_student_email, referred_student_phone, competency_level, notes } = req.body;
-    
-    await pool.execute(`
-      INSERT INTO referrals (referrer_student_id, referred_student_name, referred_student_email, referred_student_phone, competency_level, referral_date, notes)
-      VALUES (?, ?, ?, ?, ?, CURDATE(), ?)
-    `, [referrer_student_id, referred_student_name, referred_student_email, referred_student_phone, competency_level, notes]);
+    const { 
+      student_id, source_id, referrer_name, referrer_contact, referrer_student_id,
+      ib_code, campaign_code, referral_reward, reward_type
+    } = req.body;
 
-    res.status(201).json({ message: 'Referral created successfully' });
+    await pool.execute(`
+      INSERT INTO student_referrals (
+        student_id, source_id, referrer_name, referrer_contact, referrer_student_id,
+        ib_code, campaign_code, referral_reward, reward_type
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      student_id, source_id, referrer_name || null, referrer_contact || null, referrer_student_id || null,
+      ib_code || null, campaign_code || null, referral_reward || 0, reward_type || 'cash'
+    ]);
+
+    res.status(201).json({ message: 'Referral recorded successfully' });
   } catch (error) {
     console.error('Referral creation error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Failed to record referral' });
   }
 });
 
-// Error handling middleware
+// ============================================================================
+// UTILITY ROUTES
+// ============================================================================
+
+app.get('/api/trading-levels', authenticateToken, async (req, res) => {
+  try {
+    const [levels] = await pool.execute(`
+      SELECT level_id, level_name, level_description, minimum_score, estimated_duration_weeks
+      FROM trading_levels
+      ORDER BY minimum_score ASC
+    `);
+    res.json(levels);
+  } catch (error) {
+    console.error('Trading levels fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch trading levels' });
+  }
+});
+
+app.get('/api/payment-methods', authenticateToken, async (req, res) => {
+  try {
+    const [methods] = await pool.execute(`
+      SELECT method_id, method_name, method_type, processing_fee_percentage
+      FROM payment_methods
+      WHERE is_active = TRUE
+      ORDER BY method_name
+    `);
+    res.json(methods);
+  } catch (error) {
+    console.error('Payment methods fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch payment methods' });
+  }
+});
+
+app.get('/api/document-types', authenticateToken, async (req, res) => {
+  try {
+    const [types] = await pool.execute(`
+      SELECT document_type_id, type_name, category, is_required, required_for
+      FROM document_types
+      WHERE is_active = TRUE
+      ORDER BY is_required DESC, type_name
+    `);
+    res.json(types);
+  } catch (error) {
+    console.error('Document types fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch document types' });
+  }
+});
+
+app.get('/api/competencies', authenticateToken, async (req, res) => {
+  try {
+    const [competencies] = await pool.execute(`
+      SELECT c.competency_id, c.competency_code, c.competency_name, c.competency_description,
+             ct.type_name as competency_type, ct.passing_score
+      FROM competencies c
+      JOIN competency_types ct ON c.competency_type_id = ct.competency_type_id
+      WHERE c.is_active = TRUE
+      ORDER BY ct.type_name, c.competency_name
+    `);
+    res.json(competencies);
+  } catch (error) {
+    console.error('Competencies fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch competencies' });
+  }
+});
+
+// ============================================================================
+// USER PROFILE ROUTES
+// ============================================================================
+
+app.get('/api/profile', authenticateToken, async (req, res) => {
+  try {
+    const [userProfile] = await pool.execute(`
+      SELECT a.account_id, a.username, a.account_status,
+             p.first_name, p.middle_name, p.last_name, p.birth_date, p.gender,
+             r.role_name, r.permissions
+      FROM accounts a
+      JOIN account_roles ar ON a.account_id = ar.account_id
+      JOIN roles r ON ar.role_id = r.role_id
+      LEFT JOIN staff st ON a.account_id = st.account_id
+      LEFT JOIN students s ON a.account_id = s.account_id
+      LEFT JOIN persons p ON (st.person_id = p.person_id OR s.person_id = p.person_id)
+      WHERE a.account_id = ? AND ar.is_active = TRUE
+    `, [req.user.accountId]);
+
+    if (userProfile.length === 0) {
+      return res.status(404).json({ error: 'User profile not found' });
+    }
+
+    const [contacts] = await pool.execute(`
+      SELECT contact_type, contact_value, is_primary
+      FROM contact_info
+      WHERE person_id = (
+        SELECT COALESCE(st.person_id, s.person_id)
+        FROM accounts a
+        LEFT JOIN staff st ON a.account_id = st.account_id
+        LEFT JOIN students s ON a.account_id = s.account_id
+        WHERE a.account_id = ?
+      )
+    `, [req.user.accountId]);
+
+    res.json({
+      ...userProfile[0],
+      contacts
+    });
+
+  } catch (error) {
+    console.error('Profile fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch user profile' });
+  }
+});
+
+app.put('/api/profile', [
+  authenticateToken,
+  body('first_name').optional().trim().isLength({ min: 1, max: 50 }),
+  body('last_name').optional().trim().isLength({ min: 1, max: 50 }),
+  body('email').optional().isEmail(),
+  body('phone').optional().isMobilePhone()
+], validateInput, async (req, res) => {
+  const connection = await pool.getConnection();
+  
+  try {
+    await connection.beginTransaction();
+
+    const { first_name, middle_name, last_name, email, phone, address } = req.body;
+
+    const [personRows] = await connection.execute(`
+      SELECT COALESCE(st.person_id, s.person_id) as person_id
+      FROM accounts a
+      LEFT JOIN staff st ON a.account_id = st.account_id
+      LEFT JOIN students s ON a.account_id = s.account_id
+      WHERE a.account_id = ?
+    `, [req.user.accountId]);
+
+    if (personRows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const person_id = personRows[0].person_id;
+
+    if (first_name || middle_name || last_name) {
+      await connection.execute(`
+        UPDATE persons 
+        SET first_name = COALESCE(?, first_name),
+            middle_name = COALESCE(?, middle_name),
+            last_name = COALESCE(?, last_name)
+        WHERE person_id = ?
+      `, [first_name, middle_name, last_name, person_id]);
+    }
+
+    if (email) {
+      await connection.execute(`
+        INSERT INTO contact_info (person_id, contact_type, contact_value, is_primary)
+        VALUES (?, 'email', ?, TRUE)
+        ON DUPLICATE KEY UPDATE contact_value = VALUES(contact_value)
+      `, [person_id, email]);
+    }
+
+    if (phone) {
+      await connection.execute(`
+        INSERT INTO contact_info (person_id, contact_type, contact_value, is_primary)
+        VALUES (?, 'phone', ?, TRUE)
+        ON DUPLICATE KEY UPDATE contact_value = VALUES(contact_value)
+      `, [person_id, phone]);
+    }
+
+    if (address) {
+      await connection.execute(`
+        INSERT INTO contact_info (person_id, contact_type, contact_value, is_primary)
+        VALUES (?, 'address', ?, TRUE)
+        ON DUPLICATE KEY UPDATE contact_value = VALUES(contact_value)
+      `, [person_id, address]);
+    }
+
+    await connection.commit();
+    res.json({ message: 'Profile updated successfully' });
+
+  } catch (error) {
+    await connection.rollback();
+    console.error('Profile update error:', error);
+    res.status(500).json({ error: 'Failed to update profile' });
+  } finally {
+    connection.release();
+  }
+});
+
+// ============================================================================
+// ADMIN ROUTES
+// ============================================================================
+
+app.get('/api/admin/accounts', authenticateToken, authorize(['admin']), async (req, res) => {
+  try {
+    const [accounts] = await pool.execute(`
+      SELECT a.account_id, a.username, a.account_status, a.last_login,
+             p.first_name, p.last_name, r.role_name,
+             COALESCE(s.student_id, st.staff_id) as user_identifier
+      FROM accounts a
+      JOIN account_roles ar ON a.account_id = ar.account_id
+      JOIN roles r ON ar.role_id = r.role_id
+      LEFT JOIN staff st ON a.account_id = st.account_id
+      LEFT JOIN students s ON a.account_id = s.account_id
+      LEFT JOIN persons p ON (st.person_id = p.person_id OR s.person_id = p.person_id)
+      WHERE ar.is_active = TRUE
+      ORDER BY a.username
+    `);
+
+    res.json(accounts);
+  } catch (error) {
+    console.error('Admin accounts fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch accounts' });
+  }
+});
+
+app.put('/api/admin/accounts/:accountId/status', [
+  authenticateToken,
+  authorize(['admin']),
+  body('status').isIn(['active', 'inactive', 'suspended'])
+], validateInput, async (req, res) => {
+  try {
+    const { accountId } = req.params;
+    const { status } = req.body;
+
+    await pool.execute(`
+      UPDATE accounts 
+      SET account_status = ?
+      WHERE account_id = ?
+    `, [status, accountId]);
+
+    res.json({ message: 'Account status updated successfully' });
+  } catch (error) {
+    console.error('Account status update error:', error);
+    res.status(500).json({ error: 'Failed to update account status' });
+  }
+});
+
+app.post('/api/admin/staff', [
+  authenticateToken,
+  authorize(['admin']),
+  body('first_name').trim().isLength({ min: 1, max: 50 }).escape(),
+  body('last_name').trim().isLength({ min: 1, max: 50 }).escape(),
+  body('email').isEmail().normalizeEmail(),
+  body('username').trim().isLength({ min: 3, max: 50 }).escape(),
+  body('password').isLength({ min: 6 }),
+  body('role').isIn(['staff', 'admin'])
+], validateInput, async (req, res) => {
+  const connection = await pool.getConnection();
+  
+  try {
+    await connection.beginTransaction();
+
+    const { 
+      first_name, middle_name, last_name, birth_date, gender,
+      email, phone, username, password, role, employee_id
+    } = req.body;
+
+    const [personResult] = await connection.execute(`
+      INSERT INTO persons (first_name, middle_name, last_name, birth_date, gender)
+      VALUES (?, ?, ?, ?, ?)
+    `, [first_name, middle_name || null, last_name, birth_date || null, gender || 'Other']);
+
+    const person_id = personResult.insertId;
+
+    const saltRounds = 12;
+    const password_hash = await bcrypt.hash(password, saltRounds);
+
+    const [accountResult] = await connection.execute(`
+      INSERT INTO accounts (username, password_hash)
+      VALUES (?, ?)
+    `, [username, password_hash]);
+
+    const account_id = accountResult.insertId;
+
+    await connection.execute(`
+      INSERT INTO account_roles (account_id, role_id)
+      VALUES (?, (SELECT role_id FROM roles WHERE role_name = ?))
+    `, [account_id, role]);
+
+    await connection.execute(`
+      INSERT INTO staff (person_id, account_id, employee_id)
+      VALUES (?, ?, ?)
+    `, [person_id, account_id, employee_id || `EMP${Date.now()}`]);
+
+    if (email) {
+      await connection.execute(`
+        INSERT INTO contact_info (person_id, contact_type, contact_value, is_primary)
+        VALUES (?, 'email', ?, TRUE)
+      `, [person_id, email]);
+    }
+
+    if (phone) {
+      await connection.execute(`
+        INSERT INTO contact_info (person_id, contact_type, contact_value, is_primary)
+        VALUES (?, 'phone', ?, TRUE)
+      `, [person_id, phone]);
+    }
+
+    await connection.commit();
+    res.status(201).json({ 
+      account_id, 
+      person_id,
+      message: 'Staff account created successfully' 
+    });
+
+  } catch (error) {
+    await connection.rollback();
+    console.error('Staff creation error:', error);
+    
+    if (error.code === 'ER_DUP_ENTRY') {
+      res.status(409).json({ error: 'Username already exists' });
+    } else {
+      res.status(500).json({ error: 'Failed to create staff account' });
+    }
+  } finally {
+    connection.release();
+  }
+});
+
+// ============================================================================
+// SYSTEM INFORMATION ROUTES
+// ============================================================================
+
+app.get('/api/system/stats', authenticateToken, authorize(['admin']), async (req, res) => {
+  try {
+    const [stats] = await pool.execute(`
+      SELECT 
+        (SELECT COUNT(*) FROM students) as total_students,
+        (SELECT COUNT(*) FROM staff) as total_staff,
+        (SELECT COUNT(*) FROM courses WHERE is_active = TRUE) as total_courses,
+        (SELECT COUNT(*) FROM course_offerings WHERE status = 'active') as active_offerings,
+        (SELECT COUNT(*) FROM payments WHERE payment_status = 'confirmed') as confirmed_payments,
+        (SELECT SUM(payment_amount) FROM payments WHERE payment_status = 'confirmed') as total_revenue,
+        (SELECT COUNT(*) FROM student_documents WHERE verification_status = 'pending') as pending_documents,
+        (SELECT COUNT(*) FROM student_scholarships WHERE scholarship_status = 'active') as active_scholarships
+    `);
+
+    res.json(stats[0]);
+  } catch (error) {
+    console.error('System stats error:', error);
+    res.status(500).json({ error: 'Failed to fetch system statistics' });
+  }
+});
+
+// ============================================================================
+// ERROR HANDLING & 404
+// ============================================================================
+
 app.use((error, req, res, next) => {
-  console.error('Error:', error);
+  console.error('Unhandled error:', error);
+  
+  if (error instanceof multer.MulterError) {
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ error: 'File too large. Maximum size is 10MB.' });
+    }
+    return res.status(400).json({ error: 'File upload error' });
+  }
+  
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Initialize database and start server
-initializeDatabase().then(() => {
-  app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    console.log(`Database: ${dbConfig.database} on ${dbConfig.host}:${dbConfig.port}`);
-  });
+app.use('*', (req, res) => {
+  res.status(404).json({ error: 'Route not found' });
 });
+
+// ============================================================================
+// SERVER STARTUP
+// ============================================================================
+
+async function testDatabaseConnection() {
+  try {
+    const connection = await pool.getConnection();
+    console.log('✅ Database connection successful');
+    connection.release();
+    return true;
+  } catch (error) {
+    console.error('❌ Database connection failed:', error.message);
+    return false;
+  }
+}
+
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  await pool.end();
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  console.log('SIGINT received, shutting down gracefully');
+  await pool.end();
+  process.exit(0);
+});
+
+async function startServer() {
+  const dbConnected = await testDatabaseConnection();
+  
+  if (!dbConnected) {
+    console.error('Cannot start server without database connection');
+    process.exit(1);
+  }
+
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`📊 Database: ${process.env.DB_NAME || 'Not specified'}`);
+    console.log(`🔒 Security: Authentication and authorization enabled`);
+    console.log(`📁 File uploads: ${path.resolve('uploads')}`);
+    console.log(`👤 Default admin: username=admin, password=admin123`);
+    console.log('===============================================');
+  });
+}
+
+startServer();
 
 export default app;

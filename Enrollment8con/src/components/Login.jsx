@@ -1,11 +1,14 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
-function LoginPage() {
-  const [email, setEmail] = useState('admin@8con.com')
-  const [password, setPassword] = useState('8con123')
+const LoginPage = () => {
+  const [credentials, setCredentials] = useState({
+    username: '',
+    password: ''
+  })
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState(null)
+  const [isLoading, setIsLoading] = useState(false)
   const navigate = useNavigate()
 
   const colors = {
@@ -19,24 +22,87 @@ function LoginPage() {
     black: '#2c2c2c'
   }
 
-  const handleSubmit = (e) => {
-    e.preventDefault()
-
-    const defaultEmail = 'admin@8con.com'
-    const defaultPassword = '8con123'
-
-    if (!email || !password) {
-      setError('Please enter both email and password.')
-      return
-    }
-
-    if (email === defaultEmail && password === defaultPassword) {
-      setError(null)
-      navigate('/dashboard')
-    } else {
-      setError('Invalid email or password.')
-    }
+  const handleInputChange = (e) => {
+    const { name, value } = e.target
+    setCredentials(prev => ({
+      ...prev,
+      [name]: value
+    }))
+    // Clear error when user starts typing
+    if (error) setError(null)
   }
+
+const getToken = async (username, password) => {
+  try {
+    const response = await fetch('http://localhost:3000/api/auth', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ username, password })
+    });
+
+    if (!response.ok) {
+      const { error } = await response.json();
+      throw new Error(error || 'Failed to authenticate');
+    }
+
+    const { token } = await response.json();
+    return token;
+  } catch (err) {
+    throw new Error(err.message || 'Token fetch failed');
+  }
+};
+
+const handleSubmit = async (e) => {
+  e.preventDefault();
+  setIsLoading(true);
+  setError(null);
+
+  const { username, password } = credentials;
+
+  if (!username || !password) {
+    setError('Please enter both username and password.');
+    setIsLoading(false);
+    return;
+  }
+
+  try {
+    // STEP 1: Fetch token using credentials
+    const token = await getToken(username, password);
+    console.log(token);
+    // STEP 2: Pass token to /api/auth/login for validation
+    const loginRes = await fetch('http://localhost:3000/api/auth/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ token })
+    });
+
+    if (!loginRes.ok) {
+      const { error } = await loginRes.json();
+      throw new Error(error || 'Login failed');
+    }
+
+    const loginData = await loginRes.json();
+    console.log(loginData);
+    // Save and redirect
+    localStorage.setItem('token', token);
+    localStorage.setItem('user', JSON.stringify(loginData.user));
+    console.log("Authenticated");
+    navigate('/dashboard'); // or switch by role if needed
+  } catch (err) {
+    console.error('Login error:', err);
+    setError(err.message);
+  } finally {
+    setIsLoading(false);
+  }
+};
+
+
+
+
 
   const styles = {
     container: {
@@ -78,28 +144,53 @@ function LoginPage() {
       marginBottom: '24px'
     },
 
+    form: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '16px'
+    },
+
+    inputGroup: {
+      position: 'relative',
+      textAlign: 'left'
+    },
+
+    label: {
+      display: 'block',
+      fontSize: '14px',
+      fontWeight: '500',
+      color: colors.black,
+      marginBottom: '4px'
+    },
+
     input: {
       width: '100%',
       padding: '12px',
-      marginBottom: '16px',
       border: `1px solid ${colors.lightGreen}`,
       borderRadius: '8px',
-      fontSize: '14px'
+      fontSize: '14px',
+      boxSizing: 'border-box',
+      transition: 'border-color 0.2s ease'
+    },
+
+    inputFocus: {
+      borderColor: colors.darkGreen,
+      outline: 'none'
     },
 
     passwordWrapper: {
-      position: 'relative',
-      marginBottom: '16px'
+      position: 'relative'
     },
 
     eyeIcon: {
       position: 'absolute',
-      top: '38%',
-      right: '1px',
+      top: '50%',
+      right: '12px',
       transform: 'translateY(-50%)',
       cursor: 'pointer',
-      fontSize: '14px',
-      color: colors.lightGreen
+      fontSize: '12px',
+      color: colors.lightGreen,
+      userSelect: 'none'
     },
 
     button: {
@@ -112,19 +203,55 @@ function LoginPage() {
       fontSize: '16px',
       fontWeight: 'bold',
       cursor: 'pointer',
-      transition: 'background-color 0.2s ease'
+      transition: 'background-color 0.2s ease',
+      marginTop: '8px',
+      disabled: isLoading
+    },
+
+    buttonHover: {
+      backgroundColor: colors.olive
+    },
+
+    buttonDisabled: {
+      opacity: 0.6,
+      cursor: 'not-allowed'
     },
 
     error: {
       color: colors.red,
-      marginBottom: '12px',
-      fontSize: '13px'
+      fontSize: '13px',
+      textAlign: 'left',
+      backgroundColor: '#fee',
+      padding: '8px 12px',
+      borderRadius: '4px',
+      border: `1px solid ${colors.red}20`
     },
 
     footerText: {
       marginTop: '24px',
       fontSize: '13px',
       color: colors.lightGreen
+    },
+
+    loadingSpinner: {
+      display: 'inline-block',
+      width: '16px',
+      height: '16px',
+      border: '2px solid #ffffff',
+      borderTop: '2px solid transparent',
+      borderRadius: '50%',
+      animation: 'spin 1s linear infinite',
+      marginRight: '8px'
+    },
+
+    demoCredentials: {
+      backgroundColor: colors.cream,
+      padding: '12px',
+      borderRadius: '8px',
+      marginBottom: '16px',
+      fontSize: '12px',
+      color: colors.olive,
+      textAlign: 'left'
     }
   }
 
@@ -135,45 +262,81 @@ function LoginPage() {
         <h2 style={styles.title}>Welcome Back</h2>
         <p style={styles.subtitle}>Please sign in to your account</p>
 
-        {error && <div style={styles.error}>{error}</div>}
-
-        <input
-          type="email"
-          placeholder="Email Address"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          style={styles.input}
-        />
-
-        <div style={styles.passwordWrapper}>
-          <input
-            type={showPassword ? 'text' : 'password'}
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            style={styles.input}
-          />
-          <span
-            style={styles.eyeIcon}
-            onClick={() => setShowPassword(!showPassword)}
-            title={showPassword ? 'Hide password' : 'Show password'}>
-            {showPassword ? 'Hide' : 'Show'}
-          </span>
+        {/* Demo credentials info */}
+        <div style={styles.demoCredentials}>
+          <strong>Demo Login:</strong><br />
+          Username: admin<br />
+          Password: admin123
         </div>
 
-        <button
-          type="submit"
-          style={styles.button}
-          onMouseOver={(e) => e.currentTarget.style.backgroundColor = colors.olive}
-          onMouseOut={(e) => e.currentTarget.style.backgroundColor = colors.darkGreen}
-        >
-          Sign In
-        </button>
+        {error && <div style={styles.error}>{error}</div>}
 
-        {/* <p style={styles.footerText}>
-          Don’t have an account? <a href="#" style={{ color: colors.coral, textDecoration: 'none' }}>Register</a>
-        </p> */}
+        <div style={styles.form}>
+          <div style={styles.inputGroup}>
+            <label style={styles.label} htmlFor="username">Username</label>
+            <input
+              id="username"
+              type="text"
+              name="username"
+              placeholder="Enter your username"
+              value={credentials.username}
+              onChange={handleInputChange}
+              style={styles.input}
+              disabled={isLoading}
+              autoComplete="username"
+            />
+          </div>
+
+          <div style={styles.inputGroup}>
+            <label style={styles.label} htmlFor="password">Password</label>
+            <div style={styles.passwordWrapper}>
+              <input
+                id="password"
+                type={showPassword ? 'text' : 'password'}
+                name="password"
+                placeholder="Enter your password"
+                value={credentials.password}
+                onChange={handleInputChange}
+                style={styles.input}
+                disabled={isLoading}
+                autoComplete="current-password"
+              />
+              <span
+                style={styles.eyeIcon}
+                onClick={() => setShowPassword(!showPassword)}
+                title={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? 'Hide' : 'Show'}
+              </span>
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            style={{
+              ...styles.button,
+              ...(isLoading ? styles.buttonDisabled : {})
+            }}
+            disabled={isLoading}
+            onMouseOver={(e) => !isLoading && (e.currentTarget.style.backgroundColor = colors.olive)}
+            onMouseOut={(e) => !isLoading && (e.currentTarget.style.backgroundColor = colors.darkGreen)}
+          >
+            {isLoading && <span style={styles.loadingSpinner}></span>}
+            {isLoading ? 'Signing In...' : 'Sign In'}
+          </button>
+        </div>
+
+        <p style={styles.footerText}>
+          Secure login powered by 8CON Academy
+        </p>
       </form>
+
+      <style jsx>{`
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      `}</style>
     </div>
   )
 }

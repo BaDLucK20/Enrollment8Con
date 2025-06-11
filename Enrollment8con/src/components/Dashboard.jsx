@@ -3,14 +3,16 @@ import { ChevronDown, ChevronRight, Users, FileText, Award, GraduationCap, Dolla
 import PendingPayment from './PendingPayment'
 import CompletedPayment from './CompletedPayment'
 import PaymentHistory from './PaymentHistory'
+import StudentForm from './AddStudent'
+import StaffForm from './AddStaff'
 
+import { useNavigate } from 'react-router-dom'
 function UniversalDashboard() {
   const [activeSection, setActiveSection] = useState('dashboard')
   const [expandedNodes, setExpandedNodes] = useState({})
   const [currentTime, setCurrentTime] = useState(new Date())
   const [isDesktop, setIsDesktop] = useState(window.innerWidth >= 1024)
-  const [isLoggedIn, setIsLoggedIn] = useState(false) // Changed to false to show login first
-  const [loginData, setLoginData] = useState({ username: '', password: '' })
+  const navigate = useNavigate()
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000)
@@ -50,13 +52,10 @@ function UniversalDashboard() {
       label: 'Payment Tracker', 
       icon: DollarSign, 
       color: colors.coral,
-
-
       hasChildren: true,
       children: [
         { id: 'PendingPayments', label: 'Pending Payments' },
-        { id: 'CompletedPayments', label: 'Completed Payments' },
-        { id: 'payment-history', label: 'Payment History' }
+        { id: 'CompletedPayments', label: 'Completed Payments' }
       ]
     },
     { 
@@ -117,6 +116,7 @@ function UniversalDashboard() {
       hasChildren: true,
       children: [ 
        { id: 'add-new-Staff', label: 'Add New Staff' },
+       { id: 'add-new-Student', label: 'Add New Student' },
        { id: 'display-account', label: 'Display Account'}
       ]
     },
@@ -147,22 +147,28 @@ function UniversalDashboard() {
     
   ]
 
-  const handleLogin = () => {
-    if (loginData.username && loginData.password) {
-      setIsLoggedIn(true)
-      setActiveSection('dashboard')
-    } else {
-      alert('Please enter both username and password')
-    }
-  }
 
-  const handleLogout = () => {
-    // Reset all states to initial values
-    setIsLoggedIn(false)
-    setActiveSection('dashboard')
-    setExpandedNodes({})
-    setLoginData({ username: '', password: '' })
+ const handleLogout = async () => {
+  try {
+    const token = localStorage.getItem('token');
+
+    await fetch('http://localhost:3000/api/auth/logout', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    // Clear token and reset UI
+    localStorage.removeItem('token');
+    navigate('/');
+    setActiveSection('dashboard');
+    setExpandedNodes({});
+  } catch (error) {
+    console.error('Logout failed:', error);
   }
+};
+
 
   const toggleNode = (nodeId) => {
     setExpandedNodes(prev => ({
@@ -178,91 +184,19 @@ function UniversalDashboard() {
 
   const styles = {
     // Login Page Styles
-    loginContainer: {
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      height: '100vh',
-      backgroundColor: colors.cream,
-      fontFamily: 'Arial, sans-serif',
-      padding: '16px'
-    },
 
-    loginCard: {
-      width: '100%',
-      maxWidth: '420px',
-      backgroundColor: '#ffffff',
-      borderRadius: '16px',
-      boxShadow: '0 10px 30px rgba(0, 0, 0, 0.1)',
-      padding: '40px',
-      textAlign: 'center',
-      border: `1px solid ${colors.lightGreen}`
-    },
 
-    loginHeader: {
-      textAlign: 'center',
-      marginBottom: '32px'
-    },
 
-    loginLogo: {
-      height: '120px',
-      marginBottom: '0px'
-    },
 
-    loginLogoFallback: {
-      height: '120px',
-      display: 'none',
-      alignItems: 'center',
-      justifyContent: 'center',
-      fontSize: '32px',
-      fontWeight: 'bold',
-      color: colors.darkGreen,
-      backgroundColor: colors.cream,
-      borderRadius: '12px',
-      marginBottom: '16px'
-    },
 
-    loginTitle: {
-      fontSize: '24px',
-      fontWeight: 'bold',
-      color: colors.black,
-      marginBottom: '8px'
-    },
+  
 
-    loginSubtitle: {
-      fontSize: '14px',
-      color: colors.olive,
-      marginBottom: '24px'
-    },
-
-    loginInput: {
-      width: '100%',
-      padding: '12px',
-      marginBottom: '16px',
-      border: `1px solid ${colors.lightGreen}`,
-      borderRadius: '8px',
-      fontSize: '14px',
-      boxSizing: 'border-box'
-    },
 
     passwordWrapper: {
       position: 'relative',
       marginBottom: '16px'
     },
 
-    loginButton: {
-      width: '100%',
-      backgroundColor: colors.darkGreen,
-      color: '#ffffff',
-      border: 'none',
-      borderRadius: '8px',
-      padding: '12px 24px',
-      fontSize: '16px',
-      fontWeight: '500',
-      cursor: 'pointer',
-      transition: 'background-color 0.2s ease',
-      marginTop: '8px'
-    },
 
     // Dashboard Styles
     container: {
@@ -611,56 +545,7 @@ function UniversalDashboard() {
     }
   }
 
-  // Login Page Component
-  if (!isLoggedIn) {
-    return (
-      <div style={styles.loginContainer}>
-        <div style={styles.loginCard}>
-          <img 
-            src="Copy of 8CON.png" 
-            alt="8Con Logo" 
-            style={styles.loginLogo}
-            onError={(e) => {
-              e.target.style.display = 'none';
-              e.target.nextSibling.style.display = 'flex';
-            }}
-          />
-          <div style={styles.loginLogoFallback}>
-            8CON
-          </div>
-          <h2 style={styles.loginTitle}>Welcome Back</h2>
-          <p style={styles.loginSubtitle}>Please sign in to your account</p>
 
-          <input
-            type="text"
-            placeholder="Username"
-            value={loginData.username}
-            onChange={(e) => setLoginData({...loginData, username: e.target.value})}
-            style={styles.loginInput}
-          />
-
-          <div style={styles.passwordWrapper}>
-            <input
-              type="password"
-              placeholder="Password"
-              value={loginData.password}
-              onChange={(e) => setLoginData({...loginData, password: e.target.value})}
-              style={styles.loginInput}
-            />
-          </div>
-
-          <button
-            onClick={handleLogin}
-            style={styles.loginButton}
-            onMouseOver={(e) => e.currentTarget.style.backgroundColor = colors.olive}
-            onMouseOut={(e) => e.currentTarget.style.backgroundColor = colors.darkGreen}
-          >
-            Sign In
-          </button>
-        </div>
-      </div>
-    )
-  }
 
   const getActiveContent = () => {
     const activeItem = flowchartItems.find(item => item.id === activeSection)
@@ -804,12 +689,22 @@ function UniversalDashboard() {
     return(
       <CompletedPayment/>
     );
-    case 'payment-history':
+    case 'payment-tracker':
   
     return(
       <PaymentHistory/>
     );
-    
+    case 'add-new-Student':
+  
+    return(
+      <StudentForm/>
+    );
+    case 'add-new-Staff':
+  
+    return(
+      <StaffForm/>
+    );
+
     default:
     return (
       <div style={styles.sectionContent}>
