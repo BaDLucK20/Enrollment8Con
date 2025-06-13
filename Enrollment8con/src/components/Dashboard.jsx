@@ -5,6 +5,7 @@ import CompletedPayment from './CompletedPayment'
 import PaymentHistory from './PaymentHistory'
 import StudentForm from './AddStudent'
 import StaffForm from './AddStaff'
+import AddDocument from './AddDocument'
 
 import { useNavigate } from 'react-router-dom'
 
@@ -152,7 +153,7 @@ function UniversalDashboard() {
       roles: ['admin', 'staff'],
       hasChildren: true,
       children: [
-        { id: 'uploaded-documents', label: 'Uploaded Documents' },
+        { id: 'add-documents', label: 'Add Documents'},
         { id: 'pending-documents', label: 'Pending Documents' },
         { id: 'verified-documents', label: 'Verified Documents' }
       ]
@@ -677,6 +678,9 @@ function UniversalDashboard() {
 
       case 'add-new-Staff':
         return <StaffForm/>
+
+      case 'add-documents':
+        return <AddDocument/>
 
       default:
         return (

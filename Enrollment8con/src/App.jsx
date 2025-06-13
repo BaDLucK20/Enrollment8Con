@@ -6,6 +6,7 @@ import CompletedPayment from './components/CompletedPayment'
 import PaymentHistory from './components/PaymentHistory'
 import StudentForm from './components/AddStudent'
 import StaffForm from './components/AddStaff'
+import AddDocument from './components/AddDocument'
 // import Logout from './components/Logout'
 
 function App() {
@@ -18,6 +19,7 @@ function App() {
       <Route path="/PaymentHistory" element={<PaymentHistory/>} />
       <Route path="/AddStudent" element={<StudentForm/>} />
       <Route path="/AddStaff" element={<StaffForm/>} />
+      <Route path="/AddDocument" element={<AddDocument/>} />
       <Route path="/Dashboard" element={<UniversalDashboard />} />
 
     </Routes>

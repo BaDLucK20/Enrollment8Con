@@ -721,7 +721,6 @@ app.post('/api/auth/logout', authenticateToken, async (req, res) => {
 // ============================================================================
 // STUDENT ROUTES (Fixed for proper schema)
 // ============================================================================
-
 app.get('/api/students', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
   try {
     const { name_sort, graduation_status, trading_level, search } = req.query;
@@ -736,41 +735,53 @@ app.get('/api/students', authenticateToken, authorize(['admin', 'staff']), async
       LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
       LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
       LEFT JOIN student_enrollments se ON s.student_id = se.student_id
-      WHERE 1=1
     `;
+    
     const params = [];
-
+    const conditions = [];
+    
     if (graduation_status) {
-      query += ' AND s.graduation_status = ?';
+      conditions.push('s.graduation_status = ?');
       params.push(graduation_status);
     }
-
+    
     if (trading_level) {
-      query += ' AND tl.level_name = ?';
+      conditions.push('tl.level_name = ?');
       params.push(trading_level);
     }
-
+    
     if (search) {
-      query += ' AND (p.first_name LIKE ? OR p.last_name LIKE ? OR s.student_id LIKE ?)';
+      conditions.push('(p.first_name LIKE ? OR p.last_name LIKE ? OR s.student_id LIKE ?)');
       const searchParam = `%${search}%`;
       params.push(searchParam, searchParam, searchParam);
     }
-
+    
+    // WHERE clause goes here - after all JOINs, before GROUP BY
+    if (conditions.length > 0) {
+      query += ' WHERE ' + conditions.join(' AND ');
+    }
+    
     query += ' GROUP BY s.student_id, p.first_name, p.last_name, p.birth_date, p.birth_place, p.gender, s.graduation_status, s.academic_standing, s.gpa, s.registration_date, tl.level_name';
-
+    
     if (name_sort) {
       query += ` ORDER BY p.first_name ${name_sort === 'ascending' ? 'ASC' : 'DESC'}`;
     } else {
       query += ' ORDER BY s.registration_date DESC';
     }
-
+    
+    console.log('Executing query:', query);
+    console.log('With parameters:', params);
+    
     const [students] = await pool.execute(query, params);
+    
+    console.log(`Found ${students.length} students`);
     res.json(students);
+    
   } catch (error) {
     console.error('Students fetch error:', error);
     res.status(500).json({ error: 'Failed to fetch students' });
   }
-});
+}); 
 
 app.post('/api/students', [
   authenticateToken,
