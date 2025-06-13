@@ -135,7 +135,7 @@ const StaffForm = () => {
         employee_id: formData.employeeId || null
       };
 
-      const response = await fetch('/api/admin/staff', {
+      const response = await fetch('http://localhost:3000/api/admin/staff', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -5,6 +5,7 @@ import CompletedPayment from './CompletedPayment'
 import PaymentHistory from './PaymentHistory'
 import StudentForm from './AddStudent'
 import StaffForm from './AddStaff'
+import DisplayAccount from './DisplayAccount'
 import AddDocument from './AddDocument'
 
 import { useNavigate } from 'react-router-dom'
@@ -121,28 +122,21 @@ function UniversalDashboard() {
       ]
     },
     { 
-      id: 'referral-tracking', 
-      label: 'Referral Tracking', 
+      id: 'referral', 
+      label: 'Referral', 
       icon: Users, 
       color: colors.olive,
-      hasChildren: true,
-      children: [
-        { id: 'referral-links', label: 'Referral Links' },
-        { id: 'referral-status', label: 'Referral Status' },
-        { id: 'referral-rewards', label: 'Referral Rewards' }
-      ]
     },
     { 
       id: 'account-management', 
       label: 'Account Management', 
       icon: UserCheck, 
       color: colors.coral,
-      roles: ['admin'], // Restrict to admin role only
+      roles: ['admin'],
       hasChildren: true,
       children: [ 
        { id: 'add-new-Staff', label: 'Add New Staff' },
-       { id: 'add-new-Student', label: 'Add New Student' },
-       { id: 'display-account', label: 'Display Account'}
+       { id: 'add-new-Student', label: 'Add New Student' }
       ]
     },
     { 
@@ -150,7 +144,7 @@ function UniversalDashboard() {
       label: 'Document Tracker', 
       icon: FileText, 
       color: colors.red,
-      roles: ['admin', 'staff'],
+      // roles: ['admin', 'staff'],
       hasChildren: true,
       children: [
         { id: 'add-documents', label: 'Add Documents'},
@@ -158,18 +152,17 @@ function UniversalDashboard() {
         { id: 'verified-documents', label: 'Verified Documents' }
       ]
     },
-     { 
-      id: 'settings', 
-      label: 'Settings', 
-      icon:  Settings, 
-      color: colors.red,
-      hasChildren: true,
-      children: [
-        { id: 'profile-settings', label: 'Profile Settings' },
-        { id: 'security-settings', label: 'Security Settings' },
-        { id: 'notification-preferences', label: 'Notification Preferences' }
-      ]
-    }
+    //  { 
+    //   id: 'settings', 
+    //   label: 'Settings', 
+    //   icon:  Settings, 
+    //   color: colors.red,
+    //   hasChildren: true,
+    //   children: [
+    //     { id: 'security-settings', label: 'Security Settings' },
+    //     { id: 'notification-preferences', label: 'Notification Preferences' }
+    //   ]
+    // }
   ]
 
   // Filter navigation items based on user role
@@ -678,6 +671,9 @@ function UniversalDashboard() {
 
       case 'add-new-Staff':
         return <StaffForm/>
+
+      case 'account-management':
+        return <DisplayAccount/>
 
       case 'add-documents':
         return <AddDocument/>

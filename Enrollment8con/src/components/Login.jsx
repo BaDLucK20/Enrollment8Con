@@ -261,14 +261,6 @@ const handleSubmit = async (e) => {
         <img src="Copy of 8CON.png" alt="8Con Logo" style={styles.logo} />
         <h2 style={styles.title}>Welcome Back</h2>
         <p style={styles.subtitle}>Please sign in to your account</p>
-
-        {/* Demo credentials info */}
-        <div style={styles.demoCredentials}>
-          <strong>Demo Login:</strong><br />
-          email: admin<br />
-          Password: admin123
-        </div>
-
         {error && <div style={styles.error}>{error}</div>}
 
         <div style={styles.form}>

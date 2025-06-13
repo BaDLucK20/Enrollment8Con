@@ -721,6 +721,7 @@ app.post('/api/auth/logout', authenticateToken, async (req, res) => {
 // ============================================================================
 // STUDENT ROUTES (Fixed for proper schema)
 // ============================================================================
+
 app.get('/api/students', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
   try {
     const { name_sort, graduation_status, trading_level, search } = req.query;
@@ -1993,6 +1994,89 @@ app.post('/api/admin/staff', [
     }
   } finally {
     connection.release();
+  }
+});
+
+app.get('/api/admin/staff', authenticateToken, authorize(['admin']), async (req, res) => {
+  try {
+    const [staff] = await pool.execute(`
+      SELECT 
+        s.staff_id,
+        s.employee_id,
+        s.hire_date,
+        p.person_id,
+        p.first_name,
+        p.middle_name,
+        p.last_name,
+        p.birth_date,
+        p.birth_place,
+        p.gender,
+        p.email,
+        p.education,
+        a.account_id,
+        a.username,
+        a.account_status,
+        a.last_login,
+        r.role_name,
+        GROUP_CONCAT(
+          CASE 
+            WHEN ci.contact_type = 'phone' THEN ci.contact_value
+            ELSE NULL
+          END
+        ) as phone_numbers,
+        GROUP_CONCAT(
+          CASE 
+            WHEN ci.contact_type = 'email' AND ci.is_primary = TRUE THEN ci.contact_value
+            ELSE NULL
+          END
+        ) as primary_email
+      FROM staff s
+      JOIN persons p ON s.person_id = p.person_id
+      JOIN accounts a ON s.account_id = a.account_id
+      JOIN account_roles ar ON a.account_id = ar.account_id
+      JOIN roles r ON ar.role_id = r.role_id
+      LEFT JOIN contact_info ci ON p.person_id = ci.person_id
+      WHERE ar.is_active = TRUE
+      GROUP BY s.staff_id, s.employee_id, s.hire_date, p.person_id, 
+               p.first_name, p.middle_name, p.last_name, p.birth_date, 
+               p.birth_place, p.gender, p.email, p.education, 
+               a.account_id, a.username, a.account_status, a.last_login, r.role_name
+      ORDER BY p.last_name, p.first_name
+    `);
+
+    // Format data to match what the React component expects (flat structure)
+    const formattedStaff = staff.map(staffMember => ({
+      staff_id: staffMember.staff_id,
+      employee_id: staffMember.employee_id,
+      hire_date: staffMember.hire_date,
+      person_id: staffMember.person_id,
+      first_name: staffMember.first_name,
+      middle_name: staffMember.middle_name,
+      last_name: staffMember.last_name,
+      full_name: `${staffMember.first_name} ${staffMember.middle_name ? staffMember.middle_name + ' ' : ''}${staffMember.last_name}`,
+      birth_date: staffMember.birth_date,
+      birth_place: staffMember.birth_place,
+      gender: staffMember.gender,
+      email: staffMember.email,
+      education: staffMember.education,
+      account_id: staffMember.account_id,
+      username: staffMember.username,
+      account_status: staffMember.account_status,
+      last_login: staffMember.last_login,
+      role_name: staffMember.role_name, // This is what the component expects
+      primary_email: staffMember.primary_email,
+      phone_numbers: staffMember.phone_numbers ? staffMember.phone_numbers.split(',').filter(phone => phone) : []
+    }));
+
+    console.log('Found ' + formattedStaff.length + ' staff members');
+    res.json(formattedStaff);
+
+  } catch (error) {
+    console.error('Admin staff fetch error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch staff data' 
+    });
   }
 });
 
