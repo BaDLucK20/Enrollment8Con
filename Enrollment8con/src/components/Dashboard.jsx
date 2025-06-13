@@ -7,17 +7,35 @@ import StudentForm from './AddStudent'
 import StaffForm from './AddStaff'
 
 import { useNavigate } from 'react-router-dom'
+
 function UniversalDashboard() {
   const [activeSection, setActiveSection] = useState('dashboard')
   const [expandedNodes, setExpandedNodes] = useState({})
   const [currentTime, setCurrentTime] = useState(new Date())
   const [isDesktop, setIsDesktop] = useState(window.innerWidth >= 1024)
+  const [userRole, setUserRole] = useState('') // Add state for user role
   const navigate = useNavigate()
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000)
     const handleResize = () => setIsDesktop(window.innerWidth >= 1024)
     
+    // Get user role from localStorage or token
+    const getUserRole = () => {
+      try {
+        const token = localStorage.getItem('token')
+        if (token) {
+          // Decode JWT token to get user role
+          const payload = JSON.parse(atob(token.split('.')[1]))
+          setUserRole(payload.role || '')
+        }
+      } catch (error) {
+        console.error('Error getting user role:', error)
+        setUserRole('')
+      }
+    }
+    
+    getUserRole()
     window.addEventListener('resize', handleResize)
     
     return () => {
@@ -36,6 +54,12 @@ function UniversalDashboard() {
     cream: '#f5f2e8',
     olive: '#6b7c5c',
     black: '#2c2c2c'
+  }
+
+  // Function to check if user has required role
+  const hasRequiredRole = (requiredRoles) => {
+    if (!requiredRoles || requiredRoles.length === 0) return true
+    return requiredRoles.includes(userRole)
   }
 
   // Flowchart navigation items
@@ -107,12 +131,12 @@ function UniversalDashboard() {
         { id: 'referral-rewards', label: 'Referral Rewards' }
       ]
     },
-    
     { 
       id: 'account-management', 
       label: 'Account Management', 
       icon: UserCheck, 
       color: colors.coral,
+      roles: ['admin'], // Restrict to admin role only
       hasChildren: true,
       children: [ 
        { id: 'add-new-Staff', label: 'Add New Staff' },
@@ -125,6 +149,7 @@ function UniversalDashboard() {
       label: 'Document Tracker', 
       icon: FileText, 
       color: colors.red,
+      roles: ['admin', 'staff'],
       hasChildren: true,
       children: [
         { id: 'uploaded-documents', label: 'Uploaded Documents' },
@@ -144,31 +169,33 @@ function UniversalDashboard() {
         { id: 'notification-preferences', label: 'Notification Preferences' }
       ]
     }
-    
   ]
 
+  // Filter navigation items based on user role
+  const filteredFlowchartItems = flowchartItems.filter(item => 
+    hasRequiredRole(item.roles)
+  )
 
- const handleLogout = async () => {
-  try {
-    const token = localStorage.getItem('token');
+  const handleLogout = async () => {
+    try {
+      const token = localStorage.getItem('token');
 
-    await fetch('http://localhost:3000/api/auth/logout', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
-    });
+      await fetch('http://localhost:3000/api/auth/logout', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
 
-    // Clear token and reset UI
-    localStorage.removeItem('token');
-    navigate('/');
-    setActiveSection('dashboard');
-    setExpandedNodes({});
-  } catch (error) {
-    console.error('Logout failed:', error);
-  }
-};
-
+      // Clear token and reset UI
+      localStorage.removeItem('token');
+      navigate('/');
+      setActiveSection('dashboard');
+      setExpandedNodes({});
+    } catch (error) {
+      console.error('Logout failed:', error);
+    }
+  };
 
   const toggleNode = (nodeId) => {
     setExpandedNodes(prev => ({
@@ -178,25 +205,27 @@ function UniversalDashboard() {
   }
 
   const handleSectionClick = (sectionId) => {
+    // Check if user has permission to access this section
+    const clickedItem = flowchartItems.find(item => 
+      item.id === sectionId || (item.children && item.children.some(child => child.id === sectionId))
+    )
+    
+    if (clickedItem && clickedItem.roles && !hasRequiredRole(clickedItem.roles)) {
+      // Show unauthorized message or redirect
+      alert('You do not have permission to access this section.')
+      return
+    }
+    
     console.log(sectionId);
     setActiveSection(sectionId)
   }
 
   const styles = {
     // Login Page Styles
-
-
-
-
-
-  
-
-
     passwordWrapper: {
       position: 'relative',
       marginBottom: '16px'
     },
-
 
     // Dashboard Styles
     container: {
@@ -545,182 +574,123 @@ function UniversalDashboard() {
     }
   }
 
-
-
   const getActiveContent = () => {
     const activeItem = flowchartItems.find(item => item.id === activeSection)
-    switch (activeSection)
-    {
-    case 'dashboard':
-    if (activeSection === 'dashboard') {
+    
+    // Check if user has permission to view this content
+    if (activeItem && activeItem.roles && !hasRequiredRole(activeItem.roles)) {
       return (
-        <div>
-          {/* Welcome Card */}
-          <div style={styles.welcomeCard}>
-            <h2 style={styles.welcomeTitle}>Student Management Dashboard</h2>
-            <p style={styles.welcomeText}>
-              {currentTime.toLocaleDateString('en-US', { 
-                weekday: 'long', 
-                year: 'numeric', 
-                month: 'long', 
-                day: 'numeric' 
-              })}
-            </p>
-            <div style={styles.welcomeStats}>
-              <div style={styles.welcomeStat}>
-                <span style={styles.statValue}>2,847</span>
-                <span style={styles.statLabel}>Total Students</span>
-              </div>
-              <div style={styles.welcomeStat}>
-                <span style={styles.statValue}>321</span>
-                <span style={styles.statLabel}>Graduates</span>
-              </div>
-              <div style={styles.welcomeStat}>
-                <span style={styles.statValue}>₱2.4M</span>
-                <span style={styles.statLabel}>Total Revenue</span>
-              </div>
-              <div style={styles.welcomeStat}>
-                <span style={styles.statValue}>94%</span>
-                <span style={styles.statLabel}>Success Rate</span>
+        <div style={styles.sectionContent}>
+          <h2 style={styles.sectionTitle}>Access Denied</h2>
+          <p style={styles.sectionDescription}>
+            You do not have the required permissions to access this section.
+          </p>
+        </div>
+      )
+    }
+    
+    switch (activeSection) {
+      case 'dashboard':
+        return (
+          <div>
+            {/* Welcome Card */}
+            <div style={styles.welcomeCard}>
+              <h2 style={styles.welcomeTitle}>Student Management Dashboard</h2>
+              <p style={styles.welcomeText}>
+                {currentTime.toLocaleDateString('en-US', { 
+                  weekday: 'long', 
+                  year: 'numeric', 
+                  month: 'long', 
+                  day: 'numeric' 
+                })}
+              </p>
+              <div style={styles.welcomeStats}>
+                <div style={styles.welcomeStat}>
+                  <span style={styles.statValue}>2,847</span>
+                  <span style={styles.statLabel}>Total Students</span>
+                </div>
+                <div style={styles.welcomeStat}>
+                  <span style={styles.statValue}>321</span>
+                  <span style={styles.statLabel}>Graduates</span>
+                </div>
+                <div style={styles.welcomeStat}>
+                  <span style={styles.statValue}>₱2.4M</span>
+                  <span style={styles.statLabel}>Total Revenue</span>
+                </div>
+                <div style={styles.welcomeStat}>
+                  <span style={styles.statValue}>94%</span>
+                  <span style={styles.statLabel}>Success Rate</span>
+                </div>
               </div>
             </div>
-          </div>
 
-          {/* Key Metrics Grid */}
-          <div style={styles.statsGrid}>
-            {[
-              { title: 'Current Enrollment', value: '1,245', change: '+8.2%', color: colors.blue, icon: Users },
-              { title: 'Scholar Students', value: '456', change: '+12.5%', color: colors.purple, icon: Award },
-              { title: 'Paying Students', value: '789', change: '+5.8%', color: colors.coral, icon: DollarSign },
-              { title: 'OJT Students', value: '234', change: '+15.3%', color: colors.olive, icon: Target },
-              { title: 'Monthly Revenue', value: '₱180K', change: '+7.2%', color: colors.lightGreen, icon: TrendingUp },
-              { title: 'Dropout Rate', value: '3.2%', change: '-1.1%', color: colors.red, icon: Calculator }
-            ].map((stat, index) => (
-              <div
-                key={index}
-                style={styles.statCard}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = 'translateY(-4px)'
-                  e.currentTarget.style.boxShadow = '0 10px 25px rgba(0, 0, 0, 0.1)'
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = 'translateY(0)'
-                  e.currentTarget.style.boxShadow = 'none'
-                }}
-              >
-                <div style={styles.statCardHeader}>
-                  <h3 style={styles.statCardTitle}>{stat.title}</h3>
-                  <div style={{
-                    ...styles.statCardIcon,
-                    backgroundColor: stat.color + '20'
-                  }}>
-                    <stat.icon size={20} color={stat.color} />
-                  </div>
-                </div>
-                <div style={styles.statCardValue}>{stat.value}</div>
-                <div style={styles.statCardChange}>{stat.change} vs last month</div>
-              </div>
-            ))}
-          </div>
-
-          {/* Workflow Process Overview */}
-          {/* <div style={styles.workflowSection}>
-            <h3 style={styles.workflowTitle}>Data Processing Workflow</h3>
-            <div style={styles.workflowGrid}>
+            {/* Key Metrics Grid */}
+            <div style={styles.statsGrid}>
               {[
-                {
-                  title: 'Data Collection',
-                  description: 'System gathers enrollment and student data from multiple sources',
-                  action: 'View Data Sources'
-                },
-                {
-                  title: 'Analytics Processing',
-                  description: 'Calculate dropout rates, revenue metrics, and graduation analytics',
-                  action: 'View Analytics'
-                },
-                {
-                  title: 'Revenue Calculation',
-                  description: 'Process total revenue by batch, month, and year with payment status',
-                  action: 'View Revenue'
-                },
-                {
-                  title: 'Dashboard Display',
-                  description: 'Present processed metrics and KPIs in an intuitive dashboard',
-                  action: 'Current View'
-                }
-              ].map((workflow, index) => (
+                { title: 'Current Enrollment', value: '1,245', change: '+8.2%', color: colors.blue, icon: Users },
+                { title: 'Scholar Students', value: '456', change: '+12.5%', color: colors.purple, icon: Award },
+                { title: 'Paying Students', value: '789', change: '+5.8%', color: colors.coral, icon: DollarSign },
+                { title: 'OJT Students', value: '234', change: '+15.3%', color: colors.olive, icon: Target },
+                { title: 'Monthly Revenue', value: '₱180K', change: '+7.2%', color: colors.lightGreen, icon: TrendingUp },
+                { title: 'Dropout Rate', value: '3.2%', change: '-1.1%', color: colors.red, icon: Calculator }
+              ].map((stat, index) => (
                 <div
                   key={index}
-                  style={styles.workflowCard}
+                  style={styles.statCard}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = 'translateY(-2px)'
-                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.1)'
+                    e.currentTarget.style.transform = 'translateY(-4px)'
+                    e.currentTarget.style.boxShadow = '0 10px 25px rgba(0, 0, 0, 0.1)'
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.transform = 'translateY(0)'
                     e.currentTarget.style.boxShadow = 'none'
                   }}
                 >
-                  <h4 style={styles.workflowCardTitle}>{workflow.title}</h4>
-                  <p style={styles.workflowCardDescription}>{workflow.description}</p>
-                  <button
-                    style={styles.workflowButton}
-                    onMouseOver={(e) => e.currentTarget.style.backgroundColor = colors.olive}
-                    onMouseOut={(e) => e.currentTarget.style.backgroundColor = colors.darkGreen}
-                  >
-                    {workflow.action}
-                  </button>
+                  <div style={styles.statCardHeader}>
+                    <h3 style={styles.statCardTitle}>{stat.title}</h3>
+                    <div style={{
+                      ...styles.statCardIcon,
+                      backgroundColor: stat.color + '20'
+                    }}>
+                      <stat.icon size={20} color={stat.color} />
+                    </div>
+                  </div>
+                  <div style={styles.statCardValue}>{stat.value}</div>
+                  <div style={styles.statCardChange}>{stat.change} vs last month</div>
                 </div>
               ))}
             </div>
-          </div> */}
-        </div>
-      )
+          </div>
+        )
+
+      case 'PendingPayments':
+        return <PendingPayment/>
+
+      case 'CompletedPayments':
+        return <CompletedPayment/>
+
+      case 'payment-tracker':
+        return <PaymentHistory/>
+
+      case 'add-new-Student':
+        return <StudentForm/>
+
+      case 'add-new-Staff':
+        return <StaffForm/>
+
+      default:
+        return (
+          <div style={styles.sectionContent}>
+            <h2 style={styles.sectionTitle}>{activeItem?.label}</h2>
+            <p style={styles.sectionDescription}>
+              This section contains all the functionality and data related to {activeItem?.label}. 
+              The system processes and analyzes data according to the established workflow to provide 
+              accurate metrics and insights for decision-making.
+            </p>
+          </div>
+        )
     }
-    break;
-
-    case 'PendingPayments':
-  
-    return(
-      <PendingPayment/>
-    );
-    case 'CompletedPayments':
-  
-    return(
-      <CompletedPayment/>
-    );
-    case 'payment-tracker':
-  
-    return(
-      <PaymentHistory/>
-    );
-    case 'add-new-Student':
-  
-    return(
-      <StudentForm/>
-    );
-    case 'add-new-Staff':
-  
-    return(
-      <StaffForm/>
-    );
-
-    default:
-    return (
-      <div style={styles.sectionContent}>
-        <h2 style={styles.sectionTitle}>{activeItem?.label}</h2>
-        <p style={styles.sectionDescription}>
-          This section contains all the functionality and data related to {activeItem?.label}. 
-          The system processes and analyzes data according to the established workflow to provide 
-          accurate metrics and insights for decision-making.
-        </p>
-      </div>
-    )
-      
-
-    
   }
-}
 
   return (
     <div style={styles.container}>
@@ -728,25 +698,25 @@ function UniversalDashboard() {
       <nav style={styles.navigationPanel}>
         <div style={styles.navHeader}>
           <div style={{
-          width: '80px',
-          height: '80px',
-          backgroundColor: colors.cream,
-          borderRadius: '12px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          overflow: 'hidden'
-        }}>
-          <img 
-            src="Copy of 8CON.png" 
-            alt="8CON Logo" 
-            style={{ width: '100%', height: '100%', objectFit: 'contain' }} 
-          />
-        </div>
+            width: '80px',
+            height: '80px',
+            backgroundColor: colors.cream,
+            borderRadius: '12px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            overflow: 'hidden'
+          }}>
+            <img 
+              src="Copy of 8CON.png" 
+              alt="8CON Logo" 
+              style={{ width: '100%', height: '100%', objectFit: 'contain' }} 
+            />
+          </div>
         </div>
         
         <div style={styles.navContent}>
-          {flowchartItems.map((item) => {
+          {filteredFlowchartItems.map((item) => {
             const Icon = item.icon
             const isActive = activeSection === item.id
             const isExpanded = expandedNodes[item.id]
@@ -818,7 +788,6 @@ function UniversalDashboard() {
         </div>
 
         {/* Logout Button */}
-        
         <div style={styles.logoutContainer}>
           <button
             style={styles.logoutButton}
@@ -850,7 +819,7 @@ function UniversalDashboard() {
               hour: '2-digit', 
               minute: '2-digit',
               second: '2-digit'
-            })}
+            })} | Role: {userRole || 'Guest'}
           </p>
         </header>
         

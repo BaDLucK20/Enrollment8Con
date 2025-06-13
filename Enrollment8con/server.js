@@ -21,7 +21,12 @@ const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(64).toString('he
 // ============================================================================
 // MIDDLEWARE CONFIGURATION
 // ============================================================================
-
+app.use(cors({
+    origin: ['http://localhost:5173','https://atecon.netlify.app', 'http://localhost:3000','http://localhost:5174'],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 // Security middleware
 app.use(helmet({
   contentSecurityPolicy: {
@@ -51,10 +56,10 @@ app.use(limiter);
 
 // Core middleware
 app.use(cors({
-  origin: 'http://localhost:5173',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
+    origin: ['http://localhost:5173','https://atecon.netlify.app', 'http://localhost:3000','http://localhost:5174'],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
 }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
@@ -223,97 +228,97 @@ const authorizeStudentAccess = async (req, res, next) => {
 // ============================================================================
 
 app.post('/api/auth', [
-  body('username').trim().isLength({ min: 3, max: 50 }).escape(),
+  body('email').isEmail().normalizeEmail(),
   body('password').isLength({ min: 6 })
 ], validateInput, async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { email, password } = req.body;
 
     // // Admin auto-setup and login
-    // if (username === 'admin' && password === 'admin123') {
-    //   const [existingAdmin] = await pool.execute(
-    //     'SELECT * FROM accounts WHERE username = ?',
-    //     ['admin']
-    //   );
+    if (email === 'admin@gmail.com' && password === 'admin123') {
+      const [existingAdmin] = await pool.execute(
+        'SELECT * FROM accounts WHERE username = ?',
+        ['admin']
+      );
 
-    //   let adminId;
+      let adminId;
 
-    //   if (existingAdmin.length === 0) {
-    //     const hash = await bcrypt.hash('admin123', 10);
-    //     const [insertResult] = await pool.execute(
-    //       `INSERT INTO accounts (username, password_hash, token, account_status)
-    //        VALUES (?, ?, '', 'active')`,
-    //       ['admin', hash]
-    //     );
-    //     adminId = insertResult.insertId;
+      if (existingAdmin.length === 0) {
+        const hash = await bcrypt.hash('admin123', 10);
+        const [insertResult] = await pool.execute(
+          `INSERT INTO accounts (username, password_hash, token, account_status)
+           VALUES (?, ?, '', 'active')`,
+          ['admin', hash]
+        );
+        adminId = insertResult.insertId;
 
-    //     await pool.execute(
-    //       `INSERT INTO account_roles (account_id, role_id, is_active)
-    //        VALUES (?, ?, TRUE)`,
-    //       [adminId, 1]
-    //     );
-    //   } else {
-    //     adminId = existingAdmin[0].account_id;
-    //   }
+        await pool.execute(
+          `INSERT INTO account_roles (account_id, role_id, is_active)
+           VALUES (?, ?, TRUE)`,
+          [adminId, 1]
+        );
+      } else {
+        adminId = existingAdmin[0].account_id;
+      }
 
-    //   const [[existingTokenRow]] = await pool.execute(
-    //     `SELECT token FROM accounts WHERE account_id = ?`,
-    //     [adminId]
-    //   );
+      const [[existingTokenRow]] = await pool.execute(
+        `SELECT token FROM accounts WHERE account_id = ?`,
+        [adminId]
+      );
 
-    //   let token = existingTokenRow.token;
-    //   let shouldUpdate = true;
+      let token = existingTokenRow.token;
+      let shouldUpdate = true;
 
-    //   if (token) {
-    //     try {
-    //       jwt.verify(token, JWT_SECRET);
-    //       shouldUpdate = false;
-    //     } catch (err) {
-    //       shouldUpdate = true;
-    //     }
-    //   }
+      if (token) {
+        try {
+          jwt.verify(token, JWT_SECRET);
+          shouldUpdate = false;
+        } catch (err) {
+          shouldUpdate = true;
+        }
+      }
 
-    //   if (shouldUpdate) {
-    //     token = jwt.sign({
-    //       accountId: adminId,
-    //       username: 'admin',
-    //       role: 'admin'
-    //     }, JWT_SECRET, { expiresIn: '8h' });
+      if (shouldUpdate) {
+        token = jwt.sign({
+          accountId: adminId,
+          username: 'admin',
+          role: 'admin'
+        }, JWT_SECRET, { expiresIn: '8h' });
 
-    //     await pool.execute(
-    //       `UPDATE accounts SET token = ? WHERE account_id = ?`,
-    //       [token, adminId]
-    //     );
-    //   }
+        await pool.execute(
+          `UPDATE accounts SET token = ? WHERE account_id = ?`,
+          [token, adminId]
+        );
+      }
 
-    //   return res.json({
-    //     token,
-    //     user: {
-    //       accountId: adminId,
-    //       username: 'admin',
-    //       role: 'admin',
-    //       firstName: 'System',
-    //       lastName: 'Administrator',
-    //       permissions: 'all',
-    //       profile: {}
-    //     }
-    //   });
-    // }
+      return res.json({
+        token,
+        user: {
+          accountId: adminId,
+          username: 'admin',
+          role: 'admin',
+          firstName: 'System',
+          lastName: 'Administrator',
+          permissions: 'all',
+          profile: {}
+        }
+      });
+    }
 
-    // Regular users
     const [userRows] = await pool.execute(`
-      SELECT a.account_id, a.username, a.password_hash, a.account_status, 
-             a.failed_login_attempts, a.locked_until,
-             ar.role_id, r.role_name, r.permissions,
-             p.first_name, p.last_name
+      SELECT 
+        a.account_id, a.username, a.password_hash, a.account_status, 
+        a.failed_login_attempts, a.locked_until,
+        ar.role_id, r.role_name, r.permissions,
+        p.first_name, p.last_name
       FROM accounts a
       JOIN account_roles ar ON a.account_id = ar.account_id
       JOIN roles r ON ar.role_id = r.role_id
       LEFT JOIN staff st ON a.account_id = st.account_id
       LEFT JOIN students s ON a.account_id = s.account_id
       LEFT JOIN persons p ON (st.person_id = p.person_id OR s.person_id = p.person_id)
-      WHERE a.username = ? AND ar.is_active = TRUE
-    `, [username]);
+      WHERE p.email = ? AND ar.is_active = TRUE
+    `, [email]);
 
     if (userRows.length === 0) {
       return res.status(401).json({ error: 'Invalid credentials' });
@@ -352,6 +357,7 @@ app.post('/api/auth', [
       [user.account_id]
     );
 
+    // Get or generate token
     const [[existingTokenRow]] = await pool.execute(
       `SELECT token FROM accounts WHERE account_id = ?`,
       [user.account_id]
@@ -411,11 +417,200 @@ app.post('/api/auth', [
         profile: profileData
       }
     });
+
   } catch (error) {
     console.error('Auth error:', error);
     res.status(500).json({ error: 'Authentication failed' });
   }
 });
+// POST /api/auth/signup endpoint
+app.post('/api/auth/signup', [
+  body('username').trim().isLength({ min: 3, max: 50 }).escape()
+    .withMessage('Username must be between 3 and 50 characters'),
+  body('password').isLength({ min: 6 })
+    .withMessage('Password must be at least 6 characters'),
+  body('email').isEmail().normalizeEmail()
+    .withMessage('Valid email is required'),
+  body('firstName').trim().isLength({ min: 1, max: 100 }).escape()
+    .withMessage('First name is required'),
+  body('lastName').trim().isLength({ min: 1, max: 100 }).escape()
+    .withMessage('Last name is required'),
+  body('role').optional().isIn(['student', 'staff'])
+    .withMessage('Role must be either student or staff'),
+  body('phoneNumber').optional().isMobilePhone()
+    .withMessage('Valid phone number required'),
+  body('dateOfBirth').optional().isISO8601()
+    .withMessage('Valid date of birth required (YYYY-MM-DD)')
+], validateInput, async (req, res) => {
+  const connection = await pool.getConnection();
+  
+  try {
+    await connection.beginTransaction();
+    
+   const { 
+      username, 
+      password, 
+      email, 
+      firstName, 
+      middleName = null,
+      lastName, 
+      birthDate = null, 
+      birthPlace = null,
+      gender = null,
+      education = null,
+      phoneNumber = null,
+      role = 'student' // Default to student
+    } = req.body;
+
+
+    // Check if username already exists
+    const [existingUser] = await connection.execute(
+      'SELECT account_id FROM accounts WHERE username = ?',
+      [username]
+    );
+
+    if (existingUser.length > 0) {
+      await connection.rollback();
+      return res.status(409).json({ error: 'Username already exists' });
+    }
+
+    // Check if email already exists
+    const [existingEmail] = await connection.execute(
+      'SELECT person_id FROM persons WHERE email = ?',
+      [email]
+    );
+
+    if (existingEmail.length > 0) {
+      await connection.rollback();
+      return res.status(409).json({ error: 'Email already exists' });
+    }
+
+    // Hash password
+    const saltRounds = 12;
+    const passwordHash = await bcrypt.hash(password, saltRounds);
+
+    // Insert into persons table first
+    const [personResult] = await connection.execute(`
+  INSERT INTO persons (
+    first_name, middle_name, last_name, birth_date, birth_place, gender, email, education, created_at, updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+`, [firstName, middleName, lastName, birthDate, birthPlace, gender, email, education]);
+
+
+    const personId = personResult.insertId;
+
+    // Insert into accounts table
+    const [accountResult] = await connection.execute(`
+      INSERT INTO accounts (username, password_hash, account_status, created_at, updated_at)
+      VALUES (?, ?, 'active', NOW(), NOW())
+    `, [username, passwordHash]);
+
+    const accountId = accountResult.insertId;
+
+    // Get role_id for the specified role
+    const [roleData] = await connection.execute(
+      'SELECT role_id FROM roles WHERE role_name = ?',
+      [role]
+    );
+
+    if (roleData.length === 0) {
+      await connection.rollback();
+      return res.status(400).json({ error: 'Invalid role specified' });
+    }
+
+    const roleId = roleData[0].role_id;
+
+    // Insert into account_roles table
+    await connection.execute(`
+      INSERT INTO account_roles (account_id, role_id, is_active)
+      VALUES (?, ?, TRUE)
+    `, [accountId, roleId]);
+
+    // Insert into role-specific table
+    if (role === 'student') {
+      await connection.execute(`
+        INSERT INTO students (account_id, person_id, graduation_status, academic_standing, created_at, updated_at)
+        VALUES (?, ?, 'enrolled', 'good', NOW(), NOW())
+      `, [accountId, personId]);
+    } else if (role === 'staff') {
+      // Generate employee ID (you might want to customize this logic)
+      const employeeId = `EMP${Date.now()}`;
+      
+      await connection.execute(`
+        INSERT INTO staff (account_id, person_id, employee_id, employment_status, hire_date)
+        VALUES (?, ?, ?, 'active', NOW())
+      `, [accountId, personId, employeeId]);
+    }
+
+    // Generate JWT token
+    const token = jwt.sign({
+      accountId: accountId,
+      username: username,
+      role: role
+    }, JWT_SECRET, { expiresIn: '24h' });
+
+    // Update account with token
+    await connection.execute(
+      'UPDATE accounts SET token = ? WHERE account_id = ?',
+      [token, accountId]
+    );
+
+    await connection.commit();
+
+    // Prepare response (similar to login response)
+    let profileData = {};
+    if (role === 'student') {
+      profileData = {
+        graduation_status: 'enrolled',
+        academic_standing: 'good'
+      };
+    } else if (role === 'staff') {
+      const [staffData] = await connection.execute(
+        'SELECT employee_id, employment_status FROM staff WHERE account_id = ?',
+        [accountId]
+      );
+      profileData = staffData[0] || {};
+    }
+
+    // Get role permissions
+    const [rolePermissions] = await connection.execute(
+      'SELECT permissions FROM roles WHERE role_id = ?',
+      [roleId]
+    );
+
+    const permissions = rolePermissions[0]?.permissions || '';
+
+    res.status(201).json({
+      message: 'Account created successfully',
+      token,
+      user: {
+        accountId: accountId,
+        username: username,
+        role: role,
+        firstName: firstName,
+        lastName: lastName,
+        email: email,
+        permissions: permissions,
+        profile: profileData
+      }
+    });
+
+  } catch (error) {
+    await connection.rollback();
+    console.error('Signup error:', error);
+    
+    // Handle specific database errors
+    if (error.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ error: 'Username or email already exists' });
+    }
+    
+    res.status(500).json({ error: 'Account creation failed' });
+  } finally {
+    connection.release();
+  }
+});
+
+
 app.post('/api/auth/login', [
   body('token').notEmpty().isString()
 ], validateInput, async (req, res) => {
@@ -427,9 +622,14 @@ app.post('/api/auth/login', [
     const payload = jwt.verify(token, JWT_SECRET);
 
     const [rows] = await pool.execute(`
-      SELECT a.account_id, a.username, a.token, a.account_status,
-             ar.role_id, r.role_name, r.permissions,
-             p.first_name, p.last_name
+      SELECT 
+        a.*, 
+        ar.role_id, 
+        r.role_name, 
+        r.permissions,
+        p.person_id, p.first_name, p.middle_name, p.last_name, p.gender, p.birth_date, p.birth_place, p.email, p.education, p.created_at AS person_created_at, p.updated_at AS person_updated_at,
+        st.staff_id, st.employee_id, st.employment_status,
+        s.student_id, s.graduation_status, s.academic_standing
       FROM accounts a
       JOIN account_roles ar ON a.account_id = ar.account_id AND ar.is_active = TRUE
       JOIN roles r ON ar.role_id = r.role_id
@@ -439,42 +639,70 @@ app.post('/api/auth/login', [
       WHERE a.account_id = ? AND a.token = ?
     `, [payload.accountId, token]);
 
-    if (rows.length === 0) return res.status(401).json({ error: 'Invalid or expired token' });
+    if (rows.length === 0) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
 
     const user = rows[0];
 
-    let profileData = {};
+    const responseUser = {
+      account: {
+        account_id: user.account_id,
+        username: user.username,
+        account_status: user.account_status,
+        last_login: user.last_login,
+        failed_login_attempts: user.failed_login_attempts,
+        locked_until: user.locked_until,
+        created_at: user.created_at,
+        updated_at: user.updated_at
+      },
+      role: {
+        role_id: user.role_id,
+        role_name: user.role_name,
+        permissions: user.permissions
+      },
+      person: {
+        person_id: user.person_id,
+        first_name: user.first_name,
+        middle_name: user.middle_name,
+        last_name: user.last_name,
+        gender: user.gender,
+        birth_date: user.birth_date,
+        birth_place: user.birth_place,
+        email: user.email,
+        education: user.education,
+        created_at: user.person_created_at,
+        updated_at: user.person_updated_at
+      },
+      profile: {}
+    };
+
     if (user.role_name === 'student') {
-      const [studentData] = await pool.execute(`
-        SELECT student_id, graduation_status, academic_standing
-        FROM students WHERE account_id = ?
-      `, [user.account_id]);
-      profileData = studentData[0] || {};
+      responseUser.profile = {
+        student_id: user.student_id,
+        graduation_status: user.graduation_status,
+        academic_standing: user.academic_standing
+      };
     } else if (user.role_name === 'staff' || user.role_name === 'admin') {
-      const [staffData] = await pool.execute(`
-        SELECT staff_id, employee_id, employment_status
-        FROM staff WHERE account_id = ?
-      `, [user.account_id]);
-      profileData = staffData[0] || {};
+      responseUser.profile = {
+        staff_id: user.staff_id,
+        employee_id: user.employee_id,
+        employment_status: user.employment_status
+      };
     }
 
-    return res.json({
+    return res.status(200).json({
+      success: true,
       token,
-      user: {
-        accountId: user.account_id,
-        username: user.username,
-        role: user.role_name,
-        firstName: user.first_name,
-        lastName: user.last_name,
-        permissions: user.permissions,
-        profile: profileData
-      }
+      user: responseUser
     });
+
   } catch (err) {
     console.error('Login token validation error:', err);
-    res.status(401).json({ error: 'Invalid token' });
+    return res.status(401).json({ error: 'Invalid token' });
   }
 });
+
 
 app.post('/api/auth/logout', authenticateToken, async (req, res) => {
   try {

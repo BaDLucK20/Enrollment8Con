@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 
 const LoginPage = () => {
   const [credentials, setCredentials] = useState({
-    username: '',
+    email: '',
     password: ''
   })
   const [showPassword, setShowPassword] = useState(false)
@@ -32,14 +32,14 @@ const LoginPage = () => {
     if (error) setError(null)
   }
 
-const getToken = async (username, password) => {
+const getToken = async (email, password) => {
   try {
     const response = await fetch('http://localhost:3000/api/auth', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ username, password })
+      body: JSON.stringify({ email, password })
     });
 
     if (!response.ok) {
@@ -59,17 +59,17 @@ const handleSubmit = async (e) => {
   setIsLoading(true);
   setError(null);
 
-  const { username, password } = credentials;
+  const { email, password } = credentials;
 
-  if (!username || !password) {
-    setError('Please enter both username and password.');
+  if (!email || !password) {
+    setError('Please enter both email and password.');
     setIsLoading(false);
     return;
   }
 
   try {
     // STEP 1: Fetch token using credentials
-    const token = await getToken(username, password);
+    const token = await getToken(email, password);
     console.log(token);
     // STEP 2: Pass token to /api/auth/login for validation
     const loginRes = await fetch('http://localhost:3000/api/auth/login', {
@@ -265,7 +265,7 @@ const handleSubmit = async (e) => {
         {/* Demo credentials info */}
         <div style={styles.demoCredentials}>
           <strong>Demo Login:</strong><br />
-          Username: admin<br />
+          email: admin<br />
           Password: admin123
         </div>
 
@@ -273,17 +273,17 @@ const handleSubmit = async (e) => {
 
         <div style={styles.form}>
           <div style={styles.inputGroup}>
-            <label style={styles.label} htmlFor="username">Username</label>
+            <label style={styles.label} htmlFor="email">Email</label>
             <input
-              id="username"
+              id="email"
               type="text"
-              name="username"
-              placeholder="Enter your username"
-              value={credentials.username}
+              name="email"
+              placeholder="Enter your email"
+              value={credentials.email}
               onChange={handleInputChange}
               style={styles.input}
               disabled={isLoading}
-              autoComplete="username"
+              autoComplete="email"
             />
           </div>
 
