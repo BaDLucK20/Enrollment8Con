@@ -8,7 +8,7 @@ import StudentForm from './components/AddStudent'
 import StaffForm from './components/AddStaff'
 import DisplayAccount from './components/DisplayAccount'
 import AddDocument from './components/AddDocument'
-// import PendingDocument from './components/PendingDocument'
+import PendingDocument from './components/PendingDocument'
 // import Logout from './components/Logout'
 
 function App() {
@@ -23,7 +23,7 @@ function App() {
       <Route path="/AddStaff" element={<StaffForm/>} />
       <Route path="/DisplayAccount" element={<DisplayAccount/>} />
       <Route path="/AddDocument" element={<AddDocument/>} />
-      {/* <Route path="/PendingDocument" element={<PendingDocument/>} /> */}
+      <Route path="/PendingDocument" element={<PendingDocument/>} />
       <Route path="/Dashboard" element={<UniversalDashboard />} />
 
     </Routes>

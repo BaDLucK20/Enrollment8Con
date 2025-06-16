@@ -7,7 +7,7 @@ import StudentForm from './AddStudent'
 import StaffForm from './AddStaff'
 import DisplayAccount from './DisplayAccount'
 import AddDocument from './AddDocument'
-// import PendingDocument from './PendingDocument'
+import PendingDocument from './PendingDocument'
 
 import { useNavigate } from 'react-router-dom'
 
@@ -737,8 +737,8 @@ function UniversalDashboard() {
       case 'add-documents':
         return <AddDocument />
 
-      // case 'pending-documents':
-      //   return <PendingDocument/>
+      case 'pending-documents':
+        return <PendingDocument/>
 
       default:
         return (

@@ -1,4 +1,4 @@
-export default PendingDocument;import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
 const PendingDocument = () => {
   const [documents, setDocuments] = useState([]);
@@ -39,7 +39,6 @@ const PendingDocument = () => {
     }
   };
 
-  // Icon components
   const CheckIcon = ({ size = 16 }) => (
     <svg width={size} height={size} fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -93,7 +92,7 @@ const PendingDocument = () => {
         return;
       }
 
-      let url = '/api/documents';
+      let url = 'http://localhost:3000/api/documents';
       const params = new URLSearchParams();
       
       if (filter !== 'all') {
@@ -143,7 +142,7 @@ const PendingDocument = () => {
         throw new Error('No authentication token found');
       }
 
-      const response = await fetch(`/api/documents/${documentId}/verify`, {
+      const response = await fetch(`http://localhost:3000/api/documents/${documentId}/verify`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -528,7 +527,7 @@ const PendingDocument = () => {
         {/* Controls */}
         <div style={styles.controls}>
           <div style={styles.filterGroup}>
-            {['all', 'pending', 'verified', 'rejected', 'requires_update'].map((status) => (
+            {['all', 'pending', 'verified', 'rejected'].map((status) => (
               <button
                 key={status}
                 style={{
@@ -935,3 +934,4 @@ const PendingDocument = () => {
   );
 };
 
+export default PendingDocument
