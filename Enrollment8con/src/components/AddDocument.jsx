@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback ,useRef} from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 const AddDocument = () => {
   const [selectedStudent, setSelectedStudent] = useState(null);
@@ -10,24 +10,83 @@ const AddDocument = () => {
     document_type_id: '',
     notes: ''
   });
+  const [studentDocuments, setStudentDocuments] = useState([]);
+  const [loadingDocuments, setLoadingDocuments] = useState(false);
   const searchTimeoutRef = useRef(null);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [loading, setLoading] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
 
+  // Modern color scheme
   const colors = {
-    darkGreen: '#2d4a3d',
-    lightGreen: '#7a9b8a',
-    dustyRose: '#c19a9a',
-    coral: '#d85c5c',
-    red: '#d63447',
-    cream: '#f5f2e8',
-    olive: '#6b7c5c',
-    black: '#2c2c2c',
+    primary: '#4F46E5',
+    primaryDark: '#4338CA',
+    primaryLight: '#6366F1',
+    secondary: '#10B981',
+    secondaryDark: '#059669',
+    warning: '#F59E0B',
+    danger: '#EF4444',
+    success: '#22C55E',
+    gray: {
+      50: '#F9FAFB',
+      100: '#F3F4F6',
+      200: '#E5E7EB',
+      300: '#D1D5DB',
+      400: '#9CA3AF',
+      500: '#6B7280',
+      600: '#4B5563',
+      700: '#374151',
+      800: '#1F2937',
+      900: '#111827',
+    }
   };
 
-  // Predefined document types based on TESDA requirements
+  // Icon components
+  const UploadIcon = ({ size = 16 }) => (
+    <svg width={size} height={size} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+    </svg>
+  );
+
+  const CheckIcon = ({ size = 16 }) => (
+    <svg width={size} height={size} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+    </svg>
+  );
+
+  const ClockIcon = ({ size = 16 }) => (
+    <svg width={size} height={size} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  );
+
+  const DocumentIcon = ({ size = 16 }) => (
+    <svg width={size} height={size} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+    </svg>
+  );
+
+  const SearchIcon = ({ size = 16 }) => (
+    <svg width={size} height={size} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+    </svg>
+  );
+
+  const XIcon = ({ size = 12 }) => (
+    <svg width={size} height={size} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+    </svg>
+  );
+
+  const LoadingSpinner = ({ size = 20 }) => (
+    <svg width={size} height={size} className="spinner" viewBox="0 0 24 24">
+      <circle className="spinner-circle" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+      <path className="spinner-path" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+    </svg>
+  );
+
+  // Predefined document types
   const tesdaDocumentTypes = [
     { document_type_id: 1, type_name: 'TESDA Application Form', is_required: true, category: 'application' },
     { document_type_id: 2, type_name: 'Birth Certificate (PSA/NSO)', is_required: true, category: 'identification' },
@@ -66,167 +125,134 @@ const AddDocument = () => {
           setDocumentTypes(tesdaDocumentTypes);
         }
       } else {
-        console.warn('Document types endpoint returned:', response.status);
         setDocumentTypes(tesdaDocumentTypes);
       }
     } catch (error) {
-      console.warn('Using predefined document types due to error:', error.message);
       setDocumentTypes(tesdaDocumentTypes);
     }
   }, []);
 
-const searchStudents = useCallback(async (searchValue) => {
-  if (!searchValue.trim()) {
-    setSearchResults([]);
-    return;
-  }
+  const fetchStudentDocuments = useCallback(async (studentId) => {
+    if (!studentId) return;
+    
+    setLoadingDocuments(true);
+    try {
+      const token = localStorage?.getItem('token');
+      if (!token) return;
 
-  setSearchLoading(true);
-  setError(null);
-  
-  try {
-    const token = localStorage?.getItem('token');
-    if (!token) {
-      setError('Please log in to search for students');
-      setSearchLoading(false);
+      const response = await fetch(`/api/documents/student/${studentId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        const docs = await response.json();
+        setStudentDocuments(docs);
+      }
+    } catch (error) {
+      console.error('Error fetching student documents:', error);
+    } finally {
+      setLoadingDocuments(false);
+    }
+  }, []);
+
+  const searchStudents = useCallback(async (searchValue) => {
+    if (!searchValue.trim()) {
+      setSearchResults([]);
       return;
     }
 
-    // Build the API URL with search parameter - this searches by ID, first name, or last name
-    const apiUrl = `http://localhost:3000/api/students?search=${encodeURIComponent(searchValue)}`;
+    setSearchLoading(true);
+    setError(null);
     
-    console.log('🔍 Searching students by ID or name:', searchValue);
-
-    const response = await fetch(apiUrl, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
+    try {
+      const token = localStorage?.getItem('token');
+      if (!token) {
+        setError('Please log in to search for students');
+        setSearchLoading(false);
+        return;
       }
-    });
 
-    console.log('📡 Response status:', response.status);
-
-    if (response.ok) {
-      const contentType = response.headers.get('content-type');
+      const apiUrl = `http://localhost:3000/api/students?search=${encodeURIComponent(searchValue)}`;
       
-      if (contentType && contentType.includes('application/json')) {
-        const studentsData = await response.json();
+      const response = await fetch(apiUrl, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        const contentType = response.headers.get('content-type');
         
-        // The API returns an array of student objects directly from the database
-        console.log('👥 Students found:', studentsData.length);
-        
-        // Use the data exactly as returned by the API since it matches the database structure
-        setSearchResults(studentsData);
-        
-        if (studentsData.length === 0) {
-          setError('No students found matching your search');
+        if (contentType && contentType.includes('application/json')) {
+          const studentsData = await response.json();
+          setSearchResults(studentsData);
+          
+          if (studentsData.length === 0) {
+            setError('No students found matching your search');
+          }
+        } else {
+          setError('Invalid response from server');
         }
       } else {
-        const responseText = await response.text();
-        console.error('❌ Response is not JSON:');
-        console.error('Content-Type:', contentType);
-        console.error('Response preview:', responseText.substring(0, 200));
+        let errorMessage = 'Failed to search students';
         
-        if (responseText.includes('<!doctype html>') || responseText.includes('<html')) {
-          setError('🚨 API endpoint not found - getting React app instead of API response. Check your server configuration.');
-        } else {
-          setError('Invalid response from server - expected JSON but got: ' + contentType);
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorMessage;
+        } catch {
+          errorMessage = response.statusText || errorMessage;
         }
+        
+        setError(errorMessage);
       }
-    } else {
-      // Handle different error status codes
-      let errorMessage = 'Failed to search students';
-      
-      try {
-        const errorData = await response.json();
-        errorMessage = errorData.error || errorMessage;
-      } catch {
-        // If response is not JSON, use status text
-        errorMessage = response.statusText || errorMessage;
-      }
-      
-      console.error('❌ API Error:', response.status, errorMessage);
-      
-      switch (response.status) {
-        case 401:
-          setError('Please log in again');
-          localStorage?.removeItem('token');
-          break;
-        case 403:
-          setError('You do not have permission to search students');
-          break;
-        case 404:
-          setError('🚨 API endpoint not found (/api/students). Check your server routes.');
-          break;
-        case 500:
-          setError('Server error occurred while searching students');
-          break;
-        default:
-          setError(`${errorMessage} (${response.status})`);
-      }
-    }
-  } catch (error) {
-    console.error('💥 Network Error:', error);
-    
-    if (error.name === 'TypeError' && error.message.includes('fetch')) {
-      setError('🌐 Network error - Cannot connect to server. Is your backend running?');
-    } else if (error.name === 'AbortError') {
-      setError('Request was cancelled');
-    } else {
+    } catch (error) {
       setError('Failed to search students. Please check your connection and try again.');
+    } finally {
+      setSearchLoading(false);
     }
-  } finally {
-    setSearchLoading(false);
-  }
-}, []);
-  
+  }, []);
+
   useEffect(() => {
     fetchDocumentTypes();
     
     return () => {
-      if (window.searchTimeout) {
-        clearTimeout(window.searchTimeout);
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
       }
     };
   }, [fetchDocumentTypes]);
 
   const handleSearchChange = (e) => {
-  const value = e.target.value;
-  setSearchTerm(value);
-  
-  if (error) setError(null);
-  if (success) setSuccess(null);
-  
-  if (!value.trim()) {
-    setSearchResults([]);
-    return;
-  }
-  
-  // Clear the previous timeout
-  if (searchTimeoutRef.current) {
-    clearTimeout(searchTimeoutRef.current);
-  }
-  
-  // Set a new timeout
-  searchTimeoutRef.current = setTimeout(() => {
-    searchStudents(value);
-  }, 300);
-};
-
-// Optional: Clean up timeout on component unmount
-useEffect(() => {
-  return () => {
+    const value = e.target.value;
+    setSearchTerm(value);
+    
+    if (error) setError(null);
+    if (success) setSuccess(null);
+    
+    if (!value.trim()) {
+      setSearchResults([]);
+      return;
+    }
+    
     if (searchTimeoutRef.current) {
       clearTimeout(searchTimeoutRef.current);
     }
+    
+    searchTimeoutRef.current = setTimeout(() => {
+      searchStudents(value);
+    }, 300);
   };
-}, []);
 
   const handleStudentSelect = (student) => {
     setSelectedStudent(student);
     setSearchTerm(`${student.first_name} ${student.last_name} (${student.student_id})`);
     setSearchResults([]);
     setError(null);
+    fetchStudentDocuments(student.student_id);
   };
 
   const handleFileChange = (e) => {
@@ -322,8 +348,10 @@ useEffect(() => {
 
       setSuccess('Document uploaded successfully!');
       
-      setSelectedStudent(null);
-      setSearchTerm('');
+      // Refresh student documents
+      fetchStudentDocuments(selectedStudent.student_id);
+      
+      // Reset form
       setSelectedFile(null);
       setFormData({
         document_type_id: '',
@@ -336,251 +364,452 @@ useEffect(() => {
       }
 
     } catch (error) {
-      console.error('Document upload error:', error);
-      
-      if (error.message.includes('403')) {
-        setError('Access denied. You do not have permission to upload documents for this student.');
-      } else if (error.message.includes('401')) {
-        setError('Unauthorized access. Please login again.');
-      } else if (error.message.includes('400')) {
-        setError('Invalid file or data. Please check your selection and try again.');
-      } else {
-        setError(error.message || 'Failed to upload document. Please try again.');
-      }
+      setError(error.message || 'Failed to upload document. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
+  const getDocumentStatus = (docTypeId) => {
+    const doc = studentDocuments.find(d => d.document_type_id === docTypeId);
+    if (!doc) return null;
+    return doc.status || 'pending';
+  };
+
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'verified':
+        return colors.success;
+      case 'pending':
+        return colors.warning;
+      case 'rejected':
+        return colors.danger;
+      default:
+        return colors.gray[400];
+    }
+  };
+
+  const getStatusIcon = (status) => {
+    switch (status) {
+      case 'verified':
+        return <CheckIcon />;
+      case 'pending':
+        return <ClockIcon />;
+      default:
+        return <DocumentIcon />;
+    }
+  };
+
   const styles = {
     container: {
-      maxWidth: '800px',
-      margin: '40px auto',
-      backgroundColor: '#fff',
-      padding: '32px',
-      borderRadius: '10px',
-      boxShadow: '0 6px 12px rgba(0, 0, 0, 0.1)',
-      fontFamily: 'Arial, sans-serif',
+      minHeight: '100vh',
+      backgroundColor: colors.gray[50],
+      padding: '32px 16px',
     },
-    heading: {
+    maxWidth: {
+      maxWidth: '1024px',
+      margin: '0 auto',
+    },
+    card: {
+      backgroundColor: '#fff',
+      borderRadius: '8px',
+      boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06)',
+      padding: '24px',
+      marginBottom: '24px',
+    },
+    header: {
       textAlign: 'center',
-      color: colors.darkGreen,
-      marginBottom: '30px',
-      fontSize: '28px',
+      marginBottom: '8px',
     },
-    searchSection: {
-      marginBottom: '30px',
-      padding: '20px',
-      backgroundColor: colors.cream,
-      borderRadius: '8px',
-      border: '1px solid #ddd',
-    },
-    searchLabel: {
-      display: 'block',
+    title: {
+      fontSize: '30px',
       fontWeight: 'bold',
-      marginBottom: '10px',
-      color: colors.black,
+      color: colors.gray[900],
+      marginBottom: '8px',
     },
-    searchInput: {
-      width: '100%',
-      padding: '12px',
-      border: '1px solid #ccc',
-      borderRadius: '4px',
+    subtitle: {
+      color: colors.gray[600],
       fontSize: '16px',
-      marginBottom: '10px',
-      boxSizing: 'border-box',
     },
-    searchResults: {
-      maxHeight: '200px',
-      overflowY: 'auto',
-      border: '1px solid #ddd',
-      borderRadius: '4px',
-      backgroundColor: '#fff',
-    },
-    searchResultItem: {
-      padding: '10px',
-      borderBottom: '1px solid #eee',
-      cursor: 'pointer',
-      transition: 'background-color 0.2s',
-    },
-    selectedStudent: {
-      padding: '15px',
-      backgroundColor: colors.lightGreen,
-      borderRadius: '4px',
-      color: 'white',
-      fontWeight: 'bold',
-    },
-    fieldset: {
-      border: '1px solid #ddd',
-      padding: '20px',
-      marginBottom: '30px',
+    alert: {
+      marginBottom: '24px',
+      padding: '16px',
       borderRadius: '8px',
+      borderLeftWidth: '4px',
+      borderLeftStyle: 'solid',
+      display: 'flex',
+      alignItems: 'center',
     },
-    legend: {
-      fontWeight: 'bold',
-      color: colors.olive,
-      fontSize: '18px',
-      marginBottom: '20px',
+    alertError: {
+      backgroundColor: '#FEE2E2',
+      borderLeftColor: colors.danger,
+      color: '#991B1B',
     },
-    formGroup: {
-      marginBottom: '20px',
+    alertSuccess: {
+      backgroundColor: '#D1FAE5',
+      borderLeftColor: colors.success,
+      color: '#065F46',
+    },
+    alertIcon: {
+      flexShrink: 0,
+      marginRight: '12px',
     },
     label: {
       display: 'block',
-      fontWeight: 'bold',
-      marginBottom: '6px',
-      color: colors.black,
+      fontSize: '14px',
+      fontWeight: '500',
+      color: colors.gray[700],
+      marginBottom: '8px',
+    },
+    required: {
+      color: colors.danger,
+      marginLeft: '4px',
+    },
+    inputGroup: {
+      position: 'relative',
+      marginBottom: '16px',
+    },
+    inputIcon: {
+      position: 'absolute',
+      left: '12px',
+      top: '50%',
+      transform: 'translateY(-50%)',
+      color: colors.gray[400],
+      pointerEvents: 'none',
+    },
+    input: {
+      width: '100%',
+      padding: '8px 12px 8px 40px',
+      border: `1px solid ${colors.gray[300]}`,
+      borderRadius: '6px',
+      fontSize: '16px',
+      outline: 'none',
+      transition: 'border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out',
+    },
+    inputFocus: {
+      borderColor: colors.primary,
+      boxShadow: `0 0 0 3px ${colors.primary}20`,
     },
     select: {
       width: '100%',
-      padding: '10px',
-      border: '1px solid #ccc',
-      borderRadius: '4px',
-      backgroundColor: '#fff',
-      fontSize: '16px',
-      boxSizing: 'border-box',
-    },
-    fileInput: {
-      width: '100%',
-      padding: '10px',
-      border: '1px solid #ccc',
-      borderRadius: '4px',
+      padding: '8px 12px',
+      border: `1px solid ${colors.gray[300]}`,
+      borderRadius: '6px',
       fontSize: '16px',
       backgroundColor: '#fff',
-      boxSizing: 'border-box',
+      outline: 'none',
+      cursor: 'pointer',
     },
     textarea: {
       width: '100%',
-      padding: '10px',
-      border: '1px solid #ccc',
-      borderRadius: '4px',
+      padding: '8px 12px',
+      border: `1px solid ${colors.gray[300]}`,
+      borderRadius: '6px',
       fontSize: '16px',
-      minHeight: '100px',
+      minHeight: '80px',
       resize: 'vertical',
-      boxSizing: 'border-box',
+      outline: 'none',
+    },
+    searchResults: {
+      marginTop: '16px',
+      maxHeight: '240px',
+      overflowY: 'auto',
+      border: `1px solid ${colors.gray[200]}`,
+      borderRadius: '6px',
+    },
+    searchResultItem: {
+      padding: '12px 16px',
+      borderBottom: `1px solid ${colors.gray[100]}`,
+      cursor: 'pointer',
+      transition: 'background-color 0.15s ease-in-out',
+    },
+    searchResultItemHover: {
+      backgroundColor: colors.gray[50],
+    },
+    selectedStudent: {
+      marginTop: '16px',
+      backgroundColor: '#EEF2FF',
+      border: `1px solid ${colors.primaryLight}`,
+      borderRadius: '6px',
+      padding: '16px',
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+    },
+    fileUpload: {
+      marginTop: '8px',
+      border: `2px dashed ${colors.gray[300]}`,
+      borderRadius: '6px',
+      padding: '40px 24px',
+      textAlign: 'center',
+      transition: 'border-color 0.15s ease-in-out',
+      cursor: 'pointer',
+    },
+    fileUploadHover: {
+      borderColor: colors.gray[400],
+    },
+    fileUploadIcon: {
+      margin: '0 auto 16px',
+      color: colors.gray[400],
+    },
+    fileInput: {
+      display: 'none',
+    },
+    fileLabel: {
+      color: colors.primary,
+      fontWeight: '500',
+      cursor: 'pointer',
+      marginRight: '4px',
+    },
+    fileLabelHover: {
+      color: colors.primaryDark,
     },
     fileInfo: {
-      marginTop: '10px',
-      padding: '10px',
-      backgroundColor: '#f0f8ff',
-      borderRadius: '4px',
-      fontSize: '14px',
-      color: colors.darkGreen,
-    },
-    error: {
-      color: colors.red,
-      marginBottom: '16px',
-      textAlign: 'center',
-      padding: '10px',
-      backgroundColor: '#ffebee',
-      borderRadius: '4px',
-      border: `1px solid ${colors.red}`,
-    },
-    success: {
-      color: colors.darkGreen,
-      marginBottom: '16px',
-      textAlign: 'center',
-      padding: '10px',
-      backgroundColor: '#e8f5e8',
-      borderRadius: '4px',
-      border: `1px solid ${colors.darkGreen}`,
+      marginTop: '8px',
+      backgroundColor: colors.gray[50],
+      borderRadius: '6px',
+      padding: '12px',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
     },
     button: {
-      backgroundColor: loading ? colors.lightGreen : colors.coral,
-      color: 'white',
-      padding: '14px 20px',
-      border: 'none',
-      borderRadius: '5px',
-      fontSize: '18px',
-      cursor: loading ? 'not-allowed' : 'pointer',
-      display: 'block',
+      marginTop: '24px',
       width: '100%',
-      marginTop: '20px',
-      transition: 'background-color 0.2s ease',
-      opacity: loading ? 0.7 : 1,
+      padding: '12px 16px',
+      border: 'none',
+      borderRadius: '6px',
+      fontSize: '16px',
+      fontWeight: '500',
+      color: '#fff',
+      backgroundColor: colors.primary,
+      cursor: 'pointer',
+      transition: 'background-color 0.15s ease-in-out',
+      display: 'flex',
+      justifyContent: 'center',
+      alignItems: 'center',
     },
-    required: {
-      color: colors.red,
-      fontSize: '14px',
-      marginLeft: '4px',
+    buttonHover: {
+      backgroundColor: colors.primaryDark,
     },
-    documentNote: {
+    buttonDisabled: {
+      backgroundColor: colors.gray[400],
+      cursor: 'not-allowed',
+    },
+    sectionTitle: {
+      fontSize: '18px',
+      fontWeight: '600',
+      color: colors.gray[900],
+      marginBottom: '16px',
+    },
+    documentGrid: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+      gap: '16px',
+    },
+    documentCard: {
+      border: `1px solid ${colors.gray[200]}`,
+      borderRadius: '6px',
+      padding: '16px',
+    },
+    documentCardActive: {
+      border: `1px solid ${colors.gray[300]}`,
+    },
+    documentName: {
+      fontWeight: '500',
+      color: colors.gray[900],
+      marginBottom: '8px',
+    },
+    documentNameInactive: {
+      color: colors.gray[500],
+    },
+    statusBadge: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      padding: '4px 12px',
+      borderRadius: '9999px',
       fontSize: '12px',
-      color: colors.olive,
-      fontStyle: 'italic',
-      marginTop: '5px',
-    }
+      fontWeight: '500',
+      gap: '4px',
+    },
+    loadingContainer: {
+      textAlign: 'center',
+      padding: '32px',
+    },
+    loadingText: {
+      marginLeft: '12px',
+      color: colors.gray[600],
+    },
+    list: {
+      listStyle: 'none',
+      padding: 0,
+      margin: 0,
+    },
+    listItem: {
+      display: 'flex',
+      alignItems: 'flex-start',
+      marginBottom: '8px',
+      fontSize: '14px',
+      color: colors.gray[600],
+    },
+    listIcon: {
+      marginRight: '8px',
+      flexShrink: 0,
+      marginTop: '2px',
+    },
+    closeButton: {
+      background: 'none',
+      border: 'none',
+      cursor: 'pointer',
+      color: colors.primary,
+      padding: '4px',
+    },
+    closeButtonHover: {
+      color: colors.primaryDark,
+    },
   };
 
   return (
     <div style={styles.container}>
-      <h1 style={styles.heading}>Upload Student Document</h1>
-      
-      {error && <div style={styles.error}>{error}</div>}
-      {success && <div style={styles.success}>{success}</div>}
+      <div style={styles.maxWidth}>
+        {/* Header */}
+        <div style={styles.card}>
+          <div style={styles.header}>
+            <h1 style={styles.title}>Upload Student Document</h1>
+            <p style={styles.subtitle}>Submit required documents for TESDA scholarship applications</p>
+          </div>
+        </div>
 
-      <div style={styles.searchSection}>
-        <label style={styles.searchLabel}>
-          Search Student<span style={styles.required}>*</span>
-        </label>
-        <input
-          type="text"
-          style={styles.searchInput}
-          placeholder="Enter student name or ID..."
-          value={searchTerm}
-          onChange={handleSearchChange}
-          disabled={loading}
-          onFocus={() => {
-            if (selectedStudent && searchTerm.includes('(')) {
-              setSelectedStudent(null);
-              setSearchTerm('');
-            }
-          }}
-        />
-        
-        {searchLoading && (
-          <div style={{ textAlign: 'center', color: colors.olive }}>
-            Searching students...
+        {/* Alerts */}
+        {error && (
+          <div style={{ ...styles.alert, ...styles.alertError }}>
+            <div style={styles.alertIcon}>
+              <XIcon />
+            </div>
+            <p>{error}</p>
           </div>
         )}
-        
-        {searchResults.length > 0 && !selectedStudent && (
-          <div style={styles.searchResults}>
-            {searchResults.map((student) => (
-              <div
-                key={student.student_id}
-                style={styles.searchResultItem}
-                onClick={() => handleStudentSelect(student)}
+
+        {success && (
+          <div style={{ ...styles.alert, ...styles.alertSuccess }}>
+            <div style={styles.alertIcon}>
+              <CheckIcon />
+            </div>
+            <p>{success}</p>
+          </div>
+        )}
+
+        {/* Search Section */}
+        <div style={styles.card}>
+          <label style={styles.label}>
+            Search Student<span style={styles.required}>*</span>
+          </label>
+          <div style={styles.inputGroup}>
+            <div style={styles.inputIcon}>
+              <SearchIcon />
+            </div>
+            <input
+              type="text"
+              style={styles.input}
+              placeholder="Enter student name or ID..."
+              value={searchTerm}
+              onChange={handleSearchChange}
+              disabled={loading}
+              onFocus={(e) => {
+                e.target.style.borderColor = colors.primary;
+                e.target.style.boxShadow = `0 0 0 3px ${colors.primary}20`;
+                if (selectedStudent && searchTerm.includes('(')) {
+                  setSelectedStudent(null);
+                  setSearchTerm('');
+                  setStudentDocuments([]);
+                }
+              }}
+              onBlur={(e) => {
+                e.target.style.borderColor = colors.gray[300];
+                e.target.style.boxShadow = 'none';
+              }}
+            />
+          </div>
+
+          {searchLoading && (
+            <div style={styles.loadingContainer}>
+              <div style={{ display: 'inline-flex', alignItems: 'center' }}>
+                <LoadingSpinner />
+                <span style={styles.loadingText}>Searching students...</span>
+              </div>
+            </div>
+          )}
+
+          {searchResults.length > 0 && !selectedStudent && (
+            <div style={styles.searchResults}>
+              {searchResults.map((student) => (
+                <div
+                  key={student.student_id}
+                  style={styles.searchResultItem}
+                  onClick={() => handleStudentSelect(student)}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = colors.gray[50];
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <p style={{ fontWeight: '500', color: colors.gray[900] }}>
+                        {student.first_name} {student.last_name}
+                      </p>
+                      <p style={{ fontSize: '14px', color: colors.gray[600] }}>
+                        ID: {student.student_id}
+                      </p>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <p style={{ fontSize: '12px', color: colors.gray[500] }}>
+                        Status: {student.graduation_status || 'N/A'}
+                      </p>
+                      <p style={{ fontSize: '12px', color: colors.gray[500] }}>
+                        Level: {student.current_trading_level || 'Not assigned'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {selectedStudent && (
+            <div style={styles.selectedStudent}>
+              <div>
+                <p style={{ fontWeight: '500', color: '#4338CA' }}>
+                  {selectedStudent.first_name} {selectedStudent.last_name}
+                </p>
+                <p style={{ fontSize: '14px', color: '#6366F1' }}>ID: {selectedStudent.student_id}</p>
+              </div>
+              <button
+                style={styles.closeButton}
+                onClick={() => {
+                  setSelectedStudent(null);
+                  setSearchTerm('');
+                  setStudentDocuments([]);
+                }}
                 onMouseEnter={(e) => {
-                  e.target.style.backgroundColor = '#f5f5f5';
+                  e.currentTarget.style.color = colors.primaryDark;
                 }}
                 onMouseLeave={(e) => {
-                  e.target.style.backgroundColor = 'transparent';
+                  e.currentTarget.style.color = colors.primary;
                 }}
               >
-                <strong>{student.first_name} {student.last_name}</strong> ({student.student_id})
-                <br />
-                <small style={{ color: colors.olive }}>
-                  Status: {student.graduation_status || 'N/A'} | 
-                  Level: {student.current_trading_level || 'No trading level assigned'}
-                </small>
-              </div>
-            ))}
-          </div>
-        )}
+                <XIcon />
+              </button>
+            </div>
+          )}
+        </div>
 
-        {selectedStudent && (
-          <div style={styles.selectedStudent}>
-            Selected: {selectedStudent.first_name} {selectedStudent.last_name} ({selectedStudent.student_id})
-          </div>
-        )}
-      </div>
-
-      <div onSubmit={handleSubmit}>
-        <div style={styles.fieldset}>
-          <div style={styles.legend}>Document Information</div>
+        {/* Upload Form */}
+        <form onSubmit={handleSubmit} style={styles.card}>
+          <h2 style={styles.sectionTitle}>Document Information</h2>
           
-          <div style={styles.formGroup}>
+          <div style={{ marginBottom: '16px' }}>
             <label style={styles.label}>
               Document Type<span style={styles.required}>*</span>
             </label>
@@ -600,34 +829,69 @@ useEffect(() => {
                 </option>
               ))}
             </select>
-            <div style={styles.documentNote}>
+            <p style={{ marginTop: '4px', fontSize: '12px', color: colors.gray[500] }}>
               * Required documents for TESDA scholarship applications
-            </div>
+            </p>
           </div>
 
-          <div style={styles.formGroup}>
+          <div style={{ marginBottom: '16px' }}>
             <label style={styles.label}>
               Document File<span style={styles.required}>*</span>
             </label>
-            <input
-              type="file"
-              style={styles.fileInput}
-              onChange={handleFileChange}
-              disabled={loading}
-              accept=".jpg,.jpeg,.png,.gif,.pdf,.doc,.docx,.xls,.xlsx"
-              required
-            />
-            <div style={styles.documentNote}>
-              Supported formats: JPEG, PNG, PDF, DOC, DOCX, XLS, XLSX (Max 10MB)
+            <div
+              style={styles.fileUpload}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = colors.gray[400];
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = colors.gray[300];
+              }}
+            >
+              <div style={styles.fileUploadIcon}>
+                <UploadIcon size={32} />
+              </div>
+              <div style={{ fontSize: '14px', color: colors.gray[600] }}>
+                <label
+                  style={styles.fileLabel}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.color = colors.primaryDark;
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.color = colors.primary;
+                  }}
+                >
+                  <span>Upload a file</span>
+                  <input
+                    type="file"
+                    style={styles.fileInput}
+                    onChange={handleFileChange}
+                    disabled={loading}
+                    accept=".jpg,.jpeg,.png,.gif,.pdf,.doc,.docx,.xls,.xlsx"
+                    required
+                  />
+                </label>
+                <span>or drag and drop</span>
+              </div>
+              <p style={{ fontSize: '12px', color: colors.gray[500], marginTop: '8px' }}>
+                JPEG, PNG, PDF, DOC, DOCX, XLS, XLSX up to 10MB
+              </p>
             </div>
             {selectedFile && (
               <div style={styles.fileInfo}>
-                Selected file: {selectedFile.name} ({(selectedFile.size / 1024 / 1024).toFixed(2)} MB)
+                <div style={{ display: 'flex', alignItems: 'center' }}>
+                  <DocumentIcon />
+                  <span style={{ marginLeft: '8px', fontSize: '14px', color: colors.gray[600] }}>
+                    {selectedFile.name}
+                  </span>
+                </div>
+                <span style={{ fontSize: '14px', color: colors.gray[500] }}>
+                  {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
+                </span>
               </div>
             )}
           </div>
 
-          <div style={styles.formGroup}>
+          <div>
             <label style={styles.label}>Notes (Optional)</label>
             <textarea
               name="notes"
@@ -636,37 +900,100 @@ useEffect(() => {
               onChange={handleChange}
               placeholder="Add any additional notes about this document..."
               disabled={loading}
+              onFocus={(e) => {
+                e.target.style.borderColor = colors.primary;
+                e.target.style.boxShadow = `0 0 0 3px ${colors.primary}20`;
+              }}
+              onBlur={(e) => {
+                e.target.style.borderColor = colors.gray[300];
+                e.target.style.boxShadow = 'none';
+              }}
             />
           </div>
-        </div>
 
-        <button type="submit" style={styles.button} disabled={loading} onClick={handleSubmit}>
-          {loading ? 'Uploading Document...' : 'Upload Document'}
-        </button>
-      </div>
+          <button
+            type="submit"
+            disabled={loading}
+            style={loading ? { ...styles.button, ...styles.buttonDisabled } : styles.button}
+            onMouseEnter={(e) => {
+              if (!loading) {
+                e.currentTarget.style.backgroundColor = colors.primaryDark;
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (!loading) {
+                e.currentTarget.style.backgroundColor = colors.primary;
+              }
+            }}
+          >
+            {loading ? (
+              <>
+                <LoadingSpinner />
+                <span style={{ marginLeft: '8px' }}>Uploading Document...</span>
+              </>
+            ) : (
+              <>
+                <UploadIcon />
+                <span style={{ marginLeft: '8px' }}>Upload Document</span>
+              </>
+            )}
+          </button>
+        </form>
 
-      <div style={styles.fieldset}>
-        <div style={styles.legend}>TESDA Scholarship Requirements</div>
-        <div style={{ fontSize: '14px', color: colors.black, lineHeight: '1.6' }}>
-          <strong>Required Documents:</strong>
-          <ul style={{ marginTop: '10px', paddingLeft: '20px' }}>
-            <li>TESDA Application Form (duly accomplished)</li>
-            <li>Birth Certificate (PSA or NSO photocopy)</li>
-            <li>Valid ID (government-issued or school ID)</li>
-            <li>2 pcs. Passport-size photos (white background with name tag)</li>
-            <li>High School or College Diploma (or Form 137/Transcript)</li>
-          </ul>
-          <strong style={{ marginTop: '15px', display: 'block' }}>Additional Documents (if applicable):</strong>
-          <ul style={{ marginTop: '10px', paddingLeft: '20px' }}>
-            <li>Barangay Clearance or Certificate of Indigency (for scholarship)</li>
-            <li>Medical Certificate (for courses requiring physical fitness)</li>
-            <li>Certificate of Good Moral Character</li>
-            <li>Marriage Certificate (if name has changed)</li>
-            <li>NBI or Police Clearance (for courses with industry immersion)</li>
-          </ul>
+        {/* Document Status Section */}
+        {selectedStudent && (
+          <div style={styles.card}>
+            <h2 style={styles.sectionTitle}>Document Status</h2>
+            
+            {loadingDocuments ? (
+              <div style={styles.loadingContainer}>
+                <div style={{ display: 'inline-flex', alignItems: 'center' }}>
+                  <LoadingSpinner />
+                  <span style={styles.loadingText}>Loading document status...</span>
+                </div>
+              </div>
+            ) : (
+              <div style={styles.documentGrid}>
+                {documentTypes.map((docType) => {
+                  const status = getDocumentStatus(docType.document_type_id);
+                  const hasDocument = status !== null;
+                  
+                  return (
+                    <div
+                      key={docType.document_type_id}
+                      style={hasDocument ? { ...styles.documentCard, ...styles.documentCardActive } : styles.documentCard}
+                    >
+                      <p style={hasDocument ? styles.documentName : { ...styles.documentName, ...styles.documentNameInactive }}>
+                        {docType.type_name}
+                        {docType.is_required && <span style={styles.required}>*</span>}
+                      </p>
+                      {hasDocument ? (
+                        <div style={{ marginTop: '8px' }}>
+                          <span
+                            style={{
+                              ...styles.statusBadge,
+                              backgroundColor: `${getStatusColor(status)}20`,
+                              color: getStatusColor(status),
+                            }}
+                          >
+                            {getStatusIcon(status)}
+                            <span style={{ textTransform: 'capitalize' }}>{status}</span>
+                          </span>
+                        </div>
+                      ) : (
+                        <p style={{ marginTop: '4px', fontSize: '14px', color: colors.gray[400] }}>
+                          Not uploaded
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
         </div>
       </div>
-    </div>
   );
 };
 

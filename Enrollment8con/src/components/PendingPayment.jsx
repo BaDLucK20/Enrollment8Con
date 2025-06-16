@@ -1,86 +1,21 @@
 import { useState, useEffect } from 'react'
-import { Search, Filter, Edit2, Check, X, Eye, Calendar, DollarSign, User, Phone, Mail, ChevronDown, ChevronUp } from 'lucide-react'
+import { Search, Filter, Edit2, Check, X, Eye, Calendar, DollarSign, User, Phone, Mail, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react'
 
 const PendingPayment = () => {
-  const [payments, setPayments] = useState([
-    {
-      id: 'PAY001',
-      studentName: 'Maria Santos',
-      email: 'maria.santos@email.com',
-      phone: '+63 912 345 6789',
-      course: 'Basic',
-      amount: 15000,
-      dueDate: '2025-06-15',
-      dateCreated: '2025-05-20',
-      status: 'pending',
-      paymentMethod: 'Bank Transfer',
-      notes: 'Waiting for bank confirmation'
-    },
-    {
-      id: 'PAY002',
-      studentName: 'Juan Dela Cruz',
-      email: 'juan.delacruz@email.com',
-      phone: '+63 917 234 5678',
-      course: 'Basic',
-      amount: 25000,
-      dueDate: '2025-06-20',
-      dateCreated: '2025-05-18',
-      status: 'pending',
-      paymentMethod: 'GCash',
-      notes: 'Student requested payment plan'
-    },
-    {
-      id: 'PAY003',
-      studentName: 'Ana Rodriguez',
-      email: 'ana.rodriguez@email.com',
-      phone: '+63 923 456 7890',
-      course: 'Basic',
-      amount: 18000,
-      dueDate: '2025-06-12',
-      dateCreated: '2025-05-22',
-      status: 'pending',
-      paymentMethod: 'Credit Card',
-      notes: 'Payment verification in progress'
-    },
-    {
-      id: 'PAY004',
-      studentName: 'Carlos Mendoza',
-      email: 'carlos.mendoza@email.com',
-      phone: '+63 918 765 4321',
-      course: 'Basic',
-      amount: 22000,
-      dueDate: '2025-06-18',
-      dateCreated: '2025-05-25',
-      status: 'pending',
-      paymentMethod: 'PayMaya',
-      notes: 'Partial payment received'
-    },
-    {
-      id: 'PAY005',
-      studentName: 'Isabella Garcia',
-      email: 'isabella.garcia@email.com',
-      phone: '+63 919 876 5432',
-      course: 'Basic',
-      amount: 12000,
-      dueDate: '2025-06-25',
-      dateCreated: '2025-05-28',
-      status: 'pending',
-      paymentMethod: 'Bank Transfer',
-      notes: 'Awaiting scholarship verification'
-    }
-  ])
-
-  const [filteredPayments, setFilteredPayments] = useState(payments)
+  const [payments, setPayments] = useState([])
+  const [filteredPayments, setFilteredPayments] = useState([])
   const [filters, setFilters] = useState({
     name: '',
     sortOrder: 'ascending',
-    paymentStatus: 'all'
+    paymentStatus: 'pending'
   })
   const [showFilters, setShowFilters] = useState(false)
   const [editingPayment, setEditingPayment] = useState(null)
   const [viewingPayment, setViewingPayment] = useState(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [entriesPerPage] = useState(10)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
 
   // Color palette from the dashboard
   const colors = {
@@ -92,6 +27,89 @@ const PendingPayment = () => {
     cream: '#f5f2e8',
     olive: '#6b7c5c',
     black: '#2c2c2c'
+  }
+
+  // Get auth token from localStorage with debugging
+  const getAuthToken = () => {
+    const token = localStorage.getItem('token')
+    console.log('Retrieved token:', token ? 'Token found' : 'No token found')
+    console.log('Available localStorage keys:', Object.keys(localStorage))
+    return token
+  }
+
+  // API call to fetch payments
+  const fetchPayments = async () => {
+    setLoading(true)
+    setError(null)
+    
+    try {
+      const token = getAuthToken()
+      console.log('Token check:', token ? 'Found' : 'Not found')
+      
+      if (!token) {
+        throw new Error('No authentication token found. Please log in again.')
+      }
+
+      const queryParams = new URLSearchParams()
+      if (filters.name) queryParams.append('student_search', filters.name)
+      if (filters.paymentStatus !== 'all') queryParams.append('status', filters.paymentStatus)
+      if (filters.sortOrder) queryParams.append('name_sort', filters.sortOrder)
+
+      const apiUrl = `http://localhost:3000/api/payments?${queryParams}`
+      console.log('Making API call to:', apiUrl)
+
+      const response = await fetch(apiUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      })
+
+      console.log('Response status:', response.status)
+      console.log('Response headers:', Object.fromEntries(response.headers.entries()))
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error('Unauthorized - please log in again')
+        }
+        const errorText = await response.text()
+        console.log('Error response:', errorText)
+        throw new Error(`Failed to fetch payments: ${response.status} - ${errorText}`)
+      }
+
+      const data = await response.json()
+      console.log('Received data:', data)
+      
+      // Transform the server data to match our component's expected format
+      const transformedData = data.map(payment => ({
+        id: payment.payment_id || `PAY${payment.payment_id}`,
+        studentName: `${payment.first_name} ${payment.last_name}`,
+        email: payment.email || 'N/A',
+        phone: payment.phone || 'N/A',
+        course: payment.course_name || 'N/A',
+        amount: payment.payment_amount || 0,
+        dueDate: payment.payment_date ? new Date(payment.payment_date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+        dateCreated: payment.created_at ? new Date(payment.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+        status: payment.payment_status || 'pending',
+        paymentMethod: payment.method_name || 'N/A',
+        notes: payment.notes || '',
+        referenceNumber: payment.reference_number || '',
+        studentId: payment.student_id,
+        accountId: payment.account_id,
+        methodId: payment.method_id,
+        totalDue: payment.total_due || 0,
+        balance: payment.balance || 0
+      }))
+
+      console.log('Transformed data:', transformedData)
+      setPayments(transformedData)
+    } catch (err) {
+      console.error('Error fetching payments:', err)
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
   }
 
   // Apply filters based on flowchart logic
@@ -120,6 +138,11 @@ const PendingPayment = () => {
     setCurrentPage(1)
   }, [payments, filters])
 
+  // Initial data fetch
+  useEffect(() => {
+    fetchPayments()
+  }, [])
+
   const handleFilterChange = (filterType, value) => {
     setFilters(prev => ({
       ...prev,
@@ -127,28 +150,103 @@ const PendingPayment = () => {
     }))
   }
 
-  const updatePaymentStatus = (paymentId, newStatus) => {
-    setPayments(prev => prev.map(payment => 
-      payment.id === paymentId 
-        ? { ...payment, status: newStatus, updatedDate: new Date().toISOString().split('T')[0] }
-        : payment
-    ))
+  const updatePaymentStatus = async (paymentId, newStatus) => {
+    try {
+      const token = getAuthToken()
+      if (!token) {
+        throw new Error('No authentication token found')
+      }
+
+      const payment = payments.find(p => p.id === paymentId)
+      if (!payment) {
+        throw new Error('Payment not found')
+      }
+
+      // Use the PUT endpoint to update payment status
+      const response = await fetch(`http://localhost:3000/api/payments/${paymentId}/status`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          status: newStatus,
+          notes: `Payment ${newStatus} on ${new Date().toISOString().split('T')[0]}`
+        })
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`Failed to update payment status: ${response.status} - ${errorText}`)
+      }
+
+      // Update local state
+      setPayments(prev => prev.map(payment => 
+        payment.id === paymentId 
+          ? { ...payment, status: newStatus, updatedDate: new Date().toISOString().split('T')[0] }
+          : payment
+      ))
+
+      // Refresh data from server
+      await fetchPayments()
+
+    } catch (err) {
+      console.error('Error updating payment status:', err)
+      setError(err.message)
+    }
   }
 
-  const updatePaymentDetails = (paymentId, updatedData) => {
-    setPayments(prev => prev.map(payment => 
-      payment.id === paymentId 
-        ? { ...payment, ...updatedData, updatedDate: new Date().toISOString().split('T')[0] }
-        : payment
-    ))
-    setEditingPayment(null)
+  const updatePaymentDetails = async (paymentId, updatedData) => {
+    try {
+      const token = getAuthToken()
+      if (!token) {
+        throw new Error('No authentication token found')
+      }
+
+      // Use the PUT endpoint to update payment details
+      const response = await fetch(`http://localhost:3000/api/payments/${paymentId}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          payment_amount: updatedData.amount,
+          reference_number: updatedData.referenceNumber,
+          notes: updatedData.notes
+        })
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`Failed to update payment details: ${response.status} - ${errorText}`)
+      }
+
+      // Update local state
+      setPayments(prev => prev.map(payment => 
+        payment.id === paymentId 
+          ? { ...payment, ...updatedData, updatedDate: new Date().toISOString().split('T')[0] }
+          : payment
+      ))
+
+      setEditingPayment(null)
+      
+      // Optionally refresh from server
+      await fetchPayments()
+
+    } catch (err) {
+      console.error('Error updating payment details:', err)
+      setError(err.message)
+    }
   }
 
   const getStatusColor = (status) => {
     switch (status) {
       case 'pending': return colors.coral
+      case 'confirmed': 
       case 'completed': return colors.lightGreen
-      case 'cancelled': return colors.red
+      case 'cancelled': 
+      case 'failed': return colors.red
       default: return colors.olive
     }
   }
@@ -182,6 +280,8 @@ const PendingPayment = () => {
       color: colors.lightGreen,
       margin: 0
     },
+
+
 
     filterSection: {
       backgroundColor: '#ffffff',
@@ -442,6 +542,7 @@ const PendingPayment = () => {
       fontWeight: '500',
       cursor: 'pointer'
     },
+
     pagination: {
       backgroundColor: '#ffffff',
       borderRadius: '12px',
@@ -486,13 +587,29 @@ const PendingPayment = () => {
       color: '#999',
       cursor: 'not-allowed',
       border: '1px solid #ddd'
+    },
+
+    errorMessage: {
+      backgroundColor: '#fee',
+      color: colors.red,
+      padding: '12px',
+      borderRadius: '6px',
+      marginBottom: '20px',
+      border: `1px solid ${colors.red}`
+    },
+
+    loadingMessage: {
+      textAlign: 'center',
+      padding: '40px',
+      color: colors.olive,
+      fontSize: '16px'
     }
   }
 
   const pendingCount = payments.filter(p => p.status === 'pending').length
   const totalAmount = payments.filter(p => p.status === 'pending').reduce((sum, p) => sum + p.amount, 0)
 
-   // Pagination calculations
+  // Pagination calculations
   const totalPages = Math.ceil(filteredPayments.length / entriesPerPage)
   const startIndex = (currentPage - 1) * entriesPerPage
   const endIndex = startIndex + entriesPerPage
@@ -534,6 +651,17 @@ const PendingPayment = () => {
     return pageNumbers
   }
 
+  if (loading) {
+    return (
+      <div style={styles.container}>
+        <div style={styles.loadingMessage}>
+          <RefreshCw size={24} style={{ animation: 'spin 1s linear infinite' }} />
+          <p>Loading payments...</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div style={styles.container}>
       {/* Header */}
@@ -541,6 +669,13 @@ const PendingPayment = () => {
         <h1 style={styles.title}>Pending Payments</h1>
         <p style={styles.subtitle}>Manage and track all pending student payments</p>
       </div>
+
+      {/* Error Message */}
+      {error && (
+        <div style={styles.errorMessage}>
+          Error: {error}
+        </div>
+      )}
 
       {/* Statistics Card */}
       <div style={styles.statsCard}>
@@ -607,8 +742,10 @@ const PendingPayment = () => {
             >
               <option value="all">All Status</option>
               <option value="pending">Pending</option>
+              <option value="confirmed">Confirmed</option>
               <option value="completed">Completed</option>
               <option value="cancelled">Cancelled</option>
+              <option value="failed">Failed</option>
             </select>
           </div>
         </div>
@@ -623,7 +760,7 @@ const PendingPayment = () => {
         <table style={styles.table}>
           <thead>
             <tr style={styles.tableHeaderRow}>
-              <th style={styles.tableHeaderCell}>Student ID</th>
+              <th style={styles.tableHeaderCell}>Payment ID</th>
               <th style={styles.tableHeaderCell}>Student Name</th>
               <th style={styles.tableHeaderCell}>Course</th>
               <th style={styles.tableHeaderCell}>Amount</th>
@@ -633,7 +770,7 @@ const PendingPayment = () => {
             </tr>
           </thead>
           <tbody>
-            {filteredPayments.map((payment) => (
+            {paginatedPayments.map((payment) => (
               <tr key={payment.id} style={styles.tableRow}>
                 <td style={styles.tableCell}>{payment.id}</td>
                 <td style={styles.tableCell}>{payment.studentName}</td>
@@ -669,10 +806,10 @@ const PendingPayment = () => {
                     <>
                       <button
                         style={{...styles.actionButton, ...styles.completeButton}}
-                        onClick={() => updatePaymentStatus(payment.id, 'completed')}
+                        onClick={() => updatePaymentStatus(payment.id, 'confirmed')}
                       >
                         <Check size={14} />
-                        Complete
+                        Confirm
                       </button>
                       <button
                         style={{...styles.actionButton, ...styles.cancelButton}}
@@ -764,6 +901,9 @@ const PendingPayment = () => {
               <strong>Payment Method:</strong> {viewingPayment.paymentMethod}
             </div>
             <div style={styles.formGroup}>
+              <strong>Reference Number:</strong> {viewingPayment.referenceNumber || 'N/A'}
+            </div>
+            <div style={styles.formGroup}>
               <strong>Status:</strong> 
               <span
                 style={{
@@ -776,7 +916,7 @@ const PendingPayment = () => {
               </span>
             </div>
             <div style={styles.formGroup}>
-              <strong>Notes:</strong> {viewingPayment.notes}
+              <strong>Notes:</strong> {viewingPayment.notes || 'N/A'}
             </div>
 
             <div style={styles.formActions}>
@@ -805,7 +945,7 @@ const PendingPayment = () => {
                 email: formData.get('email'),
                 phone: formData.get('phone'),
                 course: formData.get('course'),
-                amount: parseInt(formData.get('amount')),
+                amount: parseFloat(formData.get('amount')),
                 dueDate: formData.get('dueDate'),
                 paymentMethod: formData.get('paymentMethod'),
                 notes: formData.get('notes')

@@ -7,37 +7,120 @@ import StudentForm from './AddStudent'
 import StaffForm from './AddStaff'
 import DisplayAccount from './DisplayAccount'
 import AddDocument from './AddDocument'
+// import PendingDocument from './PendingDocument'
 
 import { useNavigate } from 'react-router-dom'
+
+// API configuration
+const API_BASE_URL = 'http://localhost:3000/api'
+
+// API helper function
+const apiCall = async (endpoint, options = {}) => {
+  const token = localStorage.getItem('token')
+  const defaultHeaders = {
+    'Content-Type': 'application/json',
+    ...(token && { 'Authorization': `Bearer ${token}` })
+  }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      headers: { ...defaultHeaders, ...options.headers },
+      ...options
+    })
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        localStorage.removeItem('token')
+        window.location.href = '/'
+        return null
+      }
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+    }
+
+    return await response.json()
+  } catch (error) {
+    console.error(`API call failed for ${endpoint}:`, error)
+    throw error
+  }
+}
 
 function UniversalDashboard() {
   const [activeSection, setActiveSection] = useState('dashboard')
   const [expandedNodes, setExpandedNodes] = useState({})
   const [currentTime, setCurrentTime] = useState(new Date())
   const [isDesktop, setIsDesktop] = useState(window.innerWidth >= 1024)
-  const [userRole, setUserRole] = useState('') // Add state for user role
+  const [userRole, setUserRole] = useState('')
+  const [userInfo, setUserInfo] = useState(null)
+  const [dashboardMetrics, setDashboardMetrics] = useState({
+    enrolled_students: 0,
+    graduated_students: 0,
+    pending_payments: 0,
+    total_revenue: 0,
+    monthly_enrollments: [],
+    competency_breakdown: []
+  })
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
   const navigate = useNavigate()
 
+  // Initialize user data and fetch dashboard metrics
+  useEffect(() => {
+    const initializeDashboard = async () => {
+      try {
+        setLoading(true)
+        const token = localStorage.getItem('token')
+        
+        if (!token) {
+          navigate('/')
+          return
+        }
+
+        // Decode JWT token to get user info
+        try {
+          const payload = JSON.parse(atob(token.split('.')[1]))
+          setUserRole(payload.role || 'student')
+          setUserInfo(payload)
+        } catch (tokenError) {
+          console.error('Invalid token format:', tokenError)
+          localStorage.removeItem('token')
+          navigate('/')
+          return
+        }
+
+        // Fetch dashboard metrics for admin/staff
+        if (['admin', 'staff'].includes(userRole)) {
+          await fetchDashboardMetrics()
+        }
+
+      } catch (error) {
+        console.error('Dashboard initialization error:', error)
+        setError('Failed to load dashboard data')
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    initializeDashboard()
+  }, [userRole, navigate])
+
+  // Fetch dashboard metrics from server
+  const fetchDashboardMetrics = async () => {
+    try {
+      const metrics = await apiCall('/dashboard/metrics')
+      if (metrics) {
+        setDashboardMetrics(metrics)
+      }
+    } catch (error) {
+      console.error('Failed to fetch dashboard metrics:', error)
+      setError('Failed to load dashboard metrics')
+    }
+  }
+
+  // Time update effect
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000)
     const handleResize = () => setIsDesktop(window.innerWidth >= 1024)
     
-    // Get user role from localStorage or token
-    const getUserRole = () => {
-      try {
-        const token = localStorage.getItem('token')
-        if (token) {
-          // Decode JWT token to get user role
-          const payload = JSON.parse(atob(token.split('.')[1]))
-          setUserRole(payload.role || '')
-        }
-      } catch (error) {
-        console.error('Error getting user role:', error)
-        setUserRole('')
-      }
-    }
-    
-    getUserRole()
     window.addEventListener('resize', handleResize)
     
     return () => {
@@ -55,7 +138,9 @@ function UniversalDashboard() {
     red: '#d63447',
     cream: '#f5f2e8',
     olive: '#6b7c5c',
-    black: '#2c2c2c'
+    black: '#2c2c2c',
+    blue: '#4a90e2',
+    purple: '#9b59b6'
   }
 
   // Function to check if user has required role
@@ -78,10 +163,12 @@ function UniversalDashboard() {
       label: 'Payment Tracker', 
       icon: DollarSign, 
       color: colors.coral,
+      roles: ['admin', 'staff'],
       hasChildren: true,
       children: [
         { id: 'PendingPayments', label: 'Pending Payments' },
-        { id: 'CompletedPayments', label: 'Completed Payments' }
+        { id: 'CompletedPayments', label: 'Completed Payments' },
+        { id: 'PaymentHistory', label: 'Payment History' }
       ]
     },
     { 
@@ -89,6 +176,7 @@ function UniversalDashboard() {
       label: 'Competency & Assessment', 
       icon: Award, 
       color: colors.red,
+      roles: ['admin', 'staff'],
       hasChildren: true,
       children: [
         { id: 'skill-assessment', label: 'Skill Assessment' },
@@ -109,19 +197,6 @@ function UniversalDashboard() {
       ]
     },
     { 
-      id: 'scholarship-management', 
-      label: 'Scholarship Management Module', 
-      icon: DollarSign, 
-      color: colors.lightGreen,
-      hasChildren: true,
-      children: [
-        { id: 'available-scholarships', label: 'Available Scholarships' },
-        { id: 'application-status', label: 'Application Status' },
-        { id: 'scholarship-awards', label: 'Scholarship Awards' },
-        { id: 'student-registration', label: 'Student Registration'}
-      ]
-    },
-    { 
       id: 'referral', 
       label: 'Referral', 
       icon: Users, 
@@ -136,7 +211,8 @@ function UniversalDashboard() {
       hasChildren: true,
       children: [ 
        { id: 'add-new-Staff', label: 'Add New Staff' },
-       { id: 'add-new-Student', label: 'Add New Student' }
+       { id: 'add-new-Student', label: 'Add New Student' },
+       { id: 'DisplayAccount', label: 'Manage Accounts' }
       ]
     },
     { 
@@ -144,25 +220,13 @@ function UniversalDashboard() {
       label: 'Document Tracker', 
       icon: FileText, 
       color: colors.red,
-      // roles: ['admin', 'staff'],
+      roles: ['admin', 'staff'],
       hasChildren: true,
       children: [
-        { id: 'add-documents', label: 'Add Documents'},
-        { id: 'pending-documents', label: 'Pending Documents' },
-        { id: 'verified-documents', label: 'Verified Documents' }
+        { id: 'add-documents', label: 'Documents'},
+        { id: 'pending-documents', label: 'pendingdocument'}
       ]
-    },
-    //  { 
-    //   id: 'settings', 
-    //   label: 'Settings', 
-    //   icon:  Settings, 
-    //   color: colors.red,
-    //   hasChildren: true,
-    //   children: [
-    //     { id: 'security-settings', label: 'Security Settings' },
-    //     { id: 'notification-preferences', label: 'Notification Preferences' }
-    //   ]
-    // }
+    }
   ]
 
   // Filter navigation items based on user role
@@ -172,24 +236,28 @@ function UniversalDashboard() {
 
   const handleLogout = async () => {
     try {
-      const token = localStorage.getItem('token');
+      const token = localStorage.getItem('token')
 
-      await fetch('http://localhost:3000/api/auth/logout', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      if (token) {
+        await apiCall('/auth/logout', {
+          method: 'POST'
+        })
+      }
 
       // Clear token and reset UI
-      localStorage.removeItem('token');
-      navigate('/');
-      setActiveSection('dashboard');
-      setExpandedNodes({});
+      localStorage.removeItem('token')
+      navigate('/')
+      setActiveSection('dashboard')
+      setExpandedNodes({})
+      setUserRole('')
+      setUserInfo(null)
     } catch (error) {
-      console.error('Logout failed:', error);
+      console.error('Logout failed:', error)
+      // Still redirect even if logout API fails
+      localStorage.removeItem('token')
+      navigate('/')
     }
-  };
+  }
 
   const toggleNode = (nodeId) => {
     setExpandedNodes(prev => ({
@@ -205,22 +273,15 @@ function UniversalDashboard() {
     )
     
     if (clickedItem && clickedItem.roles && !hasRequiredRole(clickedItem.roles)) {
-      // Show unauthorized message or redirect
-      alert('You do not have permission to access this section.')
+      setError('You do not have permission to access this section.')
       return
     }
     
-    console.log(sectionId);
     setActiveSection(sectionId)
+    setError(null) // Clear any previous errors
   }
 
   const styles = {
-    // Login Page Styles
-    passwordWrapper: {
-      position: 'relative',
-      marginBottom: '16px'
-    },
-
     // Dashboard Styles
     container: {
       display: 'flex',
@@ -248,21 +309,6 @@ function UniversalDashboard() {
       display: 'flex',
       justifyContent: 'center',
       alignItems: 'center'  
-    },
-
-    navTitle: {
-      fontSize: '20px',
-      fontWeight: 'bold',
-      color: '#ffffff',
-      margin: 0,
-      marginBottom: '8px'
-    },
-
-    navSubtitle: {
-      fontSize: '14px',
-      color: '#000000',
-      margin: 0,
-      fontWeight: 'bold'
     },
 
     navContent: {
@@ -394,6 +440,25 @@ function UniversalDashboard() {
       backgroundColor: colors.cream
     },
 
+    // Loading and Error States
+    loadingContainer: {
+      display: 'flex',
+      justifyContent: 'center',
+      alignItems: 'center',
+      height: '200px',
+      fontSize: '16px',
+      color: colors.lightGreen
+    },
+
+    errorContainer: {
+      backgroundColor: '#fee',
+      border: '1px solid #fcc',
+      borderRadius: '8px',
+      padding: '16px',
+      marginBottom: '20px',
+      color: colors.red
+    },
+
     welcomeCard: {
       background: `linear-gradient(135deg, ${colors.darkGreen} 0%, ${colors.lightGreen} 100%)`,
       borderRadius: '16px',
@@ -494,56 +559,6 @@ function UniversalDashboard() {
       color: colors.lightGreen
     },
 
-    // Workflow Cards
-    workflowSection: {
-      marginBottom: '32px'
-    },
-
-    workflowTitle: {
-      fontSize: '20px',
-      fontWeight: 'bold',
-      color: colors.black,
-      marginBottom: '16px'
-    },
-
-    workflowGrid: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
-      gap: '16px'
-    },
-
-    workflowCard: {
-      backgroundColor: '#ffffff',
-      borderRadius: '8px',
-      padding: '20px',
-      border: '1px solid #e2e8f0',
-      transition: 'all 0.2s ease'
-    },
-
-    workflowCardTitle: {
-      fontSize: '16px',
-      fontWeight: '600',
-      color: colors.black,
-      marginBottom: '8px'
-    },
-
-    workflowCardDescription: {
-      fontSize: '14px',
-      color: '#64748b',
-      marginBottom: '16px'
-    },
-
-    workflowButton: {
-      backgroundColor: colors.darkGreen,
-      color: '#ffffff',
-      border: 'none',
-      borderRadius: '6px',
-      padding: '8px 16px',
-      fontSize: '14px',
-      cursor: 'pointer',
-      transition: 'background-color 0.2s ease'
-    },
-
     // Content for different sections
     sectionContent: {
       backgroundColor: '#ffffff',
@@ -569,6 +584,22 @@ function UniversalDashboard() {
   }
 
   const getActiveContent = () => {
+    if (loading) {
+      return (
+        <div style={styles.loadingContainer}>
+          <div>Loading dashboard data...</div>
+        </div>
+      )
+    }
+
+    if (error) {
+      return (
+        <div style={styles.errorContainer}>
+          <strong>Error:</strong> {error}
+        </div>
+      )
+    }
+
     const activeItem = flowchartItems.find(item => item.id === activeSection)
     
     // Check if user has permission to view this content
@@ -589,7 +620,9 @@ function UniversalDashboard() {
           <div>
             {/* Welcome Card */}
             <div style={styles.welcomeCard}>
-              <h2 style={styles.welcomeTitle}>Student Management Dashboard</h2>
+              <h2 style={styles.welcomeTitle}>
+                Welcome back, {userInfo?.username || 'User'}!
+              </h2>
               <p style={styles.welcomeText}>
                 {currentTime.toLocaleDateString('en-US', { 
                   weekday: 'long', 
@@ -600,88 +633,117 @@ function UniversalDashboard() {
               </p>
               <div style={styles.welcomeStats}>
                 <div style={styles.welcomeStat}>
-                  <span style={styles.statValue}>2,847</span>
-                  <span style={styles.statLabel}>Total Students</span>
+                  <span style={styles.statValue}>{dashboardMetrics.enrolled_students}</span>
+                  <span style={styles.statLabel}>Enrolled Students</span>
                 </div>
                 <div style={styles.welcomeStat}>
-                  <span style={styles.statValue}>321</span>
+                  <span style={styles.statValue}>{dashboardMetrics.graduated_students}</span>
                   <span style={styles.statLabel}>Graduates</span>
                 </div>
                 <div style={styles.welcomeStat}>
-                  <span style={styles.statValue}>₱2.4M</span>
+                  <span style={styles.statValue}>₱{(dashboardMetrics.total_revenue || 0).toLocaleString()}</span>
                   <span style={styles.statLabel}>Total Revenue</span>
                 </div>
                 <div style={styles.welcomeStat}>
-                  <span style={styles.statValue}>94%</span>
-                  <span style={styles.statLabel}>Success Rate</span>
+                  <span style={styles.statValue}>{dashboardMetrics.pending_payments}</span>
+                  <span style={styles.statLabel}>Pending Payments</span>
                 </div>
               </div>
             </div>
 
             {/* Key Metrics Grid */}
-            <div style={styles.statsGrid}>
-              {[
-                { title: 'Current Enrollment', value: '1,245', change: '+8.2%', color: colors.blue, icon: Users },
-                { title: 'Scholar Students', value: '456', change: '+12.5%', color: colors.purple, icon: Award },
-                { title: 'Paying Students', value: '789', change: '+5.8%', color: colors.coral, icon: DollarSign },
-                { title: 'OJT Students', value: '234', change: '+15.3%', color: colors.olive, icon: Target },
-                { title: 'Monthly Revenue', value: '₱180K', change: '+7.2%', color: colors.lightGreen, icon: TrendingUp },
-                { title: 'Dropout Rate', value: '3.2%', change: '-1.1%', color: colors.red, icon: Calculator }
-              ].map((stat, index) => (
-                <div
-                  key={index}
-                  style={styles.statCard}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = 'translateY(-4px)'
-                    e.currentTarget.style.boxShadow = '0 10px 25px rgba(0, 0, 0, 0.1)'
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = 'translateY(0)'
-                    e.currentTarget.style.boxShadow = 'none'
-                  }}
-                >
-                  <div style={styles.statCardHeader}>
-                    <h3 style={styles.statCardTitle}>{stat.title}</h3>
-                    <div style={{
-                      ...styles.statCardIcon,
-                      backgroundColor: stat.color + '20'
-                    }}>
-                      <stat.icon size={20} color={stat.color} />
+            {['admin', 'staff'].includes(userRole) && (
+              <div style={styles.statsGrid}>
+                {[
+                  { 
+                    title: 'Current Enrollment', 
+                    value: dashboardMetrics.enrolled_students, 
+                    change: '+8.2%', 
+                    color: colors.blue, 
+                    icon: Users 
+                  },
+                  { 
+                    title: 'Graduated Students', 
+                    value: dashboardMetrics.graduated_students, 
+                    change: '+12.5%', 
+                    color: colors.purple, 
+                    icon: Award 
+                  },
+                  { 
+                    title: 'Pending Payments', 
+                    value: dashboardMetrics.pending_payments, 
+                    change: '+5.8%', 
+                    color: colors.coral, 
+                    icon: DollarSign 
+                  },
+                  { 
+                    title: 'Monthly Revenue', 
+                    value: `₱${(dashboardMetrics.total_revenue || 0).toLocaleString()}`, 
+                    change: '+7.2%', 
+                    color: colors.lightGreen, 
+                    icon: TrendingUp 
+                  }
+                ].map((stat, index) => (
+                  <div
+                    key={index}
+                    style={styles.statCard}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = 'translateY(-4px)'
+                      e.currentTarget.style.boxShadow = '0 10px 25px rgba(0, 0, 0, 0.1)'
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'translateY(0)'
+                      e.currentTarget.style.boxShadow = 'none'
+                    }}
+                  >
+                    <div style={styles.statCardHeader}>
+                      <h3 style={styles.statCardTitle}>{stat.title}</h3>
+                      <div style={{
+                        ...styles.statCardIcon,
+                        backgroundColor: stat.color + '20'
+                      }}>
+                        <stat.icon size={20} color={stat.color} />
+                      </div>
                     </div>
+                    <div style={styles.statCardValue}>{stat.value}</div>
+                    <div style={styles.statCardChange}>{stat.change} vs last month</div>
                   </div>
-                  <div style={styles.statCardValue}>{stat.value}</div>
-                  <div style={styles.statCardChange}>{stat.change} vs last month</div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         )
 
       case 'PendingPayments':
-        return <PendingPayment/>
+        return <PendingPayment />
 
       case 'CompletedPayments':
-        return <CompletedPayment/>
+        return <CompletedPayment />
 
+      case 'PaymentHistory':
       case 'payment-tracker':
-        return <PaymentHistory/>
+        return <PaymentHistory />
 
       case 'add-new-Student':
-        return <StudentForm/>
+        return <StudentForm />
 
       case 'add-new-Staff':
-        return <StaffForm/>
+        return <StaffForm />
 
+      case 'DisplayAccount':
       case 'account-management':
-        return <DisplayAccount/>
+        return <DisplayAccount />
 
       case 'add-documents':
-        return <AddDocument/>
+        return <AddDocument />
+
+      // case 'pending-documents':
+      //   return <PendingDocument/>
 
       default:
         return (
           <div style={styles.sectionContent}>
-            <h2 style={styles.sectionTitle}>{activeItem?.label}</h2>
+            <h2 style={styles.sectionTitle}>{activeItem?.label || 'Section'}</h2>
             <p style={styles.sectionDescription}>
               This section contains all the functionality and data related to {activeItem?.label}. 
               The system processes and analyzes data according to the established workflow to provide 
@@ -831,4 +893,4 @@ function UniversalDashboard() {
   )
 }
 
-export default UniversalDashboard;
+export default UniversalDashboard

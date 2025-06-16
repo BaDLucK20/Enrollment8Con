@@ -1,161 +1,11 @@
 import { useState, useEffect } from 'react'
-import { Search, Filter, Eye, Calendar, DollarSign, User, Phone, Mail, ChevronDown, ChevronUp, FileText, Download, X } from 'lucide-react'
+import { Search, Filter, Eye, Calendar, DollarSign, User, Phone, Mail, ChevronDown, ChevronUp, FileText, Download, X, AlertCircle } from 'lucide-react'
 
 const PaymentHistory = () => {
-  const [payments, setPayments] = useState([
-    {
-      id: 'PAY001',
-      studentName: 'Maria Santos',
-      email: 'maria.santos@email.com',
-      phone: '+63 912 345 6789',
-      course: 'Basic',
-      amount: 15000,
-      dueDate: '2025-06-15',
-      dateCreated: '2025-05-20',
-      completedDate: '2025-06-10',
-      status: 'completed',
-      paymentMethod: 'Bank Transfer',
-      notes: 'Payment confirmed via bank transfer',
-      receipts: [
-        {
-          id: 'REC001',
-          filename: 'bank_transfer_receipt.pdf',
-          uploadDate: '2025-06-10',
-          type: 'Bank Transfer Receipt',
-          url: '#'
-        },
-        {
-          id: 'REC002',
-          filename: 'enrollment_form.pdf',
-          uploadDate: '2025-06-10',
-          type: 'Enrollment Form',
-          url: '#'
-        }
-      ]
-    },
-    {
-      id: 'PAY002',
-      studentName: 'Juan Dela Cruz',
-      email: 'juan.delacruz@email.com',
-      phone: '+63 917 234 5678',
-      course: 'Basic',
-      amount: 25000,
-      dueDate: '2025-06-20',
-      dateCreated: '2025-05-18',
-      completedDate: '2025-06-18',
-      status: 'completed',
-      paymentMethod: 'GCash',
-      notes: 'Full payment received via GCash',
-      receipts: [
-        {
-          id: 'REC003',
-          filename: 'gcash_receipt.jpg',
-          uploadDate: '2025-06-18',
-          type: 'GCash Receipt',
-          url: '#'
-        }
-      ]
-    },
-    {
-      id: 'PAY003',
-      studentName: 'Ana Rodriguez',
-      email: 'ana.rodriguez@email.com',
-      phone: '+63 923 456 7890',
-      course: 'Basic',
-      amount: 18000,
-      dueDate: '2025-06-12',
-      dateCreated: '2025-05-22',
-      cancelledDate: '2025-06-05',
-      status: 'cancelled',
-      paymentMethod: 'Credit Card',
-      notes: 'Student cancelled enrollment',
-      receipts: []
-    },
-    {
-      id: 'PAY004',
-      studentName: 'Carlos Mendoza',
-      email: 'carlos.mendoza@email.com',
-      phone: '+63 918 765 4321',
-      course: 'Basic',
-      amount: 22000,
-      dueDate: '2025-06-18',
-      dateCreated: '2025-05-25',
-      completedDate: '2025-06-16',
-      status: 'completed',
-      paymentMethod: 'PayMaya',
-      notes: 'Payment completed successfully',
-      receipts: [
-        {
-          id: 'REC004',
-          filename: 'paymaya_receipt.pdf',
-          uploadDate: '2025-06-16',
-          type: 'PayMaya Receipt',
-          url: '#'
-        },
-        {
-          id: 'REC005',
-          filename: 'id_copy.jpg',
-          uploadDate: '2025-06-16',
-          type: 'ID Copy',
-          url: '#'
-        }
-      ]
-    },
-    {
-      id: 'PAY005',
-      studentName: 'Isabella Garcia',
-      email: 'isabella.garcia@email.com',
-      phone: '+63 919 876 5432',
-      course: 'Basic',
-      amount: 12000,
-      dueDate: '2025-06-25',
-      dateCreated: '2025-05-28',
-      cancelledDate: '2025-06-20',
-      status: 'cancelled',
-      paymentMethod: 'Bank Transfer',
-      notes: 'Payment cancelled due to personal reasons',
-      receipts: []
-    },
-    {
-      id: 'PAY006',
-      studentName: 'Roberto Silva',
-      email: 'roberto.silva@email.com',
-      phone: '+63 920 123 4567',
-      course: 'Basic',
-      amount: 20000,
-      dueDate: '2025-06-30',
-      dateCreated: '2025-06-01',
-      completedDate: '2025-06-25',
-      status: 'completed',
-      paymentMethod: 'Cash',
-      notes: 'Cash payment received at office',
-      receipts: [
-        {
-          id: 'REC006',
-          filename: 'cash_receipt.pdf',
-          uploadDate: '2025-06-25',
-          type: 'Cash Receipt',
-          url: '#'
-        },
-        {
-          id: 'REC007',
-          filename: 'payment_voucher.pdf',
-          uploadDate: '2025-06-25',
-          type: 'Payment Voucher',
-          url: '#'
-        },
-        {
-          id: 'REC008',
-          filename: 'enrollment_confirmation.pdf',
-          uploadDate: '2025-06-25',
-          type: 'Enrollment Confirmation',
-          url: '#'
-        }
-      ]
-    }
-  ])
-
-  const [filteredPayments, setFilteredPayments] = useState(payments)
+  const [payments, setPayments] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const [filteredPayments, setFilteredPayments] = useState([])
   const [filters, setFilters] = useState({
     name: '',
     sortOrder: 'ascending',
@@ -180,6 +30,86 @@ const PaymentHistory = () => {
     black: '#2c2c2c'
   }
 
+  // Fetch payments from server
+  useEffect(() => {
+    fetchPayments()
+  }, [])
+
+  const fetchPayments = async () => {
+    try {
+      setLoading(true)
+      setError(null)
+      
+      const token = localStorage.getItem('token')
+      if (!token) {
+        throw new Error('No authentication token found')
+      }
+
+      const response = await fetch('http://localhost:3000/api/payments', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch payments')
+      }
+
+      const data = await response.json()
+      
+      // Transform the data to match the component's expected format
+      const transformedPayments = data.map(payment => ({
+        id: payment.payment_id,
+        studentId: payment.student_id,
+        studentName: `${payment.first_name} ${payment.last_name}`,
+        course: payment.course_name,
+        batch: payment.batch_identifier,
+        amount: parseFloat(payment.payment_amount),
+        processingFee: parseFloat(payment.processing_fee || 0),
+        totalDue: parseFloat(payment.total_due),
+        balance: parseFloat(payment.balance),
+        paymentDate: payment.payment_date,
+        status: payment.payment_status,
+        paymentMethod: payment.method_name,
+        referenceNumber: payment.reference_number,
+        // Note: The current schema doesn't have receipts, but we'll add placeholder
+        receipts: []
+      }))
+
+      setPayments(transformedPayments)
+      setFilteredPayments(transformedPayments)
+    } catch (err) {
+      console.error('Error fetching payments:', err)
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Fetch student payment history (for a specific student)
+  const fetchStudentPayments = async (studentId) => {
+    try {
+      const token = localStorage.getItem('token')
+      const response = await fetch(`http://localhost:3000/api/students/${studentId}/payments`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch student payments')
+      }
+
+      const data = await response.json()
+      return data
+    } catch (err) {
+      console.error('Error fetching student payments:', err)
+      return []
+    }
+  }
+
   // Apply filters
   useEffect(() => {
     let filtered = [...payments]
@@ -187,7 +117,8 @@ const PaymentHistory = () => {
     // Filter by name
     if (filters.name) {
       filtered = filtered.filter(payment => 
-        payment.studentName.toLowerCase().includes(filters.name.toLowerCase())
+        payment.studentName.toLowerCase().includes(filters.name.toLowerCase()) ||
+        payment.studentId.toLowerCase().includes(filters.name.toLowerCase())
       )
     }
 
@@ -196,10 +127,48 @@ const PaymentHistory = () => {
       filtered = filtered.filter(payment => payment.status === filters.paymentStatus)
     }
 
-    // Sort by name
+    // Filter by date range
+    if (filters.dateRange !== 'all') {
+      const now = new Date()
+      const filterDate = new Date()
+      
+      switch(filters.dateRange) {
+        case 'today':
+          filterDate.setHours(0, 0, 0, 0)
+          filtered = filtered.filter(payment => 
+            new Date(payment.paymentDate) >= filterDate
+          )
+          break
+        case 'week':
+          filterDate.setDate(now.getDate() - 7)
+          filtered = filtered.filter(payment => 
+            new Date(payment.paymentDate) >= filterDate
+          )
+          break
+        case 'month':
+          filterDate.setMonth(now.getMonth() - 1)
+          filtered = filtered.filter(payment => 
+            new Date(payment.paymentDate) >= filterDate
+          )
+          break
+        case 'year':
+          filterDate.setFullYear(now.getFullYear() - 1)
+          filtered = filtered.filter(payment => 
+            new Date(payment.paymentDate) >= filterDate
+          )
+          break
+      }
+    }
+
+    // Sort by name or date
     filtered.sort((a, b) => {
-      const comparison = a.studentName.localeCompare(b.studentName)
-      return filters.sortOrder === 'ascending' ? comparison : -comparison
+      if (filters.sortBy === 'date') {
+        const comparison = new Date(b.paymentDate) - new Date(a.paymentDate)
+        return filters.sortOrder === 'ascending' ? -comparison : comparison
+      } else {
+        const comparison = a.studentName.localeCompare(b.studentName)
+        return filters.sortOrder === 'ascending' ? comparison : -comparison
+      }
     })
 
     setFilteredPayments(filtered)
@@ -215,10 +184,94 @@ const PaymentHistory = () => {
 
   const getStatusColor = (status) => {
     switch (status) {
-      case 'completed': return colors.lightGreen
-      case 'cancelled': return colors.red
+      case 'confirmed': return colors.lightGreen
+      case 'pending': return colors.coral
+      case 'failed': return colors.red
+      case 'refunded': return colors.dustyRose
       default: return colors.olive
     }
+  }
+
+  const getStatusText = (status) => {
+    switch (status) {
+      case 'confirmed': return 'Completed'
+      case 'pending': return 'Pending'
+      case 'failed': return 'Failed'
+      case 'refunded': return 'Refunded'
+      default: return status
+    }
+  }
+
+  const formatDate = (dateString) => {
+    if (!dateString) return 'N/A'
+    const date = new Date(dateString)
+    return date.toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    })
+  }
+
+  const formatDateTime = (dateString) => {
+    if (!dateString) return 'N/A'
+    const date = new Date(dateString)
+    return date.toLocaleString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    })
+  }
+
+  // Calculate statistics
+  const completedCount = payments.filter(p => p.status === 'confirmed').length
+  const pendingCount = payments.filter(p => p.status === 'pending').length
+  const failedCount = payments.filter(p => p.status === 'failed').length
+  const totalCompletedAmount = payments
+    .filter(p => p.status === 'confirmed')
+    .reduce((sum, p) => sum + p.amount, 0)
+
+  // Pagination calculations
+  const totalPages = Math.ceil(filteredPayments.length / entriesPerPage)
+  const startIndex = (currentPage - 1) * entriesPerPage
+  const endIndex = startIndex + entriesPerPage
+  const paginatedPayments = filteredPayments.slice(startIndex, endIndex)
+
+  const handlePageChange = (pageNumber) => {
+    setCurrentPage(pageNumber)
+  }
+
+  const handlePrevPage = () => {
+    if (currentPage > 1) {
+      setCurrentPage(currentPage - 1)
+    }
+  }
+
+  const handleNextPage = () => {
+    if (currentPage < totalPages) {
+      setCurrentPage(currentPage + 1)
+    }
+  }
+
+  const getPageNumbers = () => {
+    const pageNumbers = []
+    const maxVisiblePages = 5
+    
+    if (totalPages <= maxVisiblePages) {
+      for (let i = 1; i <= totalPages; i++) {
+        pageNumbers.push(i)
+      }
+    } else {
+      const startPage = Math.max(1, currentPage - 2)
+      const endPage = Math.min(totalPages, startPage + maxVisiblePages - 1)
+      
+      for (let i = startPage; i <= endPage; i++) {
+        pageNumbers.push(i)
+      }
+    }
+    
+    return pageNumbers
   }
 
   const styles = {
@@ -416,11 +469,6 @@ const PaymentHistory = () => {
       color: '#ffffff'
     },
 
-    receiptsButton: {
-      backgroundColor: colors.olive,
-      color: '#ffffff'
-    },
-
     modal: {
       position: 'fixed',
       top: 0,
@@ -473,63 +521,30 @@ const PaymentHistory = () => {
       cursor: 'pointer'
     },
 
-    receiptsList: {
-      marginTop: '20px'
-    },
-
-    receiptItem: {
+    loadingContainer: {
       display: 'flex',
+      justifyContent: 'center',
       alignItems: 'center',
-      justifyContent: 'space-between',
-      padding: '12px 16px',
-      backgroundColor: colors.cream,
-      borderRadius: '8px',
-      marginBottom: '12px',
-      border: '1px solid #e2e8f0'
+      minHeight: '400px',
+      backgroundColor: '#ffffff',
+      borderRadius: '12px',
+      marginTop: '24px'
     },
 
-    receiptInfo: {
+    errorContainer: {
+      backgroundColor: '#ffffff',
+      borderRadius: '12px',
+      padding: '24px',
+      marginTop: '24px',
+      border: `1px solid ${colors.red}`,
       display: 'flex',
       alignItems: 'center',
       gap: '12px'
     },
 
-    receiptDetails: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: '4px'
-    },
-
-    receiptName: {
-      fontSize: '14px',
-      fontWeight: '500',
-      color: colors.black
-    },
-
-    receiptMeta: {
-      fontSize: '12px',
-      color: colors.olive
-    },
-
-    downloadButton: {
-      backgroundColor: colors.lightGreen,
-      color: '#ffffff',
-      border: 'none',
-      borderRadius: '6px',
-      padding: '8px 12px',
-      fontSize: '12px',
-      fontWeight: '500',
-      cursor: 'pointer',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '4px'
-    },
-
-    noReceipts: {
-      textAlign: 'center',
-      padding: '20px',
-      color: colors.olive,
-      fontStyle: 'italic'
+    errorText: {
+      color: colors.red,
+      margin: 0
     },
 
     pagination: {
@@ -576,53 +591,43 @@ const PaymentHistory = () => {
       color: '#999',
       cursor: 'not-allowed',
       border: '1px solid #ddd'
+    },
+
+    noData: {
+      textAlign: 'center',
+      padding: '40px',
+      color: colors.olive,
+      fontSize: '16px'
     }
   }
 
-  const completedCount = payments.filter(p => p.status === 'completed').length
-  const cancelledCount = payments.filter(p => p.status === 'cancelled').length
-  const totalCompletedAmount = payments.filter(p => p.status === 'completed').reduce((sum, p) => sum + p.amount, 0)
-
-  // Pagination calculations
-  const totalPages = Math.ceil(filteredPayments.length / entriesPerPage)
-  const startIndex = (currentPage - 1) * entriesPerPage
-  const endIndex = startIndex + entriesPerPage
-  const paginatedPayments = filteredPayments.slice(startIndex, endIndex)
-
-  const handlePageChange = (pageNumber) => {
-    setCurrentPage(pageNumber)
+  if (loading) {
+    return (
+      <div style={styles.container}>
+        <div style={styles.header}>
+          <h1 style={styles.title}>Payment History</h1>
+          <p style={styles.subtitle}>Loading payment records...</p>
+        </div>
+        <div style={styles.loadingContainer}>
+          <div>Loading...</div>
+        </div>
+      </div>
+    )
   }
 
-  const handlePrevPage = () => {
-    if (currentPage > 1) {
-      setCurrentPage(currentPage - 1)
-    }
-  }
-
-  const handleNextPage = () => {
-    if (currentPage < totalPages) {
-      setCurrentPage(currentPage + 1)
-    }
-  }
-
-  const getPageNumbers = () => {
-    const pageNumbers = []
-    const maxVisiblePages = 5
-    
-    if (totalPages <= maxVisiblePages) {
-      for (let i = 1; i <= totalPages; i++) {
-        pageNumbers.push(i)
-      }
-    } else {
-      const startPage = Math.max(1, currentPage - 2)
-      const endPage = Math.min(totalPages, startPage + maxVisiblePages - 1)
-      
-      for (let i = startPage; i <= endPage; i++) {
-        pageNumbers.push(i)
-      }
-    }
-    
-    return pageNumbers
+  if (error) {
+    return (
+      <div style={styles.container}>
+        <div style={styles.header}>
+          <h1 style={styles.title}>Payment History</h1>
+          <p style={styles.subtitle}>Error loading payment records</p>
+        </div>
+        <div style={styles.errorContainer}>
+          <AlertCircle size={24} color={colors.red} />
+          <p style={styles.errorText}>{error}</p>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -630,7 +635,7 @@ const PaymentHistory = () => {
       {/* Header */}
       <div style={styles.header}>
         <h1 style={styles.title}>Payment History</h1>
-        <p style={styles.subtitle}>View completed and cancelled payments with receipt details</p>
+        <p style={styles.subtitle}>View all payment transactions and their details</p>
       </div>
 
       {/* Statistics Card */}
@@ -638,19 +643,19 @@ const PaymentHistory = () => {
         <div style={styles.statsGrid}>
           <div style={styles.statItem}>
             <div style={styles.statValue}>{completedCount}</div>
-            <div style={styles.statLabel}>Completed Payments</div>
+            <div style={styles.statLabel}>Confirmed Payments</div>
           </div>
           <div style={styles.statItem}>
-            <div style={styles.statValue}>{cancelledCount}</div>
-            <div style={styles.statLabel}>Cancelled Payments</div>
+            <div style={styles.statValue}>{pendingCount}</div>
+            <div style={styles.statLabel}>Pending Payments</div>
+          </div>
+          <div style={styles.statItem}>
+            <div style={styles.statValue}>{failedCount}</div>
+            <div style={styles.statLabel}>Failed Payments</div>
           </div>
           <div style={styles.statItem}>
             <div style={styles.statValue}>₱{totalCompletedAmount.toLocaleString()}</div>
-            <div style={styles.statLabel}>Total Completed Amount</div>
-          </div>
-          <div style={styles.statItem}>
-            <div style={styles.statValue}>{filteredPayments.length}</div>
-            <div style={styles.statLabel}>Filtered Results</div>
+            <div style={styles.statLabel}>Total Confirmed Amount</div>
           </div>
         </div>
       </div>
@@ -671,10 +676,10 @@ const PaymentHistory = () => {
 
         <div style={styles.filterControls}>
           <div style={styles.filterGroup}>
-            <label style={styles.filterLabel}>Filter by Name</label>
+            <label style={styles.filterLabel}>Search by Name or ID</label>
             <input
               type="text"
-              placeholder="Enter student name..."
+              placeholder="Enter student name or ID..."
               value={filters.name}
               onChange={(e) => handleFilterChange('name', e.target.value)}
               style={styles.filterInput}
@@ -701,8 +706,25 @@ const PaymentHistory = () => {
               style={styles.filterSelect}
             >
               <option value="all">All Status</option>
-              <option value="completed">Completed</option>
-              <option value="cancelled">Cancelled</option>
+              <option value="confirmed">Confirmed</option>
+              <option value="pending">Pending</option>
+              <option value="failed">Failed</option>
+              <option value="refunded">Refunded</option>
+            </select>
+          </div>
+
+          <div style={styles.filterGroup}>
+            <label style={styles.filterLabel}>Date Range</label>
+            <select
+              value={filters.dateRange}
+              onChange={(e) => handleFilterChange('dateRange', e.target.value)}
+              style={styles.filterSelect}
+            >
+              <option value="all">All Time</option>
+              <option value="today">Today</option>
+              <option value="week">Last 7 Days</option>
+              <option value="month">Last Month</option>
+              <option value="year">Last Year</option>
             </select>
           </div>
         </div>
@@ -714,64 +736,67 @@ const PaymentHistory = () => {
           Payment History {filters.name || filters.paymentStatus !== 'all' ? '(Filtered)' : '(All Records)'}
         </div>
         
-        <table style={styles.table}>
-          <thead>
-            <tr style={styles.tableHeaderRow}>
-              <th style={styles.tableHeaderCell}>Student ID</th>
-              <th style={styles.tableHeaderCell}>Student Name</th>
-              <th style={styles.tableHeaderCell}>Course</th>
-              <th style={styles.tableHeaderCell}>Amount</th>
-              <th style={styles.tableHeaderCell}>Completion Date</th>
-              <th style={styles.tableHeaderCell}>Status</th>
-              <th style={styles.tableHeaderCell}>Receipts</th>
-              <th style={styles.tableHeaderCell}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {paginatedPayments.map((payment) => (
-              <tr key={payment.id} style={styles.tableRow}>
-                <td style={styles.tableCell}>{payment.id}</td>
-                <td style={styles.tableCell}>{payment.studentName}</td>
-                <td style={styles.tableCell}>{payment.course}</td>
-                <td style={styles.tableCell}>₱{payment.amount.toLocaleString()}</td>
-                <td style={styles.tableCell}>
-                  {payment.status === 'completed' ? payment.completedDate : payment.cancelledDate}
-                </td>
-                <td style={styles.tableCell}>
-                  <span
-                    style={{
-                      ...styles.statusBadge,
-                      backgroundColor: getStatusColor(payment.status)
-                    }}
-                  >
-                    {payment.status}
-                  </span>
-                </td>
-                <td style={styles.tableCell}>
-                  {payment.receipts.length > 0 ? `${payment.receipts.length} file(s)` : 'No receipts'}
-                </td>
-                <td style={styles.tableCell}>
-                  <button
-                    style={{...styles.actionButton, ...styles.viewButton}}
-                    onClick={() => setViewingPayment(payment)}
-                  >
-                    <Eye size={14} />
-                    View Details
-                  </button>
-                  {payment.receipts.length > 0 && (
-                    <button
-                      style={{...styles.actionButton, ...styles.receiptsButton}}
-                      onClick={() => setViewingReceipts(payment)}
-                    >
-                      <FileText size={14} />
-                      View Receipts
-                    </button>
-                  )}
-                </td>
+        {paginatedPayments.length === 0 ? (
+          <div style={styles.noData}>
+            No payment records found matching your criteria.
+          </div>
+        ) : (
+          <table style={styles.table}>
+            <thead>
+              <tr style={styles.tableHeaderRow}>
+                <th style={styles.tableHeaderCell}>Payment ID</th>
+                <th style={styles.tableHeaderCell}>Student Name</th>
+                <th style={styles.tableHeaderCell}>Course/Batch</th>
+                <th style={styles.tableHeaderCell}>Amount</th>
+                <th style={styles.tableHeaderCell}>Payment Date</th>
+                <th style={styles.tableHeaderCell}>Status</th>
+                <th style={styles.tableHeaderCell}>Method</th>
+                <th style={styles.tableHeaderCell}>Actions</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {paginatedPayments.map((payment) => (
+                <tr key={payment.id} style={styles.tableRow}>
+                  <td style={styles.tableCell}>{payment.id}</td>
+                  <td style={styles.tableCell}>
+                    <div>{payment.studentName}</div>
+                    <div style={{ fontSize: '12px', color: colors.olive }}>
+                      {payment.studentId}
+                    </div>
+                  </td>
+                  <td style={styles.tableCell}>
+                    <div>{payment.course}</div>
+                    <div style={{ fontSize: '12px', color: colors.olive }}>
+                      {payment.batch}
+                    </div>
+                  </td>
+                  <td style={styles.tableCell}>₱{payment.amount.toLocaleString()}</td>
+                  <td style={styles.tableCell}>{formatDate(payment.paymentDate)}</td>
+                  <td style={styles.tableCell}>
+                    <span
+                      style={{
+                        ...styles.statusBadge,
+                        backgroundColor: getStatusColor(payment.status)
+                      }}
+                    >
+                      {getStatusText(payment.status)}
+                    </span>
+                  </td>
+                  <td style={styles.tableCell}>{payment.paymentMethod}</td>
+                  <td style={styles.tableCell}>
+                    <button
+                      style={{...styles.actionButton, ...styles.viewButton}}
+                      onClick={() => setViewingPayment(payment)}
+                    >
+                      <Eye size={14} />
+                      View Details
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
 
       {/* Pagination */}
@@ -827,33 +852,45 @@ const PaymentHistory = () => {
             <h2 style={styles.modalHeader}>Payment Details - {viewingPayment.id}</h2>
             
             <div style={styles.formGroup}>
+              <strong>Payment ID:</strong> {viewingPayment.id}
+            </div>
+            <div style={styles.formGroup}>
+              <strong>Student ID:</strong> {viewingPayment.studentId}
+            </div>
+            <div style={styles.formGroup}>
               <strong>Student Name:</strong> {viewingPayment.studentName}
-            </div>
-            <div style={styles.formGroup}>
-              <strong>Email:</strong> {viewingPayment.email}
-            </div>
-            <div style={styles.formGroup}>
-              <strong>Phone:</strong> {viewingPayment.phone}
             </div>
             <div style={styles.formGroup}>
               <strong>Course:</strong> {viewingPayment.course}
             </div>
             <div style={styles.formGroup}>
-              <strong>Amount:</strong> ₱{viewingPayment.amount.toLocaleString()}
+              <strong>Batch:</strong> {viewingPayment.batch}
             </div>
             <div style={styles.formGroup}>
-              <strong>Due Date:</strong> {viewingPayment.dueDate}
+              <strong>Payment Amount:</strong> ₱{viewingPayment.amount.toLocaleString()}
+            </div>
+            {viewingPayment.processingFee > 0 && (
+              <div style={styles.formGroup}>
+                <strong>Processing Fee:</strong> ₱{viewingPayment.processingFee.toLocaleString()}
+              </div>
+            )}
+            <div style={styles.formGroup}>
+              <strong>Total Due:</strong> ₱{viewingPayment.totalDue.toLocaleString()}
             </div>
             <div style={styles.formGroup}>
-              <strong>Date Created:</strong> {viewingPayment.dateCreated}
+              <strong>Remaining Balance:</strong> ₱{viewingPayment.balance.toLocaleString()}
             </div>
             <div style={styles.formGroup}>
-              <strong>{viewingPayment.status === 'completed' ? 'Completed Date:' : 'Cancelled Date:'}</strong>{' '}
-              {viewingPayment.status === 'completed' ? viewingPayment.completedDate : viewingPayment.cancelledDate}
+              <strong>Payment Date:</strong> {formatDateTime(viewingPayment.paymentDate)}
             </div>
             <div style={styles.formGroup}>
               <strong>Payment Method:</strong> {viewingPayment.paymentMethod}
             </div>
+            {viewingPayment.referenceNumber && (
+              <div style={styles.formGroup}>
+                <strong>Reference Number:</strong> {viewingPayment.referenceNumber}
+              </div>
+            )}
             <div style={styles.formGroup}>
               <strong>Status:</strong> 
               <span
@@ -863,86 +900,14 @@ const PaymentHistory = () => {
                   marginLeft: '8px'
                 }}
               >
-                {viewingPayment.status}
+                {getStatusText(viewingPayment.status)}
               </span>
-            </div>
-            <div style={styles.formGroup}>
-              <strong>Notes:</strong> {viewingPayment.notes}
-            </div>
-            <div style={styles.formGroup}>
-              <strong>Total Receipts:</strong> {viewingPayment.receipts.length} file(s)
             </div>
 
             <div style={styles.formActions}>
               <button
                 style={styles.closeButton}
                 onClick={() => setViewingPayment(null)}
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* View Receipts Modal */}
-      {viewingReceipts && (
-        <div style={styles.modal} onClick={() => setViewingReceipts(null)}>
-          <div style={styles.modalContent} onClick={(e) => e.stopPropagation()}>
-            <h2 style={styles.modalHeader}>
-              Receipts for {viewingReceipts.studentName} - {viewingReceipts.id}
-            </h2>
-            
-            <div style={styles.formGroup}>
-              <strong>Payment Amount:</strong> ₱{viewingReceipts.amount.toLocaleString()}
-            </div>
-            <div style={styles.formGroup}>
-              <strong>Payment Date:</strong> {viewingReceipts.completedDate}
-            </div>
-            <div style={styles.formGroup}>
-              <strong>Payment Method:</strong> {viewingReceipts.paymentMethod}
-            </div>
-
-            <div style={styles.receiptsList}>
-              <h3 style={{ margin: '0 0 16px 0', color: colors.black }}>
-                Submitted Receipts ({viewingReceipts.receipts.length})
-              </h3>
-              
-              {viewingReceipts.receipts.length > 0 ? (
-                viewingReceipts.receipts.map((receipt) => (
-                  <div key={receipt.id} style={styles.receiptItem}>
-                    <div style={styles.receiptInfo}>
-                      <FileText size={20} color={colors.olive} />
-                      <div style={styles.receiptDetails}>
-                        <div style={styles.receiptName}>{receipt.filename}</div>
-                        <div style={styles.receiptMeta}>
-                          {receipt.type} • Uploaded: {receipt.uploadDate}
-                        </div>
-                      </div>
-                    </div>
-                    <button
-                      style={styles.downloadButton}
-                      onClick={() => {
-                        // In a real application, this would download the file
-                        alert(`Downloading ${receipt.filename}`)
-                      }}
-                    >
-                      <Download size={14} />
-                      Download
-                    </button>
-                  </div>
-                ))
-              ) : (
-                <div style={styles.noReceipts}>
-                  No receipts available for this payment
-                </div>
-              )}
-            </div>
-
-            <div style={styles.formActions}>
-              <button
-                style={styles.closeButton}
-                onClick={() => setViewingReceipts(null)}
               >
                 Close
               </button>

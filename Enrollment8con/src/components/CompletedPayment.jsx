@@ -2,92 +2,13 @@ import { useState, useEffect } from 'react'
 import { Search, Filter, Edit2, Check, X, Eye, Calendar, DollarSign, User, Phone, Mail, ChevronDown, ChevronUp, FileText, Download, ChevronLeft, ChevronRight } from 'lucide-react'
 
 const CompletedPayment = () => {
-  const [payments, setPayments] = useState([
-    {
-      id: 'PAY001',
-      studentName: 'Maria Santos',
-      email: 'maria.santos@email.com',
-      phone: '+63 912 345 6789',
-      course: 'Basic',
-      amount: 15000,
-      totalPaid: 15000,
-      dueDate: '2025-06-15',
-      dateCreated: '2025-05-20',
-      completedDate: '2025-06-14',
-      status: 'completed',
-      paymentMethod: 'Bank Transfer',
-      notes: 'Payment completed successfully',
-      receipts: [
-        {
-          id: 'REC001',
-          fileName: 'bank_transfer_receipt_001.pdf',
-          uploadDate: '2025-06-14',
-          amount: 15000,
-          description: 'Full payment via BPI bank transfer'
-        }
-      ]
-    },
-    {
-      id: 'PAY002',
-      studentName: 'Juan Dela Cruz',
-      email: 'juan.delacruz@email.com',
-      phone: '+63 917 234 5678',
-      course: 'Basic',
-      amount: 25000,
-      totalPaid: 25000,
-      dueDate: '2025-06-20',
-      dateCreated: '2025-05-18',
-      completedDate: '2025-06-19',
-      status: 'completed',
-      paymentMethod: 'GCash',
-      notes: 'Payment completed in installments',
-      receipts: [
-        {
-          id: 'REC002',
-          fileName: 'gcash_receipt_001.jpg',
-          uploadDate: '2025-06-05',
-          amount: 12500,
-          description: 'First installment via GCash'
-        },
-        {
-          id: 'REC003',
-          fileName: 'gcash_receipt_002.jpg',
-          uploadDate: '2025-06-19',
-          amount: 12500,
-          description: 'Final installment via GCash'
-        }
-      ]
-    },
-    {
-      id: 'PAY003',
-      studentName: 'Ana Rodriguez',
-      email: 'ana.rodriguez@email.com',
-      phone: '+63 923 456 7890',
-      course: 'Basic',
-      amount: 18000,
-      totalPaid: 18000,
-      dueDate: '2025-06-12',
-      dateCreated: '2025-05-22',
-      completedDate: '2025-06-11',
-      status: 'completed',
-      paymentMethod: 'Credit Card',
-      notes: 'Payment completed via credit card',
-      receipts: [
-        {
-          id: 'REC004',
-          fileName: 'credit_card_receipt.pdf',
-          uploadDate: '2025-06-11',
-          amount: 18000,
-          description: 'Full payment via Visa credit card'
-        }
-      ]
-    }
-  ])
-
-  const [filteredPayments, setFilteredPayments] = useState(payments)
+  const [payments, setPayments] = useState([])
+  const [filteredPayments, setFilteredPayments] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
   const [filters, setFilters] = useState({
     name: '',
-    sortOrder: 'ascending',
+    sortOrder: 'date_desc',
     dateRange: 'all'
   })
   const [showFilters, setShowFilters] = useState(false)
@@ -109,6 +30,178 @@ const CompletedPayment = () => {
     black: '#2c2c2c'
   }
 
+  // Fetch completed payments from the backend
+  const fetchCompletedPayments = async () => {
+    try {
+      setLoading(true)
+      setError(null)
+      
+      const token = localStorage.getItem('token')
+      if (!token) {
+        throw new Error('No authentication token found')
+      }
+
+      // Determine the correct API base URL
+      const apiBaseUrl = process.env.NODE_ENV === 'development' 
+        ? 'http://localhost:3000' 
+        : window.location.origin
+
+      const apiUrl = `${apiBaseUrl}/api/payments/completed`
+      console.log('Fetching from URL:', apiUrl)
+      console.log('Using token:', token ? 'Token found' : 'No token')
+
+      const response = await fetch(apiUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      })
+
+      console.log('Response status:', response.status)
+      console.log('Response headers:', response.headers)
+
+      // Check if the response is HTML (indicating an error page)
+      const contentType = response.headers.get('content-type')
+      if (contentType && contentType.includes('text/html')) {
+        const htmlContent = await response.text()
+        console.error('Received HTML instead of JSON:', htmlContent)
+        throw new Error(`Server returned HTML instead of JSON. Status: ${response.status}. This usually means the API endpoint doesn't exist.`)
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('API Error Response:', errorText)
+        
+        if (response.status === 401) {
+          throw new Error('Unauthorized access. Please login again.')
+        }
+        if (response.status === 404) {
+          throw new Error('API endpoint not found. Please ensure the server has the /api/payments/completed endpoint.')
+        }
+        throw new Error(`API Error (${response.status}): ${errorText}`)
+      }
+
+      const data = await response.json()
+      
+      // Log the received data for debugging
+      console.log('Received completed payments data:', data)
+      
+      // Check if data is an array
+      if (!Array.isArray(data)) {
+        console.warn('Expected array but received:', typeof data, data)
+        throw new Error('Invalid data format received from server')
+      }
+      
+      // Transform the data to match the component's expected structure
+      const transformedPayments = data.map(payment => ({
+        id: payment.payment_id,
+        studentName: `${payment.first_name} ${payment.last_name}`,
+        email: payment.email,
+        phone: payment.phone || 'N/A',
+        course: payment.course_name,
+        batch: payment.batch_identifier,
+        amount: parseFloat(payment.payment_amount) || 0,
+        totalPaid: parseFloat(payment.payment_amount) || 0,
+        dueDate: payment.payment_date,
+        dateCreated: payment.created_at,
+        completedDate: payment.payment_date,
+        status: payment.payment_status === 'completed' ? 'completed' : 'confirmed',
+        paymentMethod: payment.method_name,
+        notes: payment.notes || 'Payment completed successfully',
+        referenceNumber: payment.reference_number,
+        processingFee: parseFloat(payment.processing_fee) || 0,
+        studentId: payment.student_id,
+        accountId: payment.account_id,
+        offeringId: payment.offering_id,
+        receipts: [
+          {
+            id: `REC${payment.payment_id}`,
+            fileName: `payment_receipt_${payment.reference_number || payment.payment_id}.pdf`,
+            uploadDate: payment.payment_date,
+            amount: parseFloat(payment.payment_amount) || 0,
+            description: `Payment via ${payment.method_name}`
+          }
+        ]
+      }))
+
+      console.log('Transformed payments:', transformedPayments)
+      setPayments(transformedPayments)
+      
+    } catch (err) {
+      console.error('Error fetching completed payments:', err)
+      
+      // Try fallback to the existing payments endpoint with status filter
+      try {
+        console.log('Trying fallback endpoint...')
+        const apiBaseUrl = process.env.NODE_ENV === 'development' 
+          ? 'http://localhost:3000' 
+          : window.location.origin
+        
+        const fallbackUrl = `${apiBaseUrl}/api/payments?status=completed`
+        console.log('Fallback URL:', fallbackUrl)
+        
+        const token = localStorage.getItem('token')
+        const fallbackResponse = await fetch(fallbackUrl, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        })
+
+        if (fallbackResponse.ok) {
+          const fallbackData = await fallbackResponse.json()
+          console.log('Fallback successful, received data:', fallbackData)
+          
+          if (Array.isArray(fallbackData)) {
+            const transformedPayments = fallbackData.map(payment => ({
+              id: payment.payment_id,
+              studentName: `${payment.first_name} ${payment.last_name}`,
+              email: payment.email,
+              phone: payment.phone || 'N/A',
+              course: payment.course_name,
+              batch: payment.batch_identifier,
+              amount: parseFloat(payment.payment_amount) || 0,
+              totalPaid: parseFloat(payment.payment_amount) || 0,
+              dueDate: payment.payment_date,
+              dateCreated: payment.created_at,
+              completedDate: payment.payment_date,
+              status: payment.payment_status === 'completed' ? 'completed' : 'confirmed',
+              paymentMethod: payment.method_name,
+              notes: payment.notes || 'Payment completed successfully',
+              referenceNumber: payment.reference_number,
+              processingFee: parseFloat(payment.processing_fee) || 0,
+              studentId: payment.student_id,
+              accountId: payment.account_id,
+              offeringId: payment.offering_id,
+              receipts: [
+                {
+                  id: `REC${payment.payment_id}`,
+                  fileName: `payment_receipt_${payment.reference_number || payment.payment_id}.pdf`,
+                  uploadDate: payment.payment_date,
+                  amount: parseFloat(payment.payment_amount) || 0,
+                  description: `Payment via ${payment.method_name}`
+                }
+              ]
+            }))
+            
+            setPayments(transformedPayments)
+            setError(null) // Clear the error since fallback worked
+            return
+          }
+        }
+      } catch (fallbackErr) {
+        console.error('Fallback also failed:', fallbackErr)
+      }
+      
+      // If both attempts failed, set the original error
+      setError(`${err.message}\n\nTroubleshooting:\n1. Make sure your backend server is running\n2. Check if the API endpoint exists\n3. Verify CORS configuration\n4. Check browser console for network errors`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   // Apply filters
   useEffect(() => {
     let filtered = [...payments]
@@ -116,7 +209,8 @@ const CompletedPayment = () => {
     // Filter by name
     if (filters.name) {
       filtered = filtered.filter(payment => 
-        payment.studentName.toLowerCase().includes(filters.name.toLowerCase())
+        payment.studentName.toLowerCase().includes(filters.name.toLowerCase()) ||
+        payment.studentId.toLowerCase().includes(filters.name.toLowerCase())
       )
     }
 
@@ -160,6 +254,11 @@ const CompletedPayment = () => {
     setCurrentPage(1) // Reset to first page when filters change
   }, [payments, filters])
 
+  // Fetch data on component mount
+  useEffect(() => {
+    fetchCompletedPayments()
+  }, [])
+
   const handleFilterChange = (filterType, value) => {
     setFilters(prev => ({
       ...prev,
@@ -167,9 +266,34 @@ const CompletedPayment = () => {
     }))
   }
 
-  const downloadReceipt = (receipt) => {
-    // Simulate receipt download
-    alert(`Downloading receipt: ${receipt.fileName}`)
+  const downloadReceipt = async (receipt, payment) => {
+    try {
+      // In a real implementation, you would fetch the actual receipt file
+      // For now, we'll simulate a download
+      const receiptData = {
+        paymentId: payment.id,
+        studentName: payment.studentName,
+        amount: receipt.amount,
+        date: receipt.uploadDate,
+        method: payment.paymentMethod,
+        reference: payment.referenceNumber
+      }
+      
+      const blob = new Blob([JSON.stringify(receiptData, null, 2)], { type: 'application/json' })
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.style.display = 'none'
+      a.href = url
+      a.download = receipt.fileName
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      document.body.removeChild(a)
+      
+    } catch (error) {
+      console.error('Error downloading receipt:', error)
+      alert('Failed to download receipt')
+    }
   }
 
   // Pagination calculations
@@ -255,6 +379,18 @@ const CompletedPayment = () => {
       margin: 0
     },
 
+    refreshButton: {
+      backgroundColor: colors.darkGreen,
+      color: '#ffffff',
+      border: 'none',
+      borderRadius: '8px',
+      padding: '10px 16px',
+      cursor: 'pointer',
+      fontSize: '14px',
+      fontWeight: '500',
+      marginTop: '10px'
+    },
+
     filterSection: {
       backgroundColor: '#ffffff',
       borderRadius: '12px',
@@ -315,6 +451,23 @@ const CompletedPayment = () => {
       borderRadius: '6px',
       fontSize: '14px',
       backgroundColor: '#ffffff'
+    },
+
+    loadingContainer: {
+      backgroundColor: '#ffffff',
+      borderRadius: '12px',
+      padding: '40px',
+      textAlign: 'center',
+      border: '1px solid #e2e8f0'
+    },
+
+    errorContainer: {
+      backgroundColor: '#ffffff',
+      borderRadius: '12px',
+      padding: '40px',
+      textAlign: 'center',
+      border: '1px solid #e2e8f0',
+      color: colors.red
     },
 
     statsCard: {
@@ -609,8 +762,28 @@ const CompletedPayment = () => {
       margin: 0,
       opacity: 0.9
     }
+  }
 
+  // Show loading state
+  if (loading) {
+    return (
+      <div style={styles.container}>
+        <div style={styles.loadingContainer}>
+          <p>Loading completed payments...</p>
+        </div>
+      </div>
+    )
+  }
 
+  // Show error state
+  if (error) {
+    return (
+      <div style={styles.container}>
+        <div style={styles.errorContainer}>
+          <p>Error loading payments: {error}</p>
+        </div>
+      </div>
+    )
   }
 
   const completedCount = payments.length
@@ -717,12 +890,12 @@ const CompletedPayment = () => {
         <table style={styles.table}>
           <thead>
             <tr style={styles.tableHeaderRow}>
-              <th style={styles.tableHeaderCell}>Student ID</th>
+              <th style={styles.tableHeaderCell}>Payment ID</th>
               <th style={styles.tableHeaderCell}>Student Name</th>
               <th style={styles.tableHeaderCell}>Course</th>
               <th style={styles.tableHeaderCell}>Amount Paid</th>
               <th style={styles.tableHeaderCell}>Completed Date</th>
-              <th style={styles.tableHeaderCell}>Receipts</th>
+              <th style={styles.tableHeaderCell}>Payment Method</th>
               <th style={styles.tableHeaderCell}>Status</th>
               <th style={styles.tableHeaderCell}>Actions</th>
             </tr>
@@ -734,8 +907,8 @@ const CompletedPayment = () => {
                 <td style={styles.tableCell}>{payment.studentName}</td>
                 <td style={styles.tableCell}>{payment.course}</td>
                 <td style={styles.tableCell}>₱{payment.totalPaid.toLocaleString()}</td>
-                <td style={styles.tableCell}>{payment.completedDate}</td>
-                <td style={styles.tableCell}>{payment.receipts.length} receipt{payment.receipts.length !== 1 ? 's' : ''}</td>
+                <td style={styles.tableCell}>{new Date(payment.completedDate).toLocaleDateString()}</td>
+                <td style={styles.tableCell}>{payment.paymentMethod}</td>
                 <td style={styles.tableCell}>
                   <span style={styles.statusBadge}>
                     {payment.status}
@@ -757,55 +930,57 @@ const CompletedPayment = () => {
       </div>
 
       {/* Pagination Controls */}
-      <div style={styles.paginationContainer}>
-        <div style={styles.paginationInfo}>
-          Showing {startIndex + 1} to {Math.min(endIndex, filteredPayments.length)} of {filteredPayments.length} entries
-        </div>
-        
-        <div style={styles.paginationControls}>
-          <button
-            style={{
-              ...styles.paginationButton,
-              ...(currentPage === 1 ? styles.paginationButtonDisabled : {})
-            }}
-            onClick={handlePrevPage}
-            disabled={currentPage === 1}
-          >
-            <ChevronLeft size={16} />
-            Previous
-          </button>
+      {totalPages > 1 && (
+        <div style={styles.paginationContainer}>
+          <div style={styles.paginationInfo}>
+            Showing {startIndex + 1} to {Math.min(endIndex, filteredPayments.length)} of {filteredPayments.length} entries
+          </div>
+          
+          <div style={styles.paginationControls}>
+            <button
+              style={{
+                ...styles.paginationButton,
+                ...(currentPage === 1 ? styles.paginationButtonDisabled : {})
+              }}
+              onClick={handlePrevPage}
+              disabled={currentPage === 1}
+            >
+              <ChevronLeft size={16} />
+              Previous
+            </button>
 
-          {getPageNumbers().map((page, index) => (
-            <span key={index}>
-              {page === '...' ? (
-                <span style={styles.paginationEllipsis}>...</span>
-              ) : (
-                <button
-                  style={{
-                    ...styles.paginationButton,
-                    ...(currentPage === page ? styles.paginationButtonActive : {})
-                  }}
-                  onClick={() => handlePageChange(page)}
-                >
-                  {page}
-                </button>
-              )}
-            </span>
-          ))}
+            {getPageNumbers().map((page, index) => (
+              <span key={index}>
+                {page === '...' ? (
+                  <span style={styles.paginationEllipsis}>...</span>
+                ) : (
+                  <button
+                    style={{
+                      ...styles.paginationButton,
+                      ...(currentPage === page ? styles.paginationButtonActive : {})
+                    }}
+                    onClick={() => handlePageChange(page)}
+                  >
+                    {page}
+                  </button>
+                )}
+              </span>
+            ))}
 
-          <button
-            style={{
-              ...styles.paginationButton,
-              ...(currentPage === totalPages ? styles.paginationButtonDisabled : {})
-            }}
-            onClick={handleNextPage}
-            disabled={currentPage === totalPages}
-          >
-            Next
-            <ChevronRight size={16} />
-          </button>
+            <button
+              style={{
+                ...styles.paginationButton,
+                ...(currentPage === totalPages ? styles.paginationButtonDisabled : {})
+              }}
+              onClick={handleNextPage}
+              disabled={currentPage === totalPages}
+            >
+              Next
+              <ChevronRight size={16} />
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* View Payment Details Modal */}
       {viewingPayment && (
@@ -817,6 +992,9 @@ const CompletedPayment = () => {
               <strong>Student Name:</strong> {viewingPayment.studentName}
             </div>
             <div style={styles.formGroup}>
+              <strong>Student ID:</strong> {viewingPayment.studentId}
+            </div>
+            <div style={styles.formGroup}>
               <strong>Email:</strong> {viewingPayment.email}
             </div>
             <div style={styles.formGroup}>
@@ -825,18 +1003,30 @@ const CompletedPayment = () => {
             <div style={styles.formGroup}>
               <strong>Course:</strong> {viewingPayment.course}
             </div>
+            {viewingPayment.batch && (
+              <div style={styles.formGroup}>
+                <strong>Batch:</strong> {viewingPayment.batch}
+              </div>
+            )}
             <div style={styles.formGroup}>
-              <strong>Original Amount:</strong> ₱{viewingPayment.amount.toLocaleString()}
+              <strong>Amount Paid:</strong> ₱{viewingPayment.amount.toLocaleString()}
             </div>
+            {viewingPayment.processingFee > 0 && (
+              <div style={styles.formGroup}>
+                <strong>Processing Fee:</strong> ₱{viewingPayment.processingFee.toLocaleString()}
+              </div>
+            )}
             <div style={styles.formGroup}>
-              <strong>Due Date:</strong> {viewingPayment.dueDate}
-            </div>
-            <div style={styles.formGroup}>
-              <strong>Completed Date:</strong> {viewingPayment.completedDate}
+              <strong>Payment Date:</strong> {new Date(viewingPayment.completedDate).toLocaleDateString()}
             </div>
             <div style={styles.formGroup}>
               <strong>Payment Method:</strong> {viewingPayment.paymentMethod}
             </div>
+            {viewingPayment.referenceNumber && (
+              <div style={styles.formGroup}>
+                <strong>Reference Number:</strong> {viewingPayment.referenceNumber}
+              </div>
+            )}
             <div style={styles.formGroup}>
               <strong>Notes:</strong> {viewingPayment.notes}
             </div>
@@ -851,22 +1041,22 @@ const CompletedPayment = () => {
             <div style={styles.receiptSection}>
               <div style={styles.receiptHeader}>
                 <FileText size={16} />
-                Submitted Receipts ({viewingPayment.receipts.length})
+                Payment Receipt ({viewingPayment.receipts.length})
               </div>
               
               {viewingPayment.receipts.map((receipt) => (
                 <div key={receipt.id} style={styles.receiptItem}>
                   <div style={styles.receiptName}>{receipt.fileName}</div>
                   <div style={styles.receiptDetails}>
-                    Uploaded: {receipt.uploadDate} | {receipt.description}
+                    Payment Date: {new Date(receipt.uploadDate).toLocaleDateString()} | {receipt.description}
                   </div>
                   <div style={styles.receiptAmount}>₱{receipt.amount.toLocaleString()}</div>
                   <button
                     style={styles.downloadButton}
-                    onClick={() => downloadReceipt(receipt)}
+                    onClick={() => downloadReceipt(receipt, viewingPayment)}
                   >
                     <Download size={12} />
-                    Download
+                    Download Receipt
                   </button>
                 </div>
               ))}

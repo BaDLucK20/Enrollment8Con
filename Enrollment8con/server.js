@@ -1056,11 +1056,28 @@ app.get('/api/payments', authenticateToken, authorize(['admin', 'staff']), async
     const { name_sort, status, student_search } = req.query;
     
     let query = `
-      SELECT p.payment_id, p.payment_amount, p.processing_fee, p.payment_date, p.payment_status,
-             p.reference_number, pm.method_name,
-             sa.total_due, sa.balance,
-             s.student_id, per.first_name, per.last_name,
-             c.course_name, co.batch_identifier
+      SELECT 
+        p.payment_id, 
+        p.payment_amount, 
+        p.processing_fee, 
+        p.payment_date, 
+        p.payment_status,
+        p.reference_number, 
+        p.notes,
+        p.created_at,
+        pm.method_name,
+        sa.account_id,
+        sa.total_due, 
+        sa.balance,
+        s.student_id, 
+        per.first_name, 
+        per.last_name,
+        per.email,
+        c.course_name, 
+        co.batch_identifier,
+        co.offering_id,
+        pm.method_id,
+        ci_phone.contact_value as phone
       FROM payments p
       JOIN payment_methods pm ON p.method_id = pm.method_id
       JOIN student_accounts sa ON p.account_id = sa.account_id
@@ -1068,28 +1085,39 @@ app.get('/api/payments', authenticateToken, authorize(['admin', 'staff']), async
       JOIN persons per ON s.person_id = per.person_id
       JOIN course_offerings co ON sa.offering_id = co.offering_id
       JOIN courses c ON co.course_id = c.course_id
+      LEFT JOIN contact_info ci_phone ON s.person_id = ci_phone.person_id 
+        AND ci_phone.contact_type = 'phone' 
+        AND ci_phone.is_primary = TRUE
       WHERE 1=1
     `;
     const params = [];
 
-    if (status) {
+    // Filter by payment status
+    if (status && status !== 'all') {
       query += ' AND p.payment_status = ?';
       params.push(status);
     }
 
+    // Filter by student name search
     if (student_search) {
       query += ' AND (per.first_name LIKE ? OR per.last_name LIKE ? OR s.student_id LIKE ?)';
       const searchParam = `%${student_search}%`;
       params.push(searchParam, searchParam, searchParam);
     }
 
+    // Sort by student name
     if (name_sort) {
-      query += ` ORDER BY per.first_name ${name_sort === 'ascending' ? 'ASC' : 'DESC'}`;
+      query += ` ORDER BY per.first_name ${name_sort === 'ascending' ? 'ASC' : 'DESC'}, per.last_name ${name_sort === 'ascending' ? 'ASC' : 'DESC'}`;
     } else {
-      query += ' ORDER BY p.payment_date DESC';
+      query += ' ORDER BY p.payment_date DESC, p.created_at DESC';
     }
 
+    console.log('Executing payment query:', query);
+    console.log('With parameters:', params);
+
     const [payments] = await pool.execute(query, params);
+    
+    console.log(`Found ${payments.length} payments`);
     res.json(payments);
   } catch (error) {
     console.error('Payments fetch error:', error);
@@ -1097,6 +1125,7 @@ app.get('/api/payments', authenticateToken, authorize(['admin', 'staff']), async
   }
 });
 
+// POST /api/payments - Enhanced for payment creation/status updates
 app.post('/api/payments', [
   authenticateToken,
   authorize(['admin', 'staff']),
@@ -1105,9 +1134,73 @@ app.post('/api/payments', [
   body('payment_amount').isFloat({ min: 0.01 }),
   body('reference_number').optional().trim().isLength({ max: 50 })
 ], validateInput, async (req, res) => {
+  const connection = await pool.getConnection();
+  
   try {
+    await connection.beginTransaction();
+    
     const { account_id, method_id, payment_amount, reference_number, notes } = req.body;
     
+    // Get staff_id for processed_by
+    const [staffRows] = await connection.execute(
+      'SELECT staff_id FROM staff WHERE account_id = ?',
+      [req.user.accountId]
+    );
+    const staffId = staffRows[0]?.staff_id;
+
+    // Calculate processing fee
+    const [methodRows] = await connection.execute(
+      'SELECT processing_fee_percentage FROM payment_methods WHERE method_id = ?',
+      [method_id]
+    );
+    
+    const processingFeePercentage = methodRows[0]?.processing_fee_percentage || 0;
+    const processing_fee = (payment_amount * processingFeePercentage) / 100;
+
+    // Insert payment record
+    const [paymentResult] = await connection.execute(`
+      INSERT INTO payments (
+        account_id, method_id, payment_amount, processing_fee, 
+        reference_number, payment_status, processed_by, notes, payment_date
+      ) VALUES (?, ?, ?, ?, ?, 'confirmed', ?, ?, NOW())
+    `, [account_id, method_id, payment_amount, processing_fee, reference_number || null, staffId, notes || null]);
+
+    // Update student account balance
+    await connection.execute(`
+      UPDATE student_accounts 
+      SET amount_paid = amount_paid + ?,
+          balance = total_due - (amount_paid + ?),
+          updated_at = NOW()
+      WHERE account_id = ?
+    `, [payment_amount, payment_amount, account_id]);
+
+    await connection.commit();
+    
+    res.status(201).json({ 
+      message: 'Payment processed successfully',
+      payment_id: paymentResult.insertId 
+    });
+
+  } catch (error) {
+    await connection.rollback();
+    console.error('Payment creation error:', error);
+    res.status(500).json({ error: 'Failed to process payment' });
+  } finally {
+    connection.release();
+  }
+});
+
+// PUT /api/payments/:paymentId/status - Update payment status
+app.put('/api/payments/:paymentId/status', [
+  authenticateToken,
+  authorize(['admin', 'staff']),
+  body('status').isIn(['pending', 'confirmed', 'completed', 'cancelled', 'failed']),
+  body('notes').optional().trim().isLength({ max: 1000 })
+], validateInput, async (req, res) => {
+  try {
+    const { paymentId } = req.params;
+    const { status, notes } = req.body;
+
     // Get staff_id for processed_by
     const [staffRows] = await pool.execute(
       'SELECT staff_id FROM staff WHERE account_id = ?',
@@ -1115,22 +1208,709 @@ app.post('/api/payments', [
     );
     const staffId = staffRows[0]?.staff_id;
 
-    const [result] = await pool.execute(`
-      CALL sp_process_payment(?, ?, ?, ?, ?, @result);
-      SELECT @result as result;
-    `, [account_id, method_id, payment_amount, reference_number || null, staffId]);
+    await pool.execute(`
+      UPDATE payments 
+      SET payment_status = ?, 
+          processed_by = ?, 
+          notes = COALESCE(?, notes),
+          updated_at = NOW()
+      WHERE payment_id = ?
+    `, [status, staffId, notes, paymentId]);
 
-    const processingResult = result[1][0].result;
+    res.json({ message: 'Payment status updated successfully' });
+  } catch (error) {
+    console.error('Payment status update error:', error);
+    res.status(500).json({ error: 'Failed to update payment status' });
+  }
+});
 
-    if (processingResult.startsWith('SUCCESS')) {
-      res.status(201).json({ message: processingResult });
+app.get('/api/payments/pending', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
+  try {
+    const { name_sort, student_search } = req.query;
+    
+    let query = `
+      SELECT 
+        p.payment_id, 
+        p.payment_amount, 
+        p.processing_fee, 
+        p.payment_date, 
+        p.payment_status,
+        p.reference_number, 
+        p.notes,
+        p.created_at,
+        pm.method_name,
+        sa.account_id,
+        sa.total_due, 
+        sa.balance,
+        s.student_id, 
+        per.first_name, 
+        per.last_name,
+        per.email,
+        c.course_name, 
+        co.batch_identifier,
+        co.offering_id,
+        pm.method_id,
+        ci_phone.contact_value as phone
+      FROM payments p
+      JOIN payment_methods pm ON p.method_id = pm.method_id
+      JOIN student_accounts sa ON p.account_id = sa.account_id
+      JOIN students s ON sa.student_id = s.student_id
+      JOIN persons per ON s.person_id = per.person_id
+      JOIN course_offerings co ON sa.offering_id = co.offering_id
+      JOIN courses c ON co.course_id = c.course_id
+      LEFT JOIN contact_info ci_phone ON s.person_id = ci_phone.person_id 
+        AND ci_phone.contact_type = 'phone' 
+        AND ci_phone.is_primary = TRUE
+      WHERE p.payment_status = 'pending'
+    `;
+    const params = [];
+
+    // Filter by student name search
+    if (student_search) {
+      query += ' AND (per.first_name LIKE ? OR per.last_name LIKE ? OR s.student_id LIKE ?)';
+      const searchParam = `%${student_search}%`;
+      params.push(searchParam, searchParam, searchParam);
+    }
+
+    // Sort by student name
+    if (name_sort) {
+      query += ` ORDER BY per.first_name ${name_sort === 'ascending' ? 'ASC' : 'DESC'}, per.last_name ${name_sort === 'ascending' ? 'ASC' : 'DESC'}`;
     } else {
-      res.status(400).json({ error: processingResult });
+      query += ' ORDER BY p.payment_date DESC, p.created_at DESC';
+    }
+
+    const [payments] = await pool.execute(query, params);
+    res.json(payments);
+  } catch (error) {
+    console.error('Pending payments fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch pending payments' });
+  }
+});
+
+// GET /api/payments/statistics - Payment statistics for dashboard
+app.get('/api/payments/statistics', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
+  try {
+    const [stats] = await pool.execute(`
+      SELECT 
+        COUNT(CASE WHEN payment_status = 'pending' THEN 1 END) as pending_count,
+        COUNT(CASE WHEN payment_status = 'confirmed' THEN 1 END) as confirmed_count,
+        COUNT(CASE WHEN payment_status = 'completed' THEN 1 END) as completed_count,
+        COUNT(CASE WHEN payment_status = 'cancelled' THEN 1 END) as cancelled_count,
+        COUNT(CASE WHEN payment_status = 'failed' THEN 1 END) as failed_count,
+        SUM(CASE WHEN payment_status = 'pending' THEN payment_amount ELSE 0 END) as pending_amount,
+        SUM(CASE WHEN payment_status = 'confirmed' THEN payment_amount ELSE 0 END) as confirmed_amount,
+        SUM(CASE WHEN payment_status = 'completed' THEN payment_amount ELSE 0 END) as completed_amount,
+        SUM(payment_amount) as total_amount,
+        AVG(payment_amount) as average_amount
+      FROM payments
+      WHERE payment_date >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+    `);
+
+    res.json(stats[0] || {});
+  } catch (error) {
+    console.error('Payment statistics error:', error);
+    res.status(500).json({ error: 'Failed to fetch payment statistics' });
+  }
+});
+
+// GET /api/students/:studentId/account-balance - Get student account balance
+app.get('/api/students/:studentId/account-balance', authenticateToken, authorize(['admin', 'staff', 'student']), authorizeStudentAccess, async (req, res) => {
+  try {
+    const { studentId } = req.params;
+
+    const [balanceInfo] = await pool.execute(`
+      SELECT 
+        sa.account_id,
+        sa.total_due,
+        sa.amount_paid,
+        sa.balance,
+        sa.due_date,
+        c.course_name,
+        co.batch_identifier,
+        COUNT(p.payment_id) as payment_count,
+        MAX(p.payment_date) as last_payment_date
+      FROM student_accounts sa
+      JOIN course_offerings co ON sa.offering_id = co.offering_id
+      JOIN courses c ON co.course_id = c.course_id
+      LEFT JOIN payments p ON sa.account_id = p.account_id
+      WHERE sa.student_id = ?
+      GROUP BY sa.account_id
+      ORDER BY sa.created_at DESC
+    `, [studentId]);
+
+    res.json(balanceInfo);
+  } catch (error) {
+    console.error('Student account balance fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch student account balance' });
+  }
+});
+
+// POST /api/students/:studentId/create-payment-account - Create payment account for student
+app.post('/api/students/:studentId/create-payment-account', [
+  authenticateToken,
+  authorize(['admin', 'staff']),
+  body('offering_id').isInt(),
+  body('total_due').isFloat({ min: 0.01 }),
+  body('due_date').isISO8601()
+], validateInput, async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const { offering_id, total_due, due_date } = req.body;
+
+    // Check if account already exists for this student and offering
+    const [existingAccount] = await pool.execute(`
+      SELECT account_id FROM student_accounts 
+      WHERE student_id = ? AND offering_id = ?
+    `, [studentId, offering_id]);
+
+    if (existingAccount.length > 0) {
+      return res.status(409).json({ error: 'Payment account already exists for this student and course offering' });
+    }
+
+    const [result] = await pool.execute(`
+      INSERT INTO student_accounts (student_id, offering_id, total_due, amount_paid, balance, due_date)
+      VALUES (?, ?, ?, 0, ?, ?)
+    `, [studentId, offering_id, total_due, total_due, due_date]);
+
+    res.status(201).json({ 
+      message: 'Payment account created successfully',
+      account_id: result.insertId 
+    });
+
+  } catch (error) {
+    console.error('Payment account creation error:', error);
+    res.status(500).json({ error: 'Failed to create payment account' });
+  }
+});
+
+// PUT /api/payments/:paymentId - Update payment details
+app.put('/api/payments/:paymentId', [
+  authenticateToken,
+  authorize(['admin', 'staff']),
+  body('payment_amount').optional().isFloat({ min: 0.01 }),
+  body('reference_number').optional().trim().isLength({ max: 50 }),
+  body('notes').optional().trim().isLength({ max: 1000 })
+], validateInput, async (req, res) => {
+  try {
+    const { paymentId } = req.params;
+    const { payment_amount, reference_number, notes } = req.body;
+
+    const updateFields = [];
+    const updateValues = [];
+
+    if (payment_amount !== undefined) {
+      updateFields.push('payment_amount = ?');
+      updateValues.push(payment_amount);
+    }
+
+    if (reference_number !== undefined) {
+      updateFields.push('reference_number = ?');
+      updateValues.push(reference_number);
+    }
+
+    if (notes !== undefined) {
+      updateFields.push('notes = ?');
+      updateValues.push(notes);
+    }
+
+    updateFields.push('updated_at = NOW()');
+    updateValues.push(paymentId);
+
+    if (updateFields.length === 1) { // Only updated_at
+      return res.status(400).json({ error: 'No fields to update' });
+    }
+
+    await pool.execute(`
+      UPDATE payments 
+      SET ${updateFields.join(', ')}
+      WHERE payment_id = ?
+    `, updateValues);
+
+    res.json({ message: 'Payment details updated successfully' });
+  } catch (error) {
+    console.error('Payment update error:', error);
+    res.status(500).json({ error: 'Failed to update payment details' });
+  }
+});
+
+// DELETE /api/payments/:paymentId - Soft delete payment (set status to cancelled)
+app.delete('/api/payments/:paymentId', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
+  try {
+    const { paymentId } = req.params;
+
+    // Get staff_id for processed_by
+    const [staffRows] = await pool.execute(
+      'SELECT staff_id FROM staff WHERE account_id = ?',
+      [req.user.accountId]
+    );
+    const staffId = staffRows[0]?.staff_id;
+
+    await pool.execute(`
+      UPDATE payments 
+      SET payment_status = 'cancelled',
+          processed_by = ?,
+          notes = CONCAT(COALESCE(notes, ''), ' - Cancelled by staff on ', NOW()),
+          updated_at = NOW()
+      WHERE payment_id = ?
+    `, [staffId, paymentId]);
+
+    res.json({ message: 'Payment cancelled successfully' });
+  } catch (error) {
+    console.error('Payment cancellation error:', error);
+    res.status(500).json({ error: 'Failed to cancel payment' });
+  }
+});
+
+// GET /api/payment-methods/active - Get active payment methods
+app.get('/api/payment-methods/active', authenticateToken, async (req, res) => {
+  try {
+    const [methods] = await pool.execute(`
+      SELECT method_id, method_name, method_type, processing_fee_percentage, description
+      FROM payment_methods
+      WHERE is_active = TRUE
+      ORDER BY method_name
+    `);
+    res.json(methods);
+  } catch (error) {
+    console.error('Active payment methods fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch active payment methods' });
+  }
+});
+
+app.get('/api/payments/completed', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
+  try {
+    const { name_sort, student_search, date_range } = req.query;
+    
+    let query = `
+      SELECT 
+        p.payment_id, 
+        p.payment_amount, 
+        p.processing_fee, 
+        p.payment_date, 
+        p.payment_status,
+        p.reference_number, 
+        p.notes,
+        p.created_at,
+        p.updated_at,
+        pm.method_name,
+        sa.account_id,
+        sa.total_due, 
+        sa.balance,
+        s.student_id, 
+        per.first_name, 
+        per.last_name,
+        per.email,
+        c.course_name, 
+        co.batch_identifier,
+        co.offering_id,
+        pm.method_id,
+        ci_phone.contact_value as phone,
+        staff_per.first_name as processed_by_first_name,
+        staff_per.last_name as processed_by_last_name
+      FROM payments p
+      JOIN payment_methods pm ON p.method_id = pm.method_id
+      JOIN student_accounts sa ON p.account_id = sa.account_id
+      JOIN students s ON sa.student_id = s.student_id
+      JOIN persons per ON s.person_id = per.person_id
+      JOIN course_offerings co ON sa.offering_id = co.offering_id
+      JOIN courses c ON co.course_id = c.course_id
+      LEFT JOIN contact_info ci_phone ON s.person_id = ci_phone.person_id 
+        AND ci_phone.contact_type = 'phone' 
+        AND ci_phone.is_primary = TRUE
+      LEFT JOIN staff st ON p.processed_by = st.staff_id
+      LEFT JOIN persons staff_per ON st.person_id = staff_per.person_id
+      WHERE p.payment_status IN ('completed', 'confirmed')
+    `;
+    const params = [];
+
+    // Filter by student name search
+    if (student_search) {
+      query += ' AND (per.first_name LIKE ? OR per.last_name LIKE ? OR s.student_id LIKE ?)';
+      const searchParam = `%${student_search}%`;
+      params.push(searchParam, searchParam, searchParam);
+    }
+
+    // Filter by date range
+    if (date_range && date_range !== 'all') {
+      const now = new Date();
+      let filterDate = new Date();
+      
+      switch (date_range) {
+        case 'week':
+          filterDate.setDate(now.getDate() - 7);
+          break;
+        case 'month':
+          filterDate.setMonth(now.getMonth() - 1);
+          break;
+        case 'quarter':
+          filterDate.setMonth(now.getMonth() - 3);
+          break;
+        case 'year':
+          filterDate.setFullYear(now.getFullYear() - 1);
+          break;
+        default:
+          break;
+      }
+      
+      query += ' AND p.payment_date >= ?';
+      params.push(filterDate.toISOString().split('T')[0]);
+    }
+
+    // Sort by student name or payment date
+    if (name_sort) {
+      query += ` ORDER BY per.first_name ${name_sort === 'ascending' ? 'ASC' : 'DESC'}, per.last_name ${name_sort === 'ascending' ? 'ASC' : 'DESC'}`;
+    } else {
+      query += ' ORDER BY p.payment_date DESC, p.created_at DESC';
+    }
+
+    console.log('Executing completed payments query:', query);
+    console.log('With parameters:', params);
+
+    const [payments] = await pool.execute(query, params);
+    
+    console.log(`Found ${payments.length} completed payments`);
+    res.json(payments);
+  } catch (error) {
+    console.error('Completed payments fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch completed payments' });
+  }
+});
+
+// GET /api/payments/completed/statistics - Get statistics for completed payments
+app.get('/api/payments/completed/statistics', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
+  try {
+    const { date_range = 'all' } = req.query;
+    
+    let dateCondition = '';
+    const params = [];
+    
+    if (date_range !== 'all') {
+      const now = new Date();
+      let filterDate = new Date();
+      
+      switch (date_range) {
+        case 'week':
+          filterDate.setDate(now.getDate() - 7);
+          break;
+        case 'month':
+          filterDate.setMonth(now.getMonth() - 1);
+          break;
+        case 'quarter':
+          filterDate.setMonth(now.getMonth() - 3);
+          break;
+        case 'year':
+          filterDate.setFullYear(now.getFullYear() - 1);
+          break;
+      }
+      
+      dateCondition = 'AND p.payment_date >= ?';
+      params.push(filterDate.toISOString().split('T')[0]);
+    }
+
+    const [stats] = await pool.execute(`
+      SELECT 
+        COUNT(*) as total_completed_payments,
+        SUM(p.payment_amount) as total_amount_collected,
+        AVG(p.payment_amount) as average_payment_amount,
+        COUNT(DISTINCT sa.student_id) as unique_students_paid,
+        COUNT(DISTINCT pm.method_name) as payment_methods_used,
+        SUM(p.processing_fee) as total_processing_fees,
+        MIN(p.payment_date) as earliest_payment_date,
+        MAX(p.payment_date) as latest_payment_date
+      FROM payments p
+      JOIN payment_methods pm ON p.method_id = pm.method_id
+      JOIN student_accounts sa ON p.account_id = sa.account_id
+      WHERE p.payment_status IN ('completed', 'confirmed')
+      ${dateCondition}
+    `, params);
+
+    // Get payment method breakdown
+    const [methodBreakdown] = await pool.execute(`
+      SELECT 
+        pm.method_name,
+        COUNT(*) as payment_count,
+        SUM(p.payment_amount) as total_amount
+      FROM payments p
+      JOIN payment_methods pm ON p.method_id = pm.method_id
+      JOIN student_accounts sa ON p.account_id = sa.account_id
+      WHERE p.payment_status IN ('completed', 'confirmed')
+      ${dateCondition}
+      GROUP BY pm.method_name
+      ORDER BY total_amount DESC
+    `, params);
+
+    // Get monthly completion trends for the current year
+    const [monthlyTrends] = await pool.execute(`
+      SELECT 
+        MONTH(p.payment_date) as month,
+        YEAR(p.payment_date) as year,
+        COUNT(*) as payment_count,
+        SUM(p.payment_amount) as total_amount
+      FROM payments p
+      JOIN student_accounts sa ON p.account_id = sa.account_id
+      WHERE p.payment_status IN ('completed', 'confirmed')
+      AND YEAR(p.payment_date) = YEAR(CURDATE())
+      GROUP BY YEAR(p.payment_date), MONTH(p.payment_date)
+      ORDER BY year DESC, month DESC
+    `);
+
+    res.json({
+      summary: stats[0] || {},
+      payment_method_breakdown: methodBreakdown,
+      monthly_trends: monthlyTrends
+    });
+  } catch (error) {
+    console.error('Completed payments statistics error:', error);
+    res.status(500).json({ error: 'Failed to fetch completed payments statistics' });
+  }
+});
+
+// GET /api/payments/:paymentId/receipt - Generate/download payment receipt
+app.get('/api/payments/:paymentId/receipt', authenticateToken, authorize(['admin', 'staff', 'student']), async (req, res) => {
+  try {
+    const { paymentId } = req.params;
+    
+    // If user is a student, verify they can access this payment
+    if (req.user.role === 'student') {
+      const [studentVerification] = await pool.execute(`
+        SELECT p.payment_id 
+        FROM payments p
+        JOIN student_accounts sa ON p.account_id = sa.account_id
+        JOIN students s ON sa.student_id = s.student_id
+        WHERE p.payment_id = ? AND s.account_id = ?
+      `, [paymentId, req.user.accountId]);
+      
+      if (studentVerification.length === 0) {
+        return res.status(403).json({ error: 'Access denied to this payment record' });
+      }
+    }
+
+    const [paymentDetails] = await pool.execute(`
+      SELECT 
+        p.payment_id, p.payment_amount, p.processing_fee, p.payment_date, 
+        p.reference_number, p.notes,
+        pm.method_name,
+        s.student_id, per.first_name, per.last_name, per.email,
+        c.course_name, co.batch_identifier, co.start_date, co.end_date,
+        sa.total_due, sa.balance,
+        staff_per.first_name as processed_by_first_name, 
+        staff_per.last_name as processed_by_last_name
+      FROM payments p
+      JOIN payment_methods pm ON p.method_id = pm.method_id
+      JOIN student_accounts sa ON p.account_id = sa.account_id
+      JOIN students s ON sa.student_id = s.student_id
+      JOIN persons per ON s.person_id = per.person_id
+      JOIN course_offerings co ON sa.offering_id = co.offering_id
+      JOIN courses c ON co.course_id = c.course_id
+      LEFT JOIN staff st ON p.processed_by = st.staff_id
+      LEFT JOIN persons staff_per ON st.person_id = staff_per.person_id
+      WHERE p.payment_id = ?
+    `, [paymentId]);
+
+    if (paymentDetails.length === 0) {
+      return res.status(404).json({ error: 'Payment not found' });
+    }
+
+    const payment = paymentDetails[0];
+    
+    // Generate receipt data
+    const receiptData = {
+      receipt_id: `REC${payment.payment_id}_${Date.now()}`,
+      payment_id: payment.payment_id,
+      reference_number: payment.reference_number,
+      student: {
+        id: payment.student_id,
+        name: `${payment.first_name} ${payment.last_name}`,
+        email: payment.email
+      },
+      course: {
+        name: payment.course_name,
+        batch: payment.batch_identifier,
+        start_date: payment.start_date,
+        end_date: payment.end_date
+      },
+      payment: {
+        amount: payment.payment_amount,
+        processing_fee: payment.processing_fee,
+        net_amount: payment.payment_amount - (payment.processing_fee || 0),
+        method: payment.method_name,
+        date: payment.payment_date,
+        notes: payment.notes
+      },
+      account: {
+        total_due: payment.total_due,
+        remaining_balance: payment.balance
+      },
+      processed_by: payment.processed_by_first_name ? 
+        `${payment.processed_by_first_name} ${payment.processed_by_last_name}` : 'System',
+      generated_at: new Date().toISOString(),
+      organization: {
+        name: 'ATECON Trading Academy',
+        address: 'Your Organization Address',
+        contact: 'contact@atecon.com'
+      }
+    };
+
+    // In a real implementation, you might generate a PDF here
+    // For now, we'll return JSON data that can be used to generate a receipt
+    res.json({
+      success: true,
+      receipt: receiptData
+    });
+
+  } catch (error) {
+    console.error('Payment receipt generation error:', error);
+    res.status(500).json({ error: 'Failed to generate payment receipt' });
+  }
+});
+
+// PUT /api/payments/:paymentId/mark-completed - Mark a payment as completed (if it was confirmed)
+app.put('/api/payments/:paymentId/mark-completed', [
+  authenticateToken,
+  authorize(['admin', 'staff']),
+  body('completion_notes').optional().trim().isLength({ max: 1000 })
+], validateInput, async (req, res) => {
+  try {
+    const { paymentId } = req.params;
+    const { completion_notes } = req.body;
+
+    // Verify payment exists and is in confirmed status
+    const [paymentCheck] = await pool.execute(`
+      SELECT payment_id, payment_status 
+      FROM payments 
+      WHERE payment_id = ?
+    `, [paymentId]);
+
+    if (paymentCheck.length === 0) {
+      return res.status(404).json({ error: 'Payment not found' });
+    }
+
+    if (paymentCheck[0].payment_status !== 'confirmed') {
+      return res.status(400).json({ 
+        error: 'Only confirmed payments can be marked as completed' 
+      });
+    }
+
+    // Get staff_id for processed_by
+    const [staffRows] = await pool.execute(
+      'SELECT staff_id FROM staff WHERE account_id = ?',
+      [req.user.accountId]
+    );
+    const staffId = staffRows[0]?.staff_id;
+
+    // Update payment status to completed
+    await pool.execute(`
+      UPDATE payments 
+      SET payment_status = 'completed',
+          processed_by = ?,
+          notes = CASE 
+            WHEN ? IS NOT NULL THEN CONCAT(COALESCE(notes, ''), ' - Completion notes: ', ?)
+            ELSE notes 
+          END,
+          updated_at = NOW()
+      WHERE payment_id = ?
+    `, [staffId, completion_notes, completion_notes, paymentId]);
+
+    res.json({ 
+      message: 'Payment marked as completed successfully',
+      payment_id: paymentId
+    });
+
+  } catch (error) {
+    console.error('Payment completion error:', error);
+    res.status(500).json({ error: 'Failed to mark payment as completed' });
+  }
+});
+
+// GET /api/payments/completed/export - Export completed payments to CSV
+app.get('/api/payments/completed/export', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
+  try {
+    const { date_range = 'all', format = 'csv' } = req.query;
+    
+    let dateCondition = '';
+    const params = [];
+    
+    if (date_range !== 'all') {
+      const now = new Date();
+      let filterDate = new Date();
+      
+      switch (date_range) {
+        case 'week':
+          filterDate.setDate(now.getDate() - 7);
+          break;
+        case 'month':
+          filterDate.setMonth(now.getMonth() - 1);
+          break;
+        case 'quarter':
+          filterDate.setMonth(now.getMonth() - 3);
+          break;
+        case 'year':
+          filterDate.setFullYear(now.getFullYear() - 1);
+          break;
+      }
+      
+      dateCondition = 'AND p.payment_date >= ?';
+      params.push(filterDate.toISOString().split('T')[0]);
+    }
+
+    const [payments] = await pool.execute(`
+      SELECT 
+        p.payment_id as 'Payment ID',
+        p.reference_number as 'Reference Number',
+        CONCAT(per.first_name, ' ', per.last_name) as 'Student Name',
+        s.student_id as 'Student ID',
+        per.email as 'Email',
+        c.course_name as 'Course',
+        co.batch_identifier as 'Batch',
+        p.payment_amount as 'Amount Paid',
+        p.processing_fee as 'Processing Fee',
+        pm.method_name as 'Payment Method',
+        p.payment_date as 'Payment Date',
+        p.payment_status as 'Status',
+        CONCAT(COALESCE(staff_per.first_name, ''), ' ', COALESCE(staff_per.last_name, '')) as 'Processed By',
+        p.notes as 'Notes'
+      FROM payments p
+      JOIN payment_methods pm ON p.method_id = pm.method_id
+      JOIN student_accounts sa ON p.account_id = sa.account_id
+      JOIN students s ON sa.student_id = s.student_id
+      JOIN persons per ON s.person_id = per.person_id
+      JOIN course_offerings co ON sa.offering_id = co.offering_id
+      JOIN courses c ON co.course_id = c.course_id
+      LEFT JOIN staff st ON p.processed_by = st.staff_id
+      LEFT JOIN persons staff_per ON st.person_id = staff_per.person_id
+      WHERE p.payment_status IN ('completed', 'confirmed')
+      ${dateCondition}
+      ORDER BY p.payment_date DESC
+    `, params);
+
+    if (format === 'csv') {
+      // Generate CSV
+      const csvHeaders = Object.keys(payments[0] || {});
+      const csvRows = payments.map(payment => 
+        csvHeaders.map(header => `"${(payment[header] || '').toString().replace(/"/g, '""')}"`).join(',')
+      );
+      
+      const csvContent = [
+        csvHeaders.join(','),
+        ...csvRows
+      ].join('\n');
+
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="completed_payments_${date_range}_${new Date().toISOString().split('T')[0]}.csv"`);
+      res.send(csvContent);
+    } else {
+      // Return JSON
+      res.json({
+        export_date: new Date().toISOString(),
+        date_range: date_range,
+        total_records: payments.length,
+        data: payments
+      });
     }
 
   } catch (error) {
-    console.error('Payment creation error:', error);
-    res.status(500).json({ error: 'Failed to process payment' });
+    console.error('Completed payments export error:', error);
+    res.status(500).json({ error: 'Failed to export completed payments' });
   }
 });
 
@@ -1294,6 +2074,120 @@ app.put('/api/documents/:documentId/verify', [
   } catch (error) {
     console.error('Document verification error:', error);
     res.status(500).json({ error: 'Failed to update document verification' });
+  }
+});
+
+app.get('/api/documents/student/:studentId', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    
+    const [documents] = await pool.execute(`
+      SELECT sd.document_id, sd.original_filename, sd.upload_date, sd.verification_status,
+             sd.verified_date, sd.verification_notes, sd.is_current,
+             dt.type_name as document_type, dt.is_required, dt.category,
+             s.student_id, per.first_name, per.last_name,
+             staff_per.first_name as verified_by_first_name, 
+             staff_per.last_name as verified_by_last_name
+      FROM student_documents sd
+      JOIN document_types dt ON sd.document_type_id = dt.document_type_id
+      JOIN students s ON sd.student_id = s.student_id
+      JOIN persons per ON s.person_id = per.person_id
+      LEFT JOIN staff st ON sd.verified_by = st.staff_id
+      LEFT JOIN persons staff_per ON st.person_id = staff_per.person_id
+      WHERE sd.student_id = ? AND sd.is_current = TRUE
+      ORDER BY dt.is_required DESC, sd.upload_date DESC
+    `, [studentId]);
+
+    res.json(documents);
+  } catch (error) {
+    console.error('Student documents fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch student documents' });
+  }
+});
+
+// Update the existing document upload route to automatically verify if admin uploads
+app.post('/api/documents/upload', [
+  authenticateToken,
+  authorize(['admin', 'staff', 'student']),
+  upload.single('document')
+], async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    const { student_id, document_type_id } = req.body;
+
+    // Check if user is admin
+    const isAdmin = req.user.role === 'admin';
+
+    if (req.user.role === 'student') {
+      const [studentRows] = await pool.execute(
+        'SELECT student_id FROM students WHERE student_id = ? AND account_id = ?',
+        [student_id, req.user.accountId]
+      );
+      
+      if (studentRows.length === 0) {
+        fs.unlinkSync(req.file.path);
+        return res.status(403).json({ error: 'Access denied to this student record' });
+      }
+    }
+
+    const fileBuffer = fs.readFileSync(req.file.path);
+    const fileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+
+    // Mark previous documents as not current
+    await pool.execute(`
+      UPDATE student_documents 
+      SET is_current = FALSE 
+      WHERE student_id = ? AND document_type_id = ?
+    `, [student_id, document_type_id]);
+
+    let uploadedBy = null;
+    let verifiedBy = null;
+    let verificationStatus = 'pending';
+    let verifiedDate = null;
+
+    // Get staff ID if user is admin or staff
+    if (req.user.role !== 'student') {
+      const [staffRows] = await pool.execute(
+        'SELECT staff_id FROM staff WHERE account_id = ?',
+        [req.user.accountId]
+      );
+      uploadedBy = staffRows[0]?.staff_id || null;
+      
+      // If admin, automatically verify the document
+      if (isAdmin) {
+        verifiedBy = uploadedBy;
+        verificationStatus = 'verified';
+        verifiedDate = new Date();
+      }
+    }
+
+    await pool.execute(`
+      INSERT INTO student_documents (
+        student_id, document_type_id, original_filename, stored_filename, 
+        file_path, file_size_bytes, mime_type, file_hash, uploaded_by,
+        verification_status, verified_by, verified_date
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      student_id, document_type_id, req.file.originalname, req.file.filename,
+      req.file.path, req.file.size, req.file.mimetype, fileHash, uploadedBy,
+      verificationStatus, verifiedBy, verifiedDate
+    ]);
+
+    res.status(201).json({ 
+      message: isAdmin 
+        ? 'Document uploaded and automatically verified successfully' 
+        : 'Document uploaded successfully',
+      verification_status: verificationStatus
+    });
+  } catch (error) {
+    console.error('Document upload error:', error);
+    if (req.file) {
+      fs.unlinkSync(req.file.path);
+    }
+    res.status(500).json({ error: 'Failed to upload document' });
   }
 });
 
