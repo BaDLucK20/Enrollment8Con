@@ -167,8 +167,7 @@ function UniversalDashboard() {
       hasChildren: true,
       children: [
         { id: 'PendingPayments', label: 'Pending Payments' },
-        { id: 'CompletedPayments', label: 'Completed Payments' },
-        { id: 'PaymentHistory', label: 'Payment History' }
+        { id: 'CompletedPayments', label: 'Completed Payments' }
       ]
     },
     { 
@@ -184,18 +183,18 @@ function UniversalDashboard() {
         { id: 'certification-tracking', label: 'Certification Tracking' }
       ]
     },
-    { 
-      id: 'graduation-eligibility', 
-      label: 'Graduation Eligibility Checker', 
-      icon: GraduationCap, 
-      color: colors.dustyRose,
-      hasChildren: true,
-      children: [
-        { id: 'credit-requirements', label: 'Credit Requirements' },
-        { id: 'gpa-tracking', label: 'GPA Tracking' },
-        { id: 'graduation-status', label: 'Graduation Status' }
-      ]
-    },
+    // { 
+    //   id: 'graduation-eligibility', 
+    //   label: 'Graduation Eligibility Checker', 
+    //   icon: GraduationCap, 
+    //   color: colors.dustyRose,
+    //   hasChildren: true,
+    //   children: [
+    //     { id: 'credit-requirements', label: 'Credit Requirements' },
+    //     { id: 'gpa-tracking', label: 'GPA Tracking' },
+    //     { id: 'graduation-status', label: 'Graduation Status' }
+    //   ]
+    // },
     { 
       id: 'referral', 
       label: 'Referral', 
@@ -224,7 +223,7 @@ function UniversalDashboard() {
       hasChildren: true,
       children: [
         { id: 'add-documents', label: 'Documents'},
-        { id: 'pending-documents', label: 'pendingdocument'}
+        { id: 'pending-documents', label: 'Pending Document'}
       ]
     }
   ]

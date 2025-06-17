@@ -14,29 +14,20 @@ const PendingDocument = () => {
   const [viewMode, setViewMode] = useState(false);
   const [documentUrl, setDocumentUrl] = useState('');
 
-  // Modern color scheme
+  // Updated color palette to match PaymentHistory
   const colors = {
-    primary: '#4F46E5',
-    primaryDark: '#4338CA',
-    primaryLight: '#6366F1',
-    secondary: '#10B981',
-    secondaryDark: '#059669',
-    warning: '#F59E0B',
-    danger: '#EF4444',
-    success: '#22C55E',
-    info: '#3B82F6',
-    gray: {
-      50: '#F9FAFB',
-      100: '#F3F4F6',
-      200: '#E5E7EB',
-      300: '#D1D5DB',
-      400: '#9CA3AF',
-      500: '#6B7280',
-      600: '#4B5563',
-      700: '#374151',
-      800: '#1F2937',
-      900: '#111827',
-    }
+    darkGreen: '#2d4a3d',
+    lightGreen: '#7a9b8a', 
+    dustyRose: '#c19a9a',
+    coral: '#d85c5c',
+    red: '#d63447',
+    cream: '#f5f2e8',
+    olive: '#6b7c5c',
+    black: '#2c2c2c',
+    white: '#ffffff',
+    lightGray: '#f3f4f6',
+    gray: '#9ca3af',
+    darkGray: '#4b5563'
   };
 
   const CheckIcon = ({ size = 16 }) => (
@@ -73,6 +64,12 @@ const PendingDocument = () => {
   const RefreshIcon = ({ size = 16 }) => (
     <svg width={size} height={size} fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+    </svg>
+  );
+
+  const FilterIcon = ({ size = 16 }) => (
+    <svg width={size} height={size} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
     </svg>
   );
 
@@ -171,10 +168,23 @@ const PendingDocument = () => {
   };
 
   const handleViewDocument = (document) => {
-    // Construct the document URL based on the file path
-    const baseUrl = window.location.origin;
-    const documentPath = document.file_path || `uploads/documents/${document.stored_filename}`;
-    setDocumentUrl(`${baseUrl}/${documentPath}`);
+    // Ensure proper URL construction
+    const baseUrl = 'http://localhost:3000'; // Use your backend URL
+    let documentPath = document.file_path || document.stored_filename;
+    
+    if (documentPath.startsWith('/')) {
+      documentPath = documentPath.substring(1);
+    }
+    
+    // If the path doesn't start with 'uploads/', add it
+    if (!documentPath.startsWith('uploads/')) {
+      documentPath = `uploads/documents/${documentPath}`;
+    }
+    
+    const fullUrl = `${baseUrl}/${documentPath}`;
+    console.log('Document URL:', fullUrl); // Debug log
+    
+    setDocumentUrl(fullUrl);
     setViewMode(true);
     setSelectedDocument(document);
   };
@@ -182,15 +192,15 @@ const PendingDocument = () => {
   const getStatusColor = (status) => {
     switch (status) {
       case 'verified':
-        return colors.success;
+        return colors.lightGreen;
       case 'pending':
-        return colors.warning;
+        return colors.coral;
       case 'rejected':
-        return colors.danger;
+        return colors.red;
       case 'requires_update':
-        return colors.info;
+        return colors.dustyRose;
       default:
-        return colors.gray[400];
+        return colors.olive;
     }
   };
 
@@ -220,164 +230,276 @@ const PendingDocument = () => {
     });
   };
 
+  // Calculate statistics
+  const pendingCount = documents.filter(d => d.verification_status === 'pending').length;
+  const verifiedCount = documents.filter(d => d.verification_status === 'verified').length;
+  const rejectedCount = documents.filter(d => d.verification_status === 'rejected').length;
+  const requiresUpdateCount = documents.filter(d => d.verification_status === 'requires_update').length;
+
   const styles = {
     container: {
+      padding: '24px',
+      backgroundColor: colors.cream,
       minHeight: '100vh',
-      backgroundColor: colors.gray[50],
-      padding: '32px 16px',
+      fontFamily: 'Arial, sans-serif'
     },
-    maxWidth: {
-      maxWidth: '1200px',
-      margin: '0 auto',
-    },
+
     header: {
-      backgroundColor: '#fff',
-      borderRadius: '8px',
-      boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
+      backgroundColor: colors.white,
+      borderRadius: '12px',
       padding: '24px',
       marginBottom: '24px',
+      border: '1px solid #e2e8f0'
     },
+
     title: {
-      fontSize: '30px',
+      fontSize: '28px',
       fontWeight: 'bold',
-      color: colors.gray[900],
-      marginBottom: '8px',
+      color: colors.black,
+      margin: 0,
+      marginBottom: '8px'
     },
+
     subtitle: {
-      color: colors.gray[600],
       fontSize: '16px',
+      color: colors.lightGreen,
+      margin: 0
     },
-    controls: {
-      display: 'flex',
-      flexWrap: 'wrap',
-      gap: '16px',
+
+    // Statistics Section
+    statsCard: {
+      backgroundColor: colors.white,
+      borderRadius: '12px',
+      padding: '20px',
       marginBottom: '24px',
+      border: '1px solid #e2e8f0'
     },
+
+    statsGrid: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+      gap: '16px'
+    },
+
+    statItem: {
+      textAlign: 'center',
+      padding: '16px',
+      backgroundColor: colors.cream,
+      borderRadius: '8px'
+    },
+
+    statValue: {
+      fontSize: '24px',
+      fontWeight: 'bold',
+      color: colors.darkGreen,
+      margin: 0
+    },
+
+    statLabel: {
+      fontSize: '14px',
+      color: colors.olive,
+      margin: 0
+    },
+
+    // Controls Section
+    controlsSection: {
+      backgroundColor: colors.white,
+      borderRadius: '12px',
+      padding: '20px',
+      marginBottom: '24px',
+      border: '1px solid #e2e8f0'
+    },
+
+    controlsGrid: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
+      gap: '16px',
+      marginBottom: '16px',
+      '@media (max-width: 768px)': {
+        gridTemplateColumns: '1fr'
+      }
+    },
+
     filterGroup: {
       display: 'flex',
-      backgroundColor: '#fff',
-      borderRadius: '6px',
-      border: `1px solid ${colors.gray[300]}`,
-      overflow: 'hidden',
+      flexDirection: 'column',
+      gap: '8px'
     },
+
+    filterLabel: {
+      fontSize: '14px',
+      fontWeight: '500',
+      color: colors.black
+    },
+
+    filterButtons: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: '8px',
+      padding: '4px',
+      backgroundColor: colors.lightGray,
+      borderRadius: '8px'
+    },
+
     filterButton: {
       padding: '8px 16px',
       border: 'none',
-      backgroundColor: 'transparent',
-      color: colors.gray[600],
-      cursor: 'pointer',
+      borderRadius: '6px',
       fontSize: '14px',
       fontWeight: '500',
+      cursor: 'pointer',
       transition: 'all 0.15s ease-in-out',
+      backgroundColor: 'transparent',
+      color: colors.black
     },
+
     filterButtonActive: {
-      backgroundColor: colors.primary,
-      color: '#fff',
+      backgroundColor: colors.darkGreen,
+      color: colors.white
     },
+
     searchInput: {
-      flex: 1,
-      minWidth: '300px',
-      padding: '8px 16px',
-      border: `1px solid ${colors.gray[300]}`,
+      padding: '10px 12px',
+      border: `1px solid ${colors.lightGreen}`,
       borderRadius: '6px',
       fontSize: '14px',
       outline: 'none',
+      width: '100%'
     },
+
     refreshButton: {
-      padding: '8px 16px',
-      border: `1px solid ${colors.gray[300]}`,
+      padding: '10px 16px',
+      border: `1px solid ${colors.lightGreen}`,
       borderRadius: '6px',
-      backgroundColor: '#fff',
-      color: colors.gray[700],
+      backgroundColor: colors.white,
+      color: colors.black,
       cursor: 'pointer',
       display: 'flex',
       alignItems: 'center',
       gap: '8px',
       fontSize: '14px',
       fontWeight: '500',
+      width: 'fit-content'
     },
+
+    // Alerts
     alert: {
       marginBottom: '24px',
       padding: '16px',
       borderRadius: '8px',
-      borderLeftWidth: '4px',
-      borderLeftStyle: 'solid',
+      border: '1px solid',
       display: 'flex',
       alignItems: 'center',
+      gap: '12px'
     },
+
     alertError: {
-      backgroundColor: '#FEE2E2',
-      borderLeftColor: colors.danger,
-      color: '#991B1B',
+      backgroundColor: '#fee2e2',
+      borderColor: colors.red,
+      color: colors.red
     },
+
     alertSuccess: {
-      backgroundColor: '#D1FAE5',
-      borderLeftColor: colors.success,
-      color: '#065F46',
+      backgroundColor: '#d1fae5',
+      borderColor: colors.lightGreen,
+      color: colors.darkGreen
     },
-    table: {
-      backgroundColor: '#fff',
-      borderRadius: '8px',
+
+    // Table Styles
+    tableContainer: {
+      backgroundColor: colors.white,
+      borderRadius: '12px',
       overflow: 'hidden',
-      boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)',
+      border: '1px solid #e2e8f0'
     },
+
+    tableHeader: {
+      backgroundColor: colors.darkGreen,
+      color: colors.white,
+      padding: '16px 20px',
+      fontSize: '18px',
+      fontWeight: 'bold'
+    },
+
     tableWrapper: {
-      overflowX: 'auto',
+      overflowX: 'auto'
     },
-    tableEl: {
+
+    table: {
       width: '100%',
       borderCollapse: 'collapse',
+      minWidth: '800px'
     },
-    th: {
+
+    tableHeaderRow: {
+      backgroundColor: colors.lightGreen
+    },
+
+    tableHeaderCell: {
       padding: '12px 16px',
       textAlign: 'left',
-      fontSize: '12px',
-      fontWeight: '500',
-      color: colors.gray[600],
-      backgroundColor: colors.gray[50],
-      borderBottom: `1px solid ${colors.gray[200]}`,
-      textTransform: 'uppercase',
-      letterSpacing: '0.05em',
-    },
-    td: {
-      padding: '16px',
       fontSize: '14px',
-      color: colors.gray[900],
-      borderBottom: `1px solid ${colors.gray[200]}`,
+      fontWeight: '600',
+      color: colors.white,
+      whiteSpace: 'nowrap'
     },
+
+    tableRow: {
+      borderBottom: '1px solid #e2e8f0',
+      '&:hover': {
+        backgroundColor: colors.cream
+      }
+    },
+
+    tableCell: {
+      padding: '12px 16px',
+      fontSize: '14px',
+      color: colors.black,
+      verticalAlign: 'top'
+    },
+
     statusBadge: {
       display: 'inline-flex',
       alignItems: 'center',
       padding: '4px 12px',
-      borderRadius: '9999px',
+      borderRadius: '20px',
       fontSize: '12px',
       fontWeight: '500',
       gap: '4px',
+      color: colors.white,
+      textTransform: 'uppercase'
     },
+
     actionButton: {
       padding: '6px 12px',
       border: 'none',
-      borderRadius: '4px',
-      fontSize: '14px',
+      borderRadius: '6px',
+      fontSize: '12px',
       fontWeight: '500',
       cursor: 'pointer',
       transition: 'all 0.15s ease-in-out',
-      display: 'flex',
+      display: 'inline-flex',
       alignItems: 'center',
       gap: '4px',
+      margin: '0 2px 4px 0'
     },
+
     viewButton: {
-      backgroundColor: colors.gray[100],
-      color: colors.gray[700],
+      backgroundColor: colors.dustyRose,
+      color: colors.white
     },
+
     verifyButton: {
-      backgroundColor: colors.success,
-      color: '#fff',
+      backgroundColor: colors.lightGreen,
+      color: colors.white
     },
+
     rejectButton: {
-      backgroundColor: colors.danger,
-      color: '#fff',
+      backgroundColor: colors.red,
+      color: colors.white
     },
+
+    // Modal Styles
     modal: {
       position: 'fixed',
       top: 0,
@@ -389,528 +511,794 @@ const PendingDocument = () => {
       alignItems: 'center',
       justifyContent: 'center',
       zIndex: 1000,
+      padding: '16px'
     },
+
     modalContent: {
-      backgroundColor: '#fff',
-      borderRadius: '8px',
+      backgroundColor: colors.white,
+      borderRadius: '12px',
       maxWidth: '600px',
-      width: '90%',
+      width: '100%',
       maxHeight: '90vh',
       overflow: 'hidden',
       display: 'flex',
-      flexDirection: 'column',
+      flexDirection: 'column'
     },
+
     modalHeader: {
       padding: '24px 24px 16px',
-      borderBottom: `1px solid ${colors.gray[200]}`,
+      borderBottom: `1px solid #e2e8f0`
     },
+
     modalTitle: {
       fontSize: '20px',
       fontWeight: '600',
-      color: colors.gray[900],
-      marginBottom: '8px',
+      color: colors.black,
+      marginBottom: '8px'
     },
+
+    modalSubtitle: {
+      fontSize: '14px',
+      color: colors.olive,
+      margin: 0
+    },
+
     modalBody: {
       padding: '24px',
       flex: 1,
-      overflow: 'auto',
+      overflow: 'auto'
     },
+
     modalFooter: {
       padding: '16px 24px',
-      borderTop: `1px solid ${colors.gray[200]}`,
+      borderTop: `1px solid #e2e8f0`,
       display: 'flex',
       gap: '12px',
       justifyContent: 'flex-end',
+      flexWrap: 'wrap'
     },
+
     formGroup: {
-      marginBottom: '16px',
+      marginBottom: '16px'
     },
+
     label: {
       display: 'block',
       fontSize: '14px',
       fontWeight: '500',
-      color: colors.gray[700],
-      marginBottom: '8px',
+      color: colors.black,
+      marginBottom: '8px'
     },
+
     select: {
       width: '100%',
-      padding: '8px 12px',
-      border: `1px solid ${colors.gray[300]}`,
+      padding: '10px 12px',
+      border: `1px solid ${colors.lightGreen}`,
       borderRadius: '6px',
       fontSize: '14px',
       outline: 'none',
+      backgroundColor: colors.white
     },
+
     textarea: {
       width: '100%',
-      padding: '8px 12px',
-      border: `1px solid ${colors.gray[300]}`,
+      padding: '10px 12px',
+      border: `1px solid ${colors.lightGreen}`,
       borderRadius: '6px',
       fontSize: '14px',
       minHeight: '100px',
       resize: 'vertical',
       outline: 'none',
+      fontFamily: 'inherit'
     },
+
     button: {
-      padding: '8px 16px',
+      padding: '10px 20px',
       border: 'none',
       borderRadius: '6px',
       fontSize: '14px',
       fontWeight: '500',
       cursor: 'pointer',
       transition: 'all 0.15s ease-in-out',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px'
     },
+
     primaryButton: {
-      backgroundColor: colors.primary,
-      color: '#fff',
+      backgroundColor: colors.darkGreen,
+      color: colors.white
     },
+
     secondaryButton: {
-      backgroundColor: colors.gray[200],
-      color: colors.gray[700],
+      backgroundColor: colors.lightGray,
+      color: colors.black
     },
+
+    closeButton: {
+      backgroundColor: colors.red,
+      color: colors.white
+    },
+
     documentViewer: {
       width: '100%',
       height: '400px',
-      border: `1px solid ${colors.gray[300]}`,
+      border: `1px solid ${colors.lightGreen}`,
       borderRadius: '6px',
-      backgroundColor: colors.gray[50],
+      backgroundColor: colors.cream
     },
+
     infoRow: {
       display: 'flex',
       justifyContent: 'space-between',
+      alignItems: 'center',
       padding: '8px 0',
-      borderBottom: `1px solid ${colors.gray[100]}`,
+      borderBottom: `1px solid #e2e8f0`,
+      flexWrap: 'wrap',
+      gap: '8px'
     },
+
     infoLabel: {
       fontSize: '14px',
-      color: colors.gray[600],
+      color: colors.olive,
+      fontWeight: '500'
     },
+
     infoValue: {
       fontSize: '14px',
-      color: colors.gray[900],
-      fontWeight: '500',
+      color: colors.black,
+      fontWeight: '500'
     },
+
     emptyState: {
       textAlign: 'center',
       padding: '64px 24px',
-      color: colors.gray[500],
+      color: colors.olive
     },
+
     loadingContainer: {
       textAlign: 'center',
       padding: '64px',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      gap: '16px'
     },
+
+    // Responsive styles
+    '@media (max-width: 768px)': {
+      container: {
+        padding: '16px'
+      },
+      
+      header: {
+        padding: '16px'
+      },
+
+      title: {
+        fontSize: '24px'
+      },
+
+      statsGrid: {
+        gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))'
+      },
+
+      statValue: {
+        fontSize: '20px'
+      },
+
+      controlsGrid: {
+        gridTemplateColumns: '1fr'
+      },
+
+      filterButtons: {
+        justifyContent: 'center'
+      },
+
+      modalContent: {
+        margin: '16px',
+        maxHeight: 'calc(100vh - 32px)'
+      },
+
+      modalFooter: {
+        flexDirection: 'column'
+      }
+    }
   };
 
   return (
     <div style={styles.container}>
-      <div style={styles.maxWidth}>
-        {/* Header */}
-        <div style={styles.header}>
-          <h1 style={styles.title}>Document Verification</h1>
-          <p style={styles.subtitle}>Review and verify student documents for TESDA requirements</p>
+      {/* Header */}
+      <div style={styles.header}>
+        <h1 style={styles.title}>Document Verification</h1>
+        <p style={styles.subtitle}>Review and verify student documents for TESDA requirements</p>
+      </div>
+
+      {/* Statistics Card */}
+      <div style={styles.statsCard}>
+        <div style={styles.statsGrid}>
+          <div style={styles.statItem}>
+            <div style={styles.statValue}>{pendingCount}</div>
+            <div style={styles.statLabel}>Pending Documents</div>
+          </div>
+          <div style={styles.statItem}>
+            <div style={styles.statValue}>{verifiedCount}</div>
+            <div style={styles.statLabel}>Verified Documents</div>
+          </div>
+          <div style={styles.statItem}>
+            <div style={styles.statValue}>{rejectedCount}</div>
+            <div style={styles.statLabel}>Rejected Documents</div>
+          </div>
+          <div style={styles.statItem}>
+            <div style={styles.statValue}>{requiresUpdateCount}</div>
+            <div style={styles.statLabel}>Requires Update</div>
+          </div>
         </div>
+      </div>
 
-        {/* Alerts */}
-        {error && (
-          <div style={{ ...styles.alert, ...styles.alertError }}>
-            <XIcon />
-            <span style={{ marginLeft: '8px' }}>{error}</span>
-          </div>
-        )}
+      {/* Alerts */}
+      {error && (
+        <div style={{ ...styles.alert, ...styles.alertError }}>
+          <XIcon />
+          <span>{error}</span>
+        </div>
+      )}
 
-        {success && (
-          <div style={{ ...styles.alert, ...styles.alertSuccess }}>
-            <CheckIcon />
-            <span style={{ marginLeft: '8px' }}>{success}</span>
-          </div>
-        )}
+      {success && (
+        <div style={{ ...styles.alert, ...styles.alertSuccess }}>
+          <CheckIcon />
+          <span>{success}</span>
+        </div>
+      )}
 
-        {/* Controls */}
-        <div style={styles.controls}>
+      {/* Controls */}
+      <div style={styles.controlsSection}>
+        <div style={styles.controlsGrid}>
           <div style={styles.filterGroup}>
-            {['all', 'pending', 'verified', 'rejected'].map((status) => (
-              <button
-                key={status}
-                style={{
-                  ...styles.filterButton,
-                  ...(filter === status ? styles.filterButtonActive : {})
-                }}
-                onClick={() => setFilter(status)}
-              >
-                {status === 'requires_update' ? 'Needs Update' : status.charAt(0).toUpperCase() + status.slice(1)}
-              </button>
-            ))}
-          </div>
-
-          <input
-            type="text"
-            style={styles.searchInput}
-            placeholder="Search by student name or ID..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-
-          <button
-            style={styles.refreshButton}
-            onClick={fetchDocuments}
-            disabled={loading}
-          >
-            <RefreshIcon />
-            Refresh
-          </button>
-        </div>
-
-        {/* Documents Table */}
-        <div style={styles.table}>
-          <div style={styles.tableWrapper}>
-            {loading ? (
-              <div style={styles.loadingContainer}>
-                <LoadingSpinner size={32} />
-                <p style={{ marginTop: '16px', color: colors.gray[600] }}>Loading documents...</p>
-              </div>
-            ) : documents.length === 0 ? (
-              <div style={styles.emptyState}>
-                <DocumentIcon size={48} />
-                <p style={{ marginTop: '16px', fontSize: '18px', fontWeight: '500' }}>No documents found</p>
-                <p style={{ marginTop: '8px', fontSize: '14px', color: colors.gray[400] }}>
-                  Try adjusting your filters or search criteria
-                </p>
-              </div>
-            ) : (
-              <table style={styles.tableEl}>
-                <thead>
-                  <tr>
-                    <th style={styles.th}>Student</th>
-                    <th style={styles.th}>Document Type</th>
-                    <th style={styles.th}>Upload Date</th>
-                    <th style={styles.th}>Status</th>
-                    <th style={styles.th}>Verified By</th>
-                    <th style={styles.th}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {documents.map((doc) => (
-                    <tr key={doc.document_id}>
-                      <td style={styles.td}>
-                        <div>
-                          <p style={{ fontWeight: '500' }}>{doc.first_name} {doc.last_name}</p>
-                          <p style={{ fontSize: '12px', color: colors.gray[500] }}>ID: {doc.student_id}</p>
-                        </div>
-                      </td>
-                      <td style={styles.td}>
-                        <p>{doc.document_type}</p>
-                        {doc.is_required && (
-                          <span style={{ fontSize: '12px', color: colors.danger }}>Required</span>
-                        )}
-                      </td>
-                      <td style={styles.td}>
-                        <p style={{ fontSize: '14px' }}>{formatDate(doc.upload_date)}</p>
-                      </td>
-                      <td style={styles.td}>
-                        <span
-                          style={{
-                            ...styles.statusBadge,
-                            backgroundColor: `${getStatusColor(doc.verification_status)}20`,
-                            color: getStatusColor(doc.verification_status),
-                          }}
-                        >
-                          {getStatusIcon(doc.verification_status)}
-                          <span style={{ textTransform: 'capitalize' }}>
-                            {doc.verification_status === 'requires_update' ? 'Needs Update' : doc.verification_status}
-                          </span>
-                        </span>
-                      </td>
-                      <td style={styles.td}>
-                        {doc.verified_by_first_name ? (
-                          <div>
-                            <p style={{ fontSize: '14px' }}>
-                              {doc.verified_by_first_name} {doc.verified_by_last_name}
-                            </p>
-                            {doc.verified_date && (
-                              <p style={{ fontSize: '12px', color: colors.gray[500] }}>
-                                {formatDate(doc.verified_date)}
-                              </p>
-                            )}
-                          </div>
-                        ) : (
-                          <span style={{ color: colors.gray[400] }}>-</span>
-                        )}
-                      </td>
-                      <td style={styles.td}>
-                        <div style={{ display: 'flex', gap: '8px' }}>
-                          <button
-                            style={{ ...styles.actionButton, ...styles.viewButton }}
-                            onClick={() => handleViewDocument(doc)}
-                          >
-                            <EyeIcon size={14} />
-                            View
-                          </button>
-                          {doc.verification_status === 'pending' && (
-                            <>
-                              <button
-                                style={{ ...styles.actionButton, ...styles.verifyButton }}
-                                onClick={() => {
-                                  setSelectedDocument(doc);
-                                  setVerificationStatus('verified');
-                                  setViewMode(false);
-                                }}
-                                disabled={processingDoc === doc.document_id}
-                              >
-                                <CheckIcon size={14} />
-                                Verify
-                              </button>
-                              <button
-                                style={{ ...styles.actionButton, ...styles.rejectButton }}
-                                onClick={() => {
-                                  setSelectedDocument(doc);
-                                  setVerificationStatus('rejected');
-                                  setViewMode(false);
-                                }}
-                                disabled={processingDoc === doc.document_id}
-                              >
-                                <XIcon size={14} />
-                                Reject
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
-
-        {/* Verification Modal */}
-        {selectedDocument && !viewMode && (
-          <div style={styles.modal} onClick={() => setSelectedDocument(null)}>
-            <div style={styles.modalContent} onClick={(e) => e.stopPropagation()}>
-              <div style={styles.modalHeader}>
-                <h2 style={styles.modalTitle}>
-                  {verificationStatus === 'verified' ? 'Verify' : 'Reject'} Document
-                </h2>
-                <p style={{ fontSize: '14px', color: colors.gray[600] }}>
-                  Review document for {selectedDocument.first_name} {selectedDocument.last_name}
-                </p>
-              </div>
-
-              <div style={styles.modalBody}>
-                <div style={{ marginBottom: '24px' }}>
-                  <div style={styles.infoRow}>
-                    <span style={styles.infoLabel}>Document Type:</span>
-                    <span style={styles.infoValue}>{selectedDocument.document_type}</span>
-                  </div>
-                  <div style={styles.infoRow}>
-                    <span style={styles.infoLabel}>File Name:</span>
-                    <span style={styles.infoValue}>{selectedDocument.original_filename}</span>
-                  </div>
-                  <div style={styles.infoRow}>
-                    <span style={styles.infoLabel}>Upload Date:</span>
-                    <span style={styles.infoValue}>{formatDate(selectedDocument.upload_date)}</span>
-                  </div>
-                  <div style={styles.infoRow}>
-                    <span style={styles.infoLabel}>Student ID:</span>
-                    <span style={styles.infoValue}>{selectedDocument.student_id}</span>
-                  </div>
-                </div>
-
-                <div style={styles.formGroup}>
-                  <label style={styles.label}>Verification Status</label>
-                  <select
-                    style={styles.select}
-                    value={verificationStatus}
-                    onChange={(e) => setVerificationStatus(e.target.value)}
-                  >
-                    <option value="verified">Verified - Document is valid</option>
-                    <option value="rejected">Rejected - Document is invalid</option>
-                    <option value="requires_update">Requires Update - Needs resubmission</option>
-                  </select>
-                </div>
-
-                <div style={styles.formGroup}>
-                  <label style={styles.label}>
-                    Verification Notes {verificationStatus !== 'verified' && '(Required)'}
-                  </label>
-                  <textarea
-                    style={styles.textarea}
-                    value={verificationNotes}
-                    onChange={(e) => setVerificationNotes(e.target.value)}
-                    placeholder={
-                      verificationStatus === 'verified' 
-                        ? 'Optional: Add any notes about this document...'
-                        : 'Please provide a reason for rejection or what needs to be updated...'
-                    }
-                    required={verificationStatus !== 'verified'}
-                  />
-                </div>
-              </div>
-
-              <div style={styles.modalFooter}>
+            <label style={styles.filterLabel}>Filter by Status</label>
+            <div style={styles.filterButtons}>
+              {['all', 'pending', 'verified', 'rejected'].map((status) => (
                 <button
-                  style={{ ...styles.button, ...styles.secondaryButton }}
-                  onClick={() => {
-                    setSelectedDocument(null);
-                    setVerificationStatus('');
-                    setVerificationNotes('');
+                  key={status}
+                  style={{
+                    ...styles.filterButton,
+                    ...(filter === status ? styles.filterButtonActive : {})
                   }}
+                  onClick={() => setFilter(status)}
                 >
-                  Cancel
+                  <FilterIcon size={14} />
+                  {status === 'requires_update' ? 'Needs Update' : status.charAt(0).toUpperCase() + status.slice(1)}
                 </button>
-                <button
-                  style={{ ...styles.button, ...styles.primaryButton }}
-                  onClick={() => {
-                    if (verificationStatus !== 'verified' && !verificationNotes.trim()) {
-                      setError('Please provide verification notes for rejection or update request');
-                      return;
-                    }
-                    handleVerifyDocument(
-                      selectedDocument.document_id,
-                      verificationStatus,
-                      verificationNotes
-                    );
-                  }}
-                  disabled={processingDoc === selectedDocument.document_id}
-                >
-                  {processingDoc === selectedDocument.document_id ? (
-                    <>
-                      <LoadingSpinner size={16} />
-                      <span style={{ marginLeft: '8px' }}>Processing...</span>
-                    </>
-                  ) : (
-                    `${verificationStatus === 'verified' ? 'Verify' : verificationStatus === 'rejected' ? 'Reject' : 'Request Update'}`
-                  )}
-                </button>
-              </div>
+              ))}
             </div>
           </div>
-        )}
 
-        {/* Document Viewer Modal */}
-        {selectedDocument && viewMode && (
-          <div style={styles.modal} onClick={() => {
-            setSelectedDocument(null);
-            setViewMode(false);
-            setDocumentUrl('');
-          }}>
-            <div style={styles.modalContent} onClick={(e) => e.stopPropagation()}>
-              <div style={styles.modalHeader}>
-                <h2 style={styles.modalTitle}>View Document</h2>
-                <p style={{ fontSize: '14px', color: colors.gray[600] }}>
-                  {selectedDocument.document_type} - {selectedDocument.first_name} {selectedDocument.last_name}
-                </p>
+          <div style={styles.filterGroup}>
+            <label style={styles.filterLabel}>Search Documents</label>
+            <input
+              type="text"
+              style={styles.searchInput}
+              placeholder="Search by student name or ID..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+
+          <div style={styles.filterGroup}>
+            <label style={styles.filterLabel}>Actions</label>
+            <button
+              style={styles.refreshButton}
+              onClick={fetchDocuments}
+              disabled={loading}
+            >
+              <RefreshIcon />
+              Refresh
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Documents Table */}
+      <div style={styles.tableContainer}>
+        <div style={styles.tableHeader}>
+          Document Verification {filter !== 'all' ? `(${filter.charAt(0).toUpperCase() + filter.slice(1)})` : '(All Documents)'}
+        </div>
+        
+        <div style={styles.tableWrapper}>
+          {loading ? (
+            <div style={styles.loadingContainer}>
+              <LoadingSpinner size={32} />
+              <p style={{ color: colors.olive }}>Loading documents...</p>
+            </div>
+          ) : documents.length === 0 ? (
+            <div style={styles.emptyState}>
+              <DocumentIcon size={48} />
+              <p style={{ marginTop: '16px', fontSize: '18px', fontWeight: '500' }}>No documents found</p>
+              <p style={{ marginTop: '8px', fontSize: '14px', color: colors.olive }}>
+                Try adjusting your filters or search criteria
+              </p>
+            </div>
+          ) : (
+            <table style={styles.table}>
+              <thead>
+                <tr style={styles.tableHeaderRow}>
+                  <th style={styles.tableHeaderCell}>Student</th>
+                  <th style={styles.tableHeaderCell}>Document Type</th>
+                  <th style={styles.tableHeaderCell}>Upload Date</th>
+                  <th style={styles.tableHeaderCell}>Status</th>
+                  <th style={styles.tableHeaderCell}>Verified By</th>
+                  <th style={styles.tableHeaderCell}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {documents.map((doc) => (
+                  <tr key={doc.document_id} style={styles.tableRow}>
+                    <td style={styles.tableCell}>
+                      <div>
+                        <div style={{ fontWeight: '500' }}>{doc.first_name} {doc.last_name}</div>
+                        <div style={{ fontSize: '12px', color: colors.olive }}>
+                          ID: {doc.student_id}
+                        </div>
+                      </div>
+                    </td>
+                    <td style={styles.tableCell}>
+                      <div>{doc.document_type}</div>
+                      {doc.is_required && (
+                        <div style={{ fontSize: '12px', color: colors.red, fontWeight: '500' }}>
+                          Required
+                        </div>
+                      )}
+                    </td>
+                    <td style={styles.tableCell}>
+                      <div style={{ fontSize: '14px' }}>{formatDate(doc.upload_date)}</div>
+                    </td>
+                    <td style={styles.tableCell}>
+                      <span
+                        style={{
+                          ...styles.statusBadge,
+                          backgroundColor: getStatusColor(doc.verification_status)
+                        }}
+                      >
+                        {getStatusIcon(doc.verification_status)}
+                        <span>
+                          {doc.verification_status === 'requires_update' ? 'Needs Update' : doc.verification_status}
+                        </span>
+                      </span>
+                    </td>
+                    <td style={styles.tableCell}>
+                      {doc.verified_by_first_name ? (
+                        <div>
+                          <div style={{ fontSize: '14px' }}>
+                            {doc.verified_by_first_name} {doc.verified_by_last_name}
+                          </div>
+                          {doc.verified_date && (
+                            <div style={{ fontSize: '12px', color: colors.olive }}>
+                              {formatDate(doc.verified_date)}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <span style={{ color: colors.gray }}>-</span>
+                      )}
+                    </td>
+                    <td style={styles.tableCell}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                        <button
+                          style={{ ...styles.actionButton, ...styles.viewButton }}
+                          onClick={() => handleViewDocument(doc)}
+                        >
+                          <EyeIcon size={14} />
+                          View
+                        </button>
+                        {doc.verification_status === 'pending' && (
+                          <>
+                            <button
+                              style={{ ...styles.actionButton, ...styles.verifyButton }}
+                              onClick={() => {
+                                setSelectedDocument(doc);
+                                setVerificationStatus('verified');
+                                setViewMode(false);
+                              }}
+                              disabled={processingDoc === doc.document_id}
+                            >
+                              <CheckIcon size={14} />
+                              Verify
+                            </button>
+                            <button
+                              style={{ ...styles.actionButton, ...styles.rejectButton }}
+                              onClick={() => {
+                                setSelectedDocument(doc);
+                                setVerificationStatus('rejected');
+                                setViewMode(false);
+                              }}
+                              disabled={processingDoc === doc.document_id}
+                            >
+                              <XIcon size={14} />
+                              Reject
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      {/* Verification Modal */}
+      {selectedDocument && !viewMode && (
+        <div style={styles.modal} onClick={() => setSelectedDocument(null)}>
+          <div style={styles.modalContent} onClick={(e) => e.stopPropagation()}>
+            <div style={styles.modalHeader}>
+              <h2 style={styles.modalTitle}>
+                {verificationStatus === 'verified' ? 'Verify' : 'Reject'} Document
+              </h2>
+              <p style={styles.modalSubtitle}>
+                Review document for {selectedDocument.first_name} {selectedDocument.last_name}
+              </p>
+            </div>
+
+            <div style={styles.modalBody}>
+              <div style={{ marginBottom: '24px' }}>
+                <div style={styles.infoRow}>
+                  <span style={styles.infoLabel}>Document Type:</span>
+                  <span style={styles.infoValue}>{selectedDocument.document_type}</span>
+                </div>
+                <div style={styles.infoRow}>
+                  <span style={styles.infoLabel}>File Name:</span>
+                  <span style={styles.infoValue}>{selectedDocument.original_filename}</span>
+                </div>
+                <div style={styles.infoRow}>
+                  <span style={styles.infoLabel}>Upload Date:</span>
+                  <span style={styles.infoValue}>{formatDate(selectedDocument.upload_date)}</span>
+                </div>
+                <div style={styles.infoRow}>
+                  <span style={styles.infoLabel}>Student ID:</span>
+                  <span style={styles.infoValue}>{selectedDocument.student_id}</span>
+                </div>
               </div>
 
-              <div style={styles.modalBody}>
-                <div style={{ marginBottom: '16px' }}>
-                  <div style={styles.infoRow}>
-                    <span style={styles.infoLabel}>File Name:</span>
-                    <span style={styles.infoValue}>{selectedDocument.original_filename}</span>
-                  </div>
-                  <div style={styles.infoRow}>
-                    <span style={styles.infoLabel}>Upload Date:</span>
-                    <span style={styles.infoValue}>{formatDate(selectedDocument.upload_date)}</span>
-                  </div>
-                  <div style={styles.infoRow}>
-                    <span style={styles.infoLabel}>Current Status:</span>
-                    <span style={{
-                      ...styles.statusBadge,
-                      backgroundColor: `${getStatusColor(selectedDocument.verification_status)}20`,
-                      color: getStatusColor(selectedDocument.verification_status),
-                      display: 'inline-flex',
-                    }}>
-                      {getStatusIcon(selectedDocument.verification_status)}
-                      <span style={{ textTransform: 'capitalize' }}>
-                        {selectedDocument.verification_status}
-                      </span>
-                    </span>
-                  </div>
-                </div>
+              <div style={styles.formGroup}>
+                <label style={styles.label}>Verification Status</label>
+                <select
+                  style={styles.select}
+                  value={verificationStatus}
+                  onChange={(e) => setVerificationStatus(e.target.value)}
+                >
+                  <option value="verified">Verified - Document is valid</option>
+                  <option value="rejected">Rejected - Document is invalid</option>
+                  <option value="requires_update">Requires Update - Needs resubmission</option>
+                </select>
+              </div>
 
-                {/* Document Preview */}
-                <div style={{ marginTop: '16px' }}>
-                  <label style={styles.label}>Document Preview</label>
-                  {selectedDocument.original_filename?.toLowerCase().endsWith('.pdf') ? (
-                    <iframe
-                      src={documentUrl}
-                      style={styles.documentViewer}
-                      title="Document Preview"
-                    />
-                  ) : (
-                    <img
-                      src={documentUrl}
-                      alt="Document Preview"
-                      style={{
-                        ...styles.documentViewer,
-                        objectFit: 'contain',
-                      }}
-                      onError={(e) => {
-                        e.target.style.display = 'none';
-                        e.target.insertAdjacentHTML('afterend', 
-                          '<div style="padding: 20px; text-align: center; color: #6B7280;">Unable to preview document. Click the link below to download.</div>'
-                        );
-                      }}
-                    />
-                  )}
+              <div style={styles.formGroup}>
+                <label style={styles.label}>
+                  Verification Notes {verificationStatus !== 'verified' && '(Required)'}
+                </label>
+                <textarea
+                  style={styles.textarea}
+                  value={verificationNotes}
+                  onChange={(e) => setVerificationNotes(e.target.value)}
+                  placeholder={
+                    verificationStatus === 'verified' 
+                      ? 'Optional: Add any notes about this document...'
+                      : 'Please provide a reason for rejection or what needs to be updated...'
+                  }
+                  required={verificationStatus !== 'verified'}
+                />
+              </div>
+            </div>
+
+            <div style={styles.modalFooter}>
+              <button
+                style={{ ...styles.button, ...styles.secondaryButton }}
+                onClick={() => {
+                  setSelectedDocument(null);
+                  setVerificationStatus('');
+                  setVerificationNotes('');
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                style={{ ...styles.button, ...styles.primaryButton }}
+                onClick={() => {
+                  if (verificationStatus !== 'verified' && !verificationNotes.trim()) {
+                    setError('Please provide verification notes for rejection or update request');
+                    return;
+                  }
+                  handleVerifyDocument(
+                    selectedDocument.document_id,
+                    verificationStatus,
+                    verificationNotes
+                  );
+                }}
+                disabled={processingDoc === selectedDocument.document_id}
+              >
+                {processingDoc === selectedDocument.document_id ? (
+                  <>
+                    <LoadingSpinner size={16} />
+                    Processing...
+                  </>
+                ) : (
+                  `${verificationStatus === 'verified' ? 'Verify' : verificationStatus === 'rejected' ? 'Reject' : 'Request Update'}`
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Document Viewer Modal */}
+      {selectedDocument && viewMode && (
+        <div style={styles.modal} onClick={() => {
+          setSelectedDocument(null);
+          setViewMode(false);
+          setDocumentUrl('');
+        }}>
+          <div style={{...styles.modalContent, maxWidth: '90vw', maxHeight: '90vh'}} onClick={(e) => e.stopPropagation()}>
+            <div style={styles.modalHeader}>
+              <h2 style={styles.modalTitle}>View Document</h2>
+              <p style={styles.modalSubtitle}>
+                {selectedDocument.document_type} - {selectedDocument.first_name} {selectedDocument.last_name}
+              </p>
+            </div>
+
+            <div style={styles.modalBody}>
+              <div style={{ marginBottom: '16px' }}>
+                <div style={styles.infoRow}>
+                  <span style={styles.infoLabel}>File Name:</span>
+                  <span style={styles.infoValue}>{selectedDocument.original_filename}</span>
+                </div>
+                <div style={styles.infoRow}>
+                  <span style={styles.infoLabel}>Upload Date:</span>
+                  <span style={styles.infoValue}>{formatDate(selectedDocument.upload_date)}</span>
+                </div>
+                <div style={styles.infoRow}>
+                  <span style={styles.infoLabel}>Current Status:</span>
+                  <span
+                    style={{
+                      ...styles.statusBadge,
+                      backgroundColor: getStatusColor(selectedDocument.verification_status),
+                      display: 'inline-flex',
+                    }}
+                  >
+                    {getStatusIcon(selectedDocument.verification_status)}
+                    <span style={{ textTransform: 'capitalize' }}>
+                      {selectedDocument.verification_status === 'requires_update' ? 'Needs Update' : selectedDocument.verification_status}
+                    </span>
+                  </span>
+                </div>
+              </div>
+
+              {/* Document Preview */}
+              <div style={{ marginTop: '16px' }}>
+                <label style={styles.label}>Document Preview</label>
+                {(() => {
+                  const filename = selectedDocument.original_filename?.toLowerCase() || '';
+                  const isPDF = filename.endsWith('.pdf');
+                  const isImage = filename.match(/\.(jpg|jpeg|png|gif|bmp|webp)$/);
+                  const isText = filename.match(/\.(txt|log|csv)$/);
+                  
+                  if (isPDF) {
+                    return (
+                      <iframe
+                        src={documentUrl}
+                        style={{
+                          width: '100%',
+                          height: '600px',
+                          border: `1px solid ${colors.lightGreen}`,
+                          borderRadius: '6px',
+                          backgroundColor: colors.white
+                        }}
+                        title="Document Preview"
+                        onLoad={() => console.log('PDF loaded successfully')}
+                        onError={() => console.error('Error loading PDF')}
+                      />
+                    );
+                  } else if (isImage) {
+                    return (
+                      <div style={{ 
+                        width: '100%', 
+                        maxHeight: '600px', 
+                        overflow: 'auto',
+                        border: `1px solid ${colors.lightGreen}`,
+                        borderRadius: '6px',
+                        backgroundColor: colors.cream,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: '20px'
+                      }}>
+                        <img
+                          src={documentUrl}
+                          alt="Document Preview"
+                          style={{
+                            maxWidth: '100%',
+                            maxHeight: '100%',
+                            objectFit: 'contain',
+                          }}
+                          onError={(e) => {
+                            e.target.style.display = 'none';
+                            e.target.parentElement.innerHTML = `
+                              <div style="padding: 40px; text-align: center; color: ${colors.olive};">
+                                <p style="font-size: 18px; margin-bottom: 10px;">Unable to preview image</p>
+                                <p style="font-size: 14px;">The image may be corrupted or in an unsupported format.</p>
+                              </div>
+                            `;
+                          }}
+                        />
+                      </div>
+                    );
+                  } else if (isText) {
+                    return (
+                      <div style={{
+                        width: '100%',
+                        height: '400px',
+                        border: `1px solid ${colors.lightGreen}`,
+                        borderRadius: '6px',
+                        backgroundColor: colors.white,
+                        padding: '20px',
+                        overflow: 'auto'
+                      }}>
+                        <iframe
+                          src={documentUrl}
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            border: 'none'
+                          }}
+                          title="Document Preview"
+                        />
+                      </div>
+                    );
+                  } else {
+                    return (
+                      <div style={{
+                        padding: '40px',
+                        textAlign: 'center',
+                        color: colors.olive,
+                        border: `1px solid ${colors.lightGreen}`,
+                        borderRadius: '6px',
+                        backgroundColor: colors.cream
+                      }}>
+                        <DocumentIcon size={48} />
+                        <p style={{ marginTop: '16px', fontSize: '16px', fontWeight: '500' }}>
+                          Preview not available for this file type
+                        </p>
+                        <p style={{ marginTop: '8px', fontSize: '14px' }}>
+                          File type: {filename.split('.').pop()?.toUpperCase() || 'Unknown'}
+                        </p>
+                      </div>
+                    );
+                  }
+                })()}
+                
+                <div style={{ marginTop: '16px', display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                  <a
+                    href={documentUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    download={selectedDocument.original_filename}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      padding: '8px 16px',
+                      backgroundColor: colors.darkGreen,
+                      color: colors.white,
+                      fontSize: '14px',
+                      textDecoration: 'none',
+                      fontWeight: '500',
+                      borderRadius: '6px',
+                      transition: 'all 0.15s ease-in-out'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.target.style.backgroundColor = colors.olive;
+                    }}
+                    onMouseLeave={(e) => {
+                      e.target.style.backgroundColor = colors.darkGreen;
+                    }}
+                  >
+                    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    Download Document
+                  </a>
                   <a
                     href={documentUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     style={{
-                      display: 'inline-block',
-                      marginTop: '12px',
-                      color: colors.primary,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      padding: '8px 16px',
+                      backgroundColor: colors.white,
+                      color: colors.darkGreen,
                       fontSize: '14px',
                       textDecoration: 'none',
+                      fontWeight: '500',
+                      borderRadius: '6px',
+                      border: `1px solid ${colors.darkGreen}`,
+                      transition: 'all 0.15s ease-in-out'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.target.style.backgroundColor = colors.cream;
+                    }}
+                    onMouseLeave={(e) => {
+                      e.target.style.backgroundColor = colors.white;
                     }}
                   >
-                    Open document in new tab →
+                    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                    Open in New Tab
                   </a>
                 </div>
-              </div>
-
-              <div style={styles.modalFooter}>
-                <button
-                  style={{ ...styles.button, ...styles.secondaryButton }}
-                  onClick={() => {
-                    setSelectedDocument(null);
-                    setViewMode(false);
-                    setDocumentUrl('');
-                  }}
-                >
-                  Close
-                </button>
-                {selectedDocument.verification_status === 'pending' && (
-                  <>
-                    <button
-                      style={{ ...styles.button, ...styles.verifyButton }}
-                      onClick={() => {
-                        setVerificationStatus('verified');
-                        setViewMode(false);
-                      }}
-                    >
-                      <CheckIcon size={16} />
-                      <span style={{ marginLeft: '8px' }}>Verify Document</span>
-                    </button>
-                    <button
-                      style={{ ...styles.button, ...styles.rejectButton }}
-                      onClick={() => {
-                        setVerificationStatus('rejected');
-                        setViewMode(false);
-                      }}
-                    >
-                      <XIcon size={16} />
-                      <span style={{ marginLeft: '8px' }}>Reject Document</span>
-                    </button>
-                  </>
+                
+                {selectedDocument.verification_notes && (
+                  <div style={{ 
+                    marginTop: '20px',
+                    padding: '16px',
+                    backgroundColor: colors.cream,
+                    borderRadius: '6px',
+                    border: `1px solid ${colors.lightGreen}`
+                  }}>
+                    <label style={{...styles.label, marginBottom: '8px'}}>Verification Notes</label>
+                    <p style={{ fontSize: '14px', color: colors.black, margin: 0 }}>
+                      {selectedDocument.verification_notes}
+                    </p>
+                  </div>
                 )}
               </div>
             </div>
-          </div>
-        )}
-      </div>
 
-      {/* Inline styles for animations */}
+            <div style={styles.modalFooter}>
+              <button
+                style={{ ...styles.button, ...styles.closeButton }}
+                onClick={() => {
+                  setSelectedDocument(null);
+                  setViewMode(false);
+                  setDocumentUrl('');
+                }}
+              >
+                <XIcon size={16} />
+                Close
+              </button>
+              {selectedDocument.verification_status === 'pending' && (
+                <>
+                  <button
+                    style={{ ...styles.button, ...styles.verifyButton }}
+                    onClick={() => {
+                      setVerificationStatus('verified');
+                      setViewMode(false);
+                    }}
+                  >
+                    <CheckIcon size={16} />
+                    Verify Document
+                  </button>
+                  <button
+                    style={{ ...styles.button, ...styles.rejectButton }}
+                    onClick={() => {
+                      setVerificationStatus('rejected');
+                      setViewMode(false);
+                    }}
+                  >
+                    <XIcon size={16} />
+                    Reject Document
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CSS for animations and responsive design */}
       <style jsx>{`
         @keyframes spin {
           to {
@@ -929,9 +1317,82 @@ const PendingDocument = () => {
         .opacity-75 {
           opacity: 0.75;
         }
+
+        /* Responsive table hover effects */
+        tbody tr:hover {
+          background-color: ${colors.cream} !important;
+        }
+
+        /* Mobile responsive adjustments */
+        @media (max-width: 768px) {
+          .table-responsive {
+            font-size: 12px;
+          }
+          
+          .action-buttons {
+            flex-direction: column;
+            gap: 4px;
+          }
+          
+          .modal-content {
+            margin: 16px;
+            max-height: calc(100vh - 32px);
+          }
+          
+          .modal-footer {
+            flex-direction: column-reverse;
+          }
+          
+          .modal-footer button {
+            width: 100%;
+            justify-content: center;
+          }
+        }
+
+        @media (max-width: 480px) {
+          .stats-grid {
+            grid-template-columns: repeat(2, 1fr);
+          }
+          
+          .filter-buttons {
+            justify-content: center;
+            flex-wrap: wrap;
+          }
+          
+          .filter-button {
+            flex: 1;
+            min-width: 120px;
+          }
+        }
+
+        /* Button hover effects */
+        button:hover:not(:disabled) {
+          transform: translateY(-1px);
+          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        button:active:not(:disabled) {
+          transform: translateY(0);
+        }
+
+        button:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+        }
+
+        /* Input focus effects */
+        input:focus, select:focus, textarea:focus {
+          border-color: ${colors.darkGreen};
+          box-shadow: 0 0 0 2px ${colors.darkGreen}20;
+        }
+
+        /* Smooth transitions */
+        * {
+          transition: all 0.15s ease-in-out;
+        }
       `}</style>
     </div>
   );
 };
 
-export default PendingDocument
+export default PendingDocument;
