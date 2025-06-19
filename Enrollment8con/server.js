@@ -598,11 +598,11 @@ app.post('/api/auth', [
         adminId = insertResult.insertId;
 
         // Create person record with matching ID
-        await pool.execute(
-          `INSERT INTO persons (person_id, first_name, last_name, email, birth_place, gender, education)
-           VALUES (?, 'System', 'Administrator', 'admin@gmail.com', 'System', 'Other', 'System Administrator')`,
-          [adminId]
-        );
+        // await pool.execute(
+        //   `INSERT INTO persons (person_id, first_name, last_name, email, birth_place, gender, education)
+        //    VALUES (?, 'System', 'Administrator', 'admin@gmail.com', 'System', 'Other', 'System Administrator')`,
+        //   [adminId]
+        // );
 
         await pool.execute(
           `INSERT INTO account_roles (account_id, role_id, is_active)
@@ -1021,6 +1021,8 @@ app.post('/api/auth/signup', [
   }
 });
 
+
+
 app.post('/api/auth/login', [
   body('token').notEmpty().isString()
 ], validateInput, async (req, res) => {
@@ -1031,7 +1033,7 @@ app.post('/api/auth/login', [
 
     console.log('🔐 Incoming token:', token);
 
-    // Verify JWT
+    // 1. Verify JWT
     let payload;
     try {
       payload = jwt.verify(token, JWT_SECRET);
@@ -1041,7 +1043,7 @@ app.post('/api/auth/login', [
       return res.status(401).json({ error: 'Invalid or expired token' });
     }
 
-    // Query the account using account_id and token from DB
+    // 2. Find matching account in DB using account_id and stored token
     const [rows] = await pool.execute(`
       SELECT  
         a.account_id, a.account_status, a.last_login, a.failed_login_attempts, a.locked_until, a.created_at, a.updated_at,
@@ -1068,7 +1070,7 @@ app.post('/api/auth/login', [
 
     const user = rows[0];
 
-    // Fetch contact information
+    // 3. Fetch contact info
     let contactInfo = [];
     if (user.person_id) {
       const [contactRows] = await pool.execute(`
@@ -1080,9 +1082,8 @@ app.post('/api/auth/login', [
       contactInfo = contactRows;
     }
 
-    // Fetch additional data based on role
+    // 4. Role-specific extra data
     let additionalData = {};
-    
     if (user.role_name === 'student' && user.student_id) {
       const [tradingLevels] = await pool.execute(`
         SELECT 
@@ -1105,11 +1106,11 @@ app.post('/api/auth/login', [
       additionalData = {
         trading_levels: tradingLevels,
         learning_preferences: learningPrefs,
-        enrollments: [] // Optional: You can query this later if needed
+        enrollments: [] // You can add enrollment logic here later
       };
     }
 
-    // Build user response object
+    // 5. Build response
     const responseUser = {
       account: {
         account_id: user.account_id,
@@ -1144,7 +1145,7 @@ app.post('/api/auth/login', [
       additional_data: additionalData
     };
 
-    // Set role-specific profile
+    // 6. Set role-specific profile
     if (user.role_name === 'student') {
       responseUser.profile = {
         student_id: user.student_id,
@@ -1165,7 +1166,7 @@ app.post('/api/auth/login', [
       };
     }
 
-    // Update last login time
+    // 7. Update last login time
     await pool.execute(`
       UPDATE accounts 
       SET last_login = NOW() 
@@ -1174,6 +1175,7 @@ app.post('/api/auth/login', [
 
     console.log('✅ Login successful for account:', user.account_id);
 
+    // 8. Send response
     return res.status(200).json({
       success: true,
       token,
@@ -1185,6 +1187,170 @@ app.post('/api/auth/login', [
     return res.status(401).json({ error: 'Invalid token' });
   }
 });
+// app.post('/api/auth/login', [
+//   body('token').notEmpty().isString()
+// ], validateInput, async (req, res) => {
+//   try {
+//     const { token } = req.body;
+
+//     if (!token) return res.status(400).json({ error: 'Token required' });
+
+//     console.log('🔐 Incoming token:', token);
+
+//     // Verify JWT
+//     let payload;
+//     try {
+//       payload = jwt.verify(token, JWT_SECRET);
+//       console.log('✅ Decoded JWT payload:', payload);
+//     } catch (err) {
+//       console.error('❌ JWT verification failed:', err.message);
+//       return res.status(401).json({ error: 'Invalid or expired token' });
+//     }
+
+//     // Query the account using account_id and token from DB
+//     const [rows] = await pool.execute(`
+//       SELECT  
+//         a.account_id, a.account_status, a.last_login, a.failed_login_attempts, a.locked_until, a.created_at, a.updated_at,
+//         ar.role_id, 
+//         r.role_name, 
+//         r.permissions,
+//         p.person_id, p.first_name, p.middle_name, p.last_name, p.gender, p.birth_date, p.birth_place, p.email, p.education, p.created_at AS person_created_at, p.updated_at AS person_updated_at,
+//         st.staff_id, st.employee_id, st.employment_status, st.hire_date,
+//         s.student_id, s.graduation_status, s.academic_standing, s.registration_date
+//       FROM accounts a
+//       JOIN account_roles ar ON a.account_id = ar.account_id AND ar.is_active = TRUE
+//       JOIN roles r ON ar.role_id = r.role_id
+//       LEFT JOIN staff st ON a.account_id = st.account_id
+//       LEFT JOIN students s ON a.account_id = s.account_id
+//       LEFT JOIN persons p ON a.account_id = p.person_id
+//       WHERE a.account_id = ? AND a.token = ?
+//     `, [payload.accountId, token]);
+
+//     console.log('📦 Query result rows:', rows.length);
+
+//     if (rows.length === 0) {
+//       return res.status(401).json({ error: 'Invalid or expired token (not matched in DB)' });
+//     }
+
+//     const user = rows[0];
+
+//     // Fetch contact information
+//     let contactInfo = [];
+//     if (user.person_id) {
+//       const [contactRows] = await pool.execute(`
+//         SELECT contact_type, contact_value, is_primary
+//         FROM contact_info
+//         WHERE person_id = ?
+//         ORDER BY is_primary DESC, contact_type
+//       `, [user.person_id]);
+//       contactInfo = contactRows;
+//     }
+
+//     // Fetch additional data based on role
+//     let additionalData = {};
+    
+//     if (user.role_name === 'student' && user.student_id) {
+//       const [tradingLevels] = await pool.execute(`
+//         SELECT 
+//           tl.level_name,
+//           tl.level_description,
+//           stl.is_current,
+//           stl.assigned_date
+//         FROM student_trading_levels stl
+//         JOIN trading_levels tl ON stl.level_id = tl.level_id
+//         WHERE stl.student_id = ?
+//         ORDER BY stl.assigned_date DESC
+//       `, [user.student_id]);
+
+//       const [learningPrefs] = await pool.execute(`
+//         SELECT device_type, learning_style, created_at
+//         FROM learning_preferences
+//         WHERE student_id = ?
+//       `, [user.student_id]);
+
+//       additionalData = {
+//         trading_levels: tradingLevels,
+//         learning_preferences: learningPrefs,
+//         enrollments: [] // Optional: You can query this later if needed
+//       };
+//     }
+
+//     // Build user response object
+//     const responseUser = {
+//       account: {
+//         account_id: user.account_id,
+//         account_status: user.account_status,
+//         last_login: user.last_login,
+//         failed_login_attempts: user.failed_login_attempts,
+//         locked_until: user.locked_until,
+//         created_at: user.created_at,
+//         updated_at: user.updated_at
+//       },
+//       role: {
+//         role_id: user.role_id,
+//         role_name: user.role_name,
+//         permissions: user.permissions
+//       },
+//       person: {
+//         person_id: user.person_id,
+//         first_name: user.first_name,
+//         middle_name: user.middle_name,
+//         last_name: user.last_name,
+//         full_name: `${user.first_name} ${user.middle_name ? user.middle_name + ' ' : ''}${user.last_name}`.trim(),
+//         gender: user.gender,
+//         birth_date: user.birth_date,
+//         birth_place: user.birth_place,
+//         email: user.email,
+//         education: user.education,
+//         created_at: user.person_created_at,
+//         updated_at: user.person_updated_at
+//       },
+//       contact_info: contactInfo,
+//       profile: {},
+//       additional_data: additionalData
+//     };
+
+//     // Set role-specific profile
+//     if (user.role_name === 'student') {
+//       responseUser.profile = {
+//         student_id: user.student_id,
+//         graduation_status: user.graduation_status,
+//         academic_standing: user.academic_standing,
+//         registration_date: user.registration_date,
+//         current_trading_level: additionalData.trading_levels?.find(tl => tl.is_current)?.level_name || null,
+//         total_enrollments: additionalData.enrollments?.length || 0,
+//         active_enrollments: additionalData.enrollments?.filter(e => e.status === 'active').length || 0,
+//         completed_courses: additionalData.enrollments?.filter(e => e.status === 'completed').length || 0
+//       };
+//     } else if (user.role_name === 'staff' || user.role_name === 'admin') {
+//       responseUser.profile = {
+//         staff_id: user.staff_id,
+//         employee_id: user.employee_id,
+//         employment_status: user.employment_status,
+//         hire_date: user.hire_date
+//       };
+//     }
+
+//     // Update last login time
+//     await pool.execute(`
+//       UPDATE accounts 
+//       SET last_login = NOW() 
+//       WHERE account_id = ?
+//     `, [user.account_id]);
+
+//     console.log('✅ Login successful for account:', user.account_id);
+
+//     return res.status(200).json({
+//       success: true,
+//       token,
+//       user: responseUser
+//     });
+
+//   } catch (err) {
+//     console.error('❌ Login token validation error:', err);
+//     return res.status(401).json({ error: 'Invalid token' });
+//   }
+// });
 
 app.post('/api/auth/logout', authenticateToken, async (req, res) => {
   try {
@@ -3228,151 +3394,443 @@ app.get('/api/courses', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch courses' });
   }
 });
-app.post('/api/courses', [
-  authenticateToken,
-  authorize(['admin']),
-  body('course_code').trim().isLength({ min: 1, max: 20 }),
-  body('course_name').trim().isLength({ min: 1, max: 100 }),
-  body('course_description').optional().trim(),
-  body('duration_weeks').isInt({ min: 1 }),
-  body('credits').isFloat({ min: 0 })
-], validateInput, async (req, res) => {
-  const connection = await pool.getConnection();
+// app.post('/api/courses', [
+//   authenticateToken,
+//   authorize(['admin']),
+//   body('course_code').trim().isLength({ min: 1, max: 20 }),
+//   body('course_name').trim().isLength({ min: 1, max: 100 }),
+//   body('course_description').optional().trim(),
+//   body('duration_weeks').isInt({ min: 1 }),
+//   body('credits').isFloat({ min: 0 })
+// ], validateInput, async (req, res) => {
+//   const connection = await pool.getConnection();
   
+//   try {
+//     await connection.beginTransaction();
+    
+//     const {
+//       course_code,
+//       course_name,
+//       course_description,
+//       duration_weeks,
+//       credits,
+//       competencies = [],
+//       pricing = {}
+//     } = req.body;
+
+//     // Check if course code already exists
+//     const [existingCourse] = await connection.execute(
+//       'SELECT course_id FROM courses WHERE course_code = ?',
+//       [course_code]
+//     );
+
+//     if (existingCourse.length > 0) {
+//       await connection.rollback();
+//       return res.status(409).json({ error: 'Course code already exists' });
+//     }
+
+//     // Insert course
+//     const [courseResult] = await connection.execute(`
+//       INSERT INTO courses (
+//         course_code, course_name, course_description,
+//         duration_weeks, credits, is_active
+//       ) VALUES (?, ?, ?, ?, ?, TRUE)
+//     `, [
+//       course_code,
+//       course_name,
+//       course_description || null,
+//       duration_weeks,
+//       credits
+//     ]);
+
+//     const courseId = courseResult.insertId;
+
+//     // Link competencies if provided
+//     if (competencies.length > 0) {
+//       const competencyValues = competencies.map((compId, index) => 
+//         [courseId, compId, true, index + 1, null]
+//       );
+
+//       const competencyPlaceholders = competencies.map(() => '(?, ?, ?, ?, ?)').join(', ');
+      
+//       await connection.execute(`
+//         INSERT INTO course_competencies (
+//           course_id, competency_id, is_required, order_sequence, estimated_hours
+//         ) VALUES ${competencyPlaceholders}
+//       `, competencyValues.flat());
+//     }
+
+//     // Create default course offering
+//     const batchIdentifier = `${course_code}-${new Date().getFullYear()}-01`;
+//     const startDate = new Date();
+//     const endDate = new Date();
+//     endDate.setDate(endDate.getDate() + (duration_weeks * 7));
+
+//     const [offeringResult] = await connection.execute(`
+//       INSERT INTO course_offerings (
+//         course_id, batch_identifier, start_date, end_date,
+//         max_enrollees, current_enrollees, status, location
+//       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+//     `, [
+//       courseId,
+//       batchIdentifier,
+//       startDate,
+//       endDate,
+//       30, // default max enrollees
+//       0,
+//       'planned',
+//       'Online' // default location
+//     ]);
+
+//     const offeringId = offeringResult.insertId;
+
+//     // Insert pricing if provided
+//     const pricingTypes = ['regular', 'early_bird', 'group', 'scholarship', 'special'];
+    
+//     for (const type of pricingTypes) {
+//       if (pricing[type] && parseFloat(pricing[type]) > 0) {
+//         let expiryDate = null;
+        
+//         // Set expiry date for early bird pricing (30 days before start)
+//         if (type === 'early_bird') {
+//           expiryDate = new Date(startDate);
+//           expiryDate.setDate(expiryDate.getDate() - 30);
+//         }
+
+//         await connection.execute(`
+//           INSERT INTO course_pricing (
+//             offering_id, pricing_type, amount, currency,
+//             effective_date, expiry_date, is_active
+//           ) VALUES (?, ?, ?, 'PHP', NOW(), ?, TRUE)
+//         `, [
+//           offeringId,
+//           type,
+//           parseFloat(pricing[type]),
+//           expiryDate
+//         ]);
+//       }
+//     }
+
+//     await connection.commit();
+
+//     // Fetch the created course with full details
+//     const [newCourse] = await connection.execute(`
+//       SELECT c.*, COUNT(DISTINCT co.offering_id) as total_offerings
+//       FROM courses c
+//       LEFT JOIN course_offerings co ON c.course_id = co.course_id
+//       WHERE c.course_id = ?
+//       GROUP BY c.course_id
+//     `, [courseId]);
+
+//     res.status(201).json({
+//       message: 'Course created successfully',
+//       course: newCourse[0]
+//     });
+
+//   } catch (error) {
+//     await connection.rollback();
+//     console.error('Course creation error:', error);
+//     res.status(500).json({ 
+//       error: 'Failed to create course',
+//       details: process.env.NODE_ENV === 'development' ? error.message : undefined
+//     });
+//   } finally {
+//     connection.release();
+//   }
+// });
+// Debug endpoint to test validation
+app.post('/api/students/validate-debug', [
+  authenticateToken,
+  authorize(['admin', 'instructor']),
+  body('first_name').trim().notEmpty().withMessage('First name is required'),
+  body('last_name').trim().notEmpty().withMessage('Last name is required'),
+  body('email').isEmail().withMessage('Valid email is required'),
+  body('offering_id').isInt({ min: 1 }).withMessage('Valid offering ID is required')
+], (req, res) => {
+  const errors = validationResult(req);
+  
+  res.json({
+    hasErrors: !errors.isEmpty(),
+    errors: errors.array(),
+    receivedData: req.body
+  });
+});
+
+// Enhanced validation middleware with better error handling
+const validateStudentRegistration = (req, res, next) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    console.log('Validation errors:', errors.array());
+    return res.status(400).json({
+      error: 'Validation failed',
+      details: errors.array().map(err => ({
+        field: err.path,
+        message: err.msg,
+        value: err.value
+      }))
+    });
+  }
+  next();
+};
+
+// API endpoint to create student and relate to course offering
+app.post('/api/students/register', [
+  authenticateToken,
+  authorize(['admin', 'instructor']),
+  body('first_name').trim().notEmpty().isLength({ max: 50 }),
+  body('last_name').trim().notEmpty().isLength({ max: 50 }),
+  body('email').isEmail().normalizeEmail(),
+  body('course_id').isInt({ min: 1 }),
+  body('middle_name').optional().trim(),
+  body('birth_date').optional().isISO8601(),
+  body('birth_place').optional().trim(),
+  body('gender').optional().isIn(['Male', 'Female', 'Other']),
+  body('education').optional().trim(),
+  body('phone').optional().trim(),
+  body('address').optional().trim(),
+  body('trading_level_id').optional().isInt({ min: 1 }),
+  body('referred_by').optional().isInt({ min: 1 }),
+  body('device_type').optional().isString(),
+  body('learning_style').optional().isString(),
+  body('scheme_id').optional().isInt({ min: 1 }),
+  body('total_due').optional().isFloat({ min: 0 }),
+  body('amount_paid').optional().isFloat({ min: 0 })
+], validateStudentRegistration, async (req, res) => {
+  const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
-    
+
     const {
-      course_code,
-      course_name,
-      course_description,
-      duration_weeks,
-      credits,
-      competencies = [],
-      pricing = {}
+      first_name, middle_name, last_name, birth_date, birth_place,
+      gender, email, education, phone, address, course_id,
+      scheme_id, total_due, amount_paid
     } = req.body;
 
-    // Check if course code already exists
-    const [existingCourse] = await connection.execute(
-      'SELECT course_id FROM courses WHERE course_code = ?',
-      [course_code]
-    );
+    // Step 1: Find eligible course offering
+    const [offerings] = await connection.execute(`
+      SELECT co.*, c.course_name, c.course_code
+      FROM course_offerings co
+      JOIN courses c ON co.course_id = c.course_id
+      WHERE co.course_id = ? 
+        AND co.status IN ('planned', 'active')
+        AND co.current_enrollees < co.max_enrollees
+        AND co.end_date > NOW()
+      ORDER BY 
+        CASE WHEN co.status = 'planned' THEN 1 ELSE 2 END,
+        co.start_date ASC
+      LIMIT 1
+    `, [course_id]);
 
-    if (existingCourse.length > 0) {
+    if (offerings.length === 0) {
       await connection.rollback();
-      return res.status(409).json({ error: 'Course code already exists' });
+      return res.status(404).json({ error: 'No eligible course offering available.' });
     }
 
-    // Insert course
-    const [courseResult] = await connection.execute(`
-      INSERT INTO courses (
-        course_code, course_name, course_description,
-        duration_weeks, credits, is_active
-      ) VALUES (?, ?, ?, ?, ?, TRUE)
+    const offering = offerings[0];
+    const offering_id = offering.offering_id;
+
+    // Step 2: Check for existing enrollment
+    const [existing] = await connection.execute(`
+      SELECT sa.account_id
+      FROM student_accounts sa
+      JOIN students s ON sa.student_id = s.student_id
+      JOIN persons p ON s.person_id = p.person_id
+      JOIN course_offerings co ON sa.offering_id = co.offering_id
+      WHERE p.email = ? AND co.course_id = ?
+    `, [email, course_id]);
+
+    if (existing.length > 0) {
+      await connection.rollback();
+      return res.status(409).json({ error: 'Student already enrolled in this course.' });
+    }
+
+    // Step 3: Generate and hash password
+    const generatedPassword = generateRandomPassword();
+    const password_hash = await bcrypt.hash(generatedPassword, 10);
+
+    // Step 4: Call stored procedure to create user + student
+    await connection.query(`
+  CALL sp_register_user_with_synced_ids(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, @p_account_id, @p_result, @p_student_id);
+`, [
+  first_name, middle_name || null, last_name,
+  birth_date || null, birth_place || null, gender || null,
+  email, password_hash, education || null, 'student',
+  phone || null, address || null
+]);
+
+const [selectResult] = await connection.query(`
+  SELECT @p_account_id AS account_id, @p_result AS result, @p_student_id AS student_id;
+`);
+
+const resultRow = selectResult[0];
+const account_id = resultRow.account_id;
+const student_id = resultRow.student_id;
+const result = resultRow.result;
+
+
+    if (!student_id || !account_id || !result.startsWith('SUCCESS')) {
+      await connection.rollback();
+      return res.status(500).json({ error: 'Failed to register student: ' + result });
+    }
+
+    // Step 5: Insert into student_accounts
+    const totalDue = total_due || 0;
+    const amountPaid = amount_paid || 0;
+    const balance = totalDue - amountPaid;
+    const dueDate = balance > 0 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) : null;
+
+    await connection.execute(`
+      INSERT INTO student_accounts (
+        student_id, offering_id, total_due, amount_paid, balance,
+        scheme_id, account_status, due_date, payment_reminder_count,
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
     `, [
-      course_code,
-      course_name,
-      course_description || null,
-      duration_weeks,
-      credits
+      student_id,
+      offering_id,
+      totalDue,
+      amountPaid,
+      balance,
+      scheme_id || null,
+      balance > 0 ? 'pending' : 'paid',
+      dueDate,
+      0
     ]);
 
-    const courseId = courseResult.insertId;
-
-    // Link competencies if provided
-    if (competencies.length > 0) {
-      const competencyValues = competencies.map((compId, index) => 
-        [courseId, compId, true, index + 1, null]
-      );
-
-      const competencyPlaceholders = competencies.map(() => '(?, ?, ?, ?, ?)').join(', ');
-      
-      await connection.execute(`
-        INSERT INTO course_competencies (
-          course_id, competency_id, is_required, order_sequence, estimated_hours
-        ) VALUES ${competencyPlaceholders}
-      `, competencyValues.flat());
-    }
-
-    // Create default course offering
-    const batchIdentifier = `${course_code}-${new Date().getFullYear()}-01`;
-    const startDate = new Date();
-    const endDate = new Date();
-    endDate.setDate(endDate.getDate() + (duration_weeks * 7));
-
-    const [offeringResult] = await connection.execute(`
-      INSERT INTO course_offerings (
-        course_id, batch_identifier, start_date, end_date,
-        max_enrollees, current_enrollees, status, location
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      courseId,
-      batchIdentifier,
-      startDate,
-      endDate,
-      30, // default max enrollees
-      0,
-      'planned',
-      'Online' // default location
-    ]);
-
-    const offeringId = offeringResult.insertId;
-
-    // Insert pricing if provided
-    const pricingTypes = ['regular', 'early_bird', 'group', 'scholarship', 'special'];
-    
-    for (const type of pricingTypes) {
-      if (pricing[type] && parseFloat(pricing[type]) > 0) {
-        let expiryDate = null;
-        
-        // Set expiry date for early bird pricing (30 days before start)
-        if (type === 'early_bird') {
-          expiryDate = new Date(startDate);
-          expiryDate.setDate(expiryDate.getDate() - 30);
-        }
-
-        await connection.execute(`
-          INSERT INTO course_pricing (
-            offering_id, pricing_type, amount, currency,
-            effective_date, expiry_date, is_active
-          ) VALUES (?, ?, ?, 'PHP', NOW(), ?, TRUE)
-        `, [
-          offeringId,
-          type,
-          parseFloat(pricing[type]),
-          expiryDate
-        ]);
-      }
-    }
+    // Step 6: Update course offering
+    await connection.execute(`
+      UPDATE course_offerings
+      SET current_enrollees = current_enrollees + 1,
+          status = IF(status = 'planned', 'active', status),
+          updated_at = NOW()
+      WHERE offering_id = ?
+    `, [offering_id]);
 
     await connection.commit();
 
-    // Fetch the created course with full details
-    const [newCourse] = await connection.execute(`
-      SELECT c.*, COUNT(DISTINCT co.offering_id) as total_offerings
-      FROM courses c
-      LEFT JOIN course_offerings co ON c.course_id = co.course_id
-      WHERE c.course_id = ?
-      GROUP BY c.course_id
-    `, [courseId]);
+    // Step 7: Email credentials
+    let emailSent = false;
+    let emailError = null;
 
+    try {
+      emailSent = await sendPasswordEmail(
+        email,
+        generatedPassword,
+        first_name,
+        last_name,
+        offering.course_name,
+        offering.batch_identifier
+      );
+    } catch (err) {
+      emailError = err.message;
+    }
+
+    // Final response
     res.status(201).json({
-      message: 'Course created successfully',
-      course: newCourse[0]
+      message: 'Student registered successfully',
+      student_id,
+      account_id,
+      course_offering: {
+        offering_id,
+        batch_identifier: offering.batch_identifier,
+        course_name: offering.course_name,
+        course_code: offering.course_code
+      },
+      credentials: {
+        email,
+        password: generatedPassword
+      },
+      email_sent: emailSent,
+      email_error: emailError
     });
 
-  } catch (error) {
+  } catch (err) {
     await connection.rollback();
-    console.error('Course creation error:', error);
-    res.status(500).json({ 
-      error: 'Failed to create course',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    console.error('Registration error:', err);
+    res.status(500).json({ error: 'Registration failed' });
   } finally {
     connection.release();
   }
 });
 
+
+// Helper function to generate random password
+function generateRandomPassword(length = 12) {
+  const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*';
+  let password = '';
+  for (let i = 0; i < length; i++) {
+    password += charset.charAt(Math.floor(Math.random() * charset.length));
+  }
+  return password;
+}
+
+// Enhanced email function to include course details
+async function sendPasswordEmail(email, password, firstName, lastName, courseName, batchIdentifier) {
+  // Implementation depends on your email service
+  // Example with nodemailer:
+  try {
+    const mailOptions = {
+      from: process.env.FROM_EMAIL,
+      to: email,
+      subject: `Welcome to ${courseName} - Your Login Credentials`,
+      html: `
+        <h2>Welcome to ${courseName}!</h2>
+        <p>Dear ${firstName} ${lastName},</p>
+        <p>You have been successfully enrolled in <strong>${courseName}</strong> (Batch: ${batchIdentifier}).</p>
+        <p><strong>Your login credentials:</strong></p>
+        <ul>
+          <li>Email: ${email}</li>
+          <li>Password: ${password}</li>
+        </ul>
+        <p>Please keep these credentials safe and change your password after your first login.</p>
+        <p>Best regards,<br>Training Team</p>
+      `
+    };
+
+    await transporter.sendMail(mailOptions);
+    return true;
+  } catch (error) {
+    console.error('Email sending error:', error);
+    throw error;
+  }
+}
+
+// Additional API endpoint to get available courses (not course offerings)
+app.get('/api/courses/available', [
+  authenticateToken,
+  authorize(['admin', 'instructor'])
+], async (req, res) => {
+  try {
+    const [courses] = await pool.execute(`
+      SELECT 
+        c.*,
+        COUNT(DISTINCT co.offering_id) as total_offerings,
+        SUM(CASE WHEN co.status IN ('planned', 'active') 
+                 AND co.current_enrollees < co.max_enrollees 
+                 AND co.end_date > NOW() THEN 1 ELSE 0 END) as available_offerings,
+        MIN(CASE WHEN co.status IN ('planned', 'active') 
+                 AND co.current_enrollees < co.max_enrollees 
+                 AND co.end_date > NOW() THEN co.start_date END) as next_start_date
+      FROM courses c
+      LEFT JOIN course_offerings co ON c.course_id = co.course_id
+      WHERE c.is_active = TRUE
+      GROUP BY c.course_id
+      HAVING available_offerings > 0
+      ORDER BY c.course_name ASC
+    `);
+
+    res.json({
+      message: 'Available courses retrieved successfully',
+      courses: courses
+    });
+  } catch (error) {
+    console.error('Error fetching available courses:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch available courses',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
 // Backend: Fixed PUT /api/courses/:courseId endpoint
 app.put('/api/courses/:courseId', [
   authenticateToken,
@@ -4436,19 +4894,21 @@ app.get('/api/courses', authenticateToken, async (req, res) => {
   }
 });
 
+// Enhanced GET /api/course-offerings with course_id included
 app.get('/api/course-offerings', authenticateToken, async (req, res) => {
   try {
-    const { status } = req.query;
+    const { status, course_id } = req.query;
     
     let query = `
-      SELECT co.offering_id, co.batch_identifier, co.start_date, co.end_date, co.status,
-             co.max_enrollees, co.current_enrollees, co.location,
-             c.course_code, c.course_name,
-             AVG(cp.amount) as average_price
+      SELECT co.offering_id, co.course_id, co.batch_identifier, co.start_date, co.end_date, 
+             co.status, co.max_enrollees, co.current_enrollees, co.location,
+             c.course_code, c.course_name, c.course_description, c.duration_weeks,
+             AVG(cp.amount) as average_price,
+             GROUP_CONCAT(DISTINCT CONCAT(cp.pricing_type, ':', cp.amount) SEPARATOR '|') as pricing_options
       FROM course_offerings co
       JOIN courses c ON co.course_id = c.course_id
       LEFT JOIN course_pricing cp ON co.offering_id = cp.offering_id AND cp.is_active = TRUE
-      WHERE 1=1
+      WHERE c.is_active = TRUE
     `;
     const params = [];
 
@@ -4457,15 +4917,472 @@ app.get('/api/course-offerings', authenticateToken, async (req, res) => {
       params.push(status);
     }
 
+    if (course_id) {
+      query += ' AND co.course_id = ?';
+      params.push(course_id);
+    }
+
     query += ' GROUP BY co.offering_id ORDER BY co.start_date DESC';
 
     const [offerings] = await pool.execute(query, params);
-    res.json(offerings);
+    
+    // Parse pricing options for each offering
+    const formattedOfferings = offerings.map(offering => {
+      const pricing = {};
+      if (offering.pricing_options) {
+        offering.pricing_options.split('|').forEach(option => {
+          const [type, price] = option.split(':');
+          pricing[type] = parseFloat(price);
+        });
+      }
+      
+      return {
+        ...offering,
+        pricing_options: pricing,
+        start_date: new Date(offering.start_date).toISOString(),
+        end_date: new Date(offering.end_date).toISOString()
+      };
+    });
+
+    res.json(formattedOfferings);
   } catch (error) {
     console.error('Course offerings fetch error:', error);
     res.status(500).json({ error: 'Failed to fetch course offerings' });
   }
 });
+
+// GET /api/course-offerings/:offeringId - Get specific course offering details
+app.get('/api/course-offerings/:offeringId', authenticateToken, async (req, res) => {
+  try {
+    const { offeringId } = req.params;
+
+    const [offerings] = await pool.execute(`
+      SELECT co.offering_id, co.course_id, co.batch_identifier, co.start_date, co.end_date,
+             co.status, co.max_enrollees, co.current_enrollees, co.location, co.instructor_id,
+             c.course_code, c.course_name, c.course_description, c.duration_weeks, c.credits,
+             COUNT(DISTINCT se.enrollment_id) as actual_enrollees
+      FROM course_offerings co
+      JOIN courses c ON co.course_id = c.course_id
+      LEFT JOIN student_enrollments se ON co.offering_id = se.offering_id AND se.enrollment_status = 'enrolled'
+      WHERE co.offering_id = ?
+      GROUP BY co.offering_id
+    `, [offeringId]);
+
+    if (offerings.length === 0) {
+      return res.status(404).json({ error: 'Course offering not found' });
+    }
+
+    // Get pricing for this offering
+    const [pricing] = await pool.execute(`
+      SELECT pricing_type, amount, currency, effective_date, expiry_date
+      FROM course_pricing
+      WHERE offering_id = ? AND is_active = TRUE
+      ORDER BY pricing_type
+    `, [offeringId]);
+
+    const offering = offerings[0];
+    offering.pricing = pricing.reduce((acc, price) => {
+      acc[price.pricing_type] = {
+        amount: parseFloat(price.amount),
+        currency: price.currency,
+        effective_date: price.effective_date,
+        expiry_date: price.expiry_date
+      };
+      return acc;
+    }, {});
+
+    res.json(offering);
+  } catch (error) {
+    console.error('Course offering fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch course offering' });
+  }
+});
+
+// POST /api/student-accounts - Create student account for course offering
+app.post('/api/student-accounts', [
+  authenticateToken,
+  authorize(['admin', 'staff']),
+  body('student_id').trim().isLength({ min: 1 }).withMessage('Student ID is required'),
+  body('offering_id').isInt({ min: 1 }).withMessage('Valid offering ID is required'),
+  body('pricing_type').isIn(['regular', 'early_bird', 'group', 'scholarship', 'special']).withMessage('Valid pricing type is required'),
+  body('scheme_id').optional().isInt(),
+  body('due_date').optional().isISO8601(),
+  body('notes').optional().trim()
+], validateInput, async (req, res) => {
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const { 
+      student_id, 
+      offering_id, 
+      pricing_type, 
+      scheme_id,
+      due_date,
+      notes
+    } = req.body;
+
+    console.log('Creating student account with data:', {
+      student_id, offering_id, pricing_type, scheme_id
+    });
+
+    // Verify student exists
+    const [studentCheck] = await connection.execute(
+      'SELECT student_id, graduation_status FROM students WHERE student_id = ?',
+      [student_id]
+    );
+
+    if (studentCheck.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Student not found' });
+    }
+
+    if (studentCheck[0].graduation_status === 'suspended') {
+      await connection.rollback();
+      return res.status(400).json({ error: 'Cannot create account for suspended student' });
+    }
+
+    // Verify course offering exists and get course details
+    const [offeringCheck] = await connection.execute(`
+      SELECT co.offering_id, co.course_id, co.status, co.max_enrollees, co.current_enrollees,
+             c.course_name, c.course_code
+      FROM course_offerings co
+      JOIN courses c ON co.course_id = c.course_id
+      WHERE co.offering_id = ?
+    `, [offering_id]);
+
+    if (offeringCheck.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Course offering not found' });
+    }
+
+    const offering = offeringCheck[0];
+
+    if (offering.status === 'cancelled') {
+      await connection.rollback();
+      return res.status(400).json({ error: 'Cannot create account for cancelled course offering' });
+    }
+
+    if (offering.current_enrollees >= offering.max_enrollees) {
+      await connection.rollback();
+      return res.status(400).json({ error: 'Course offering is full' });
+    }
+
+    // Check if student account already exists for this offering
+    const [existingAccount] = await connection.execute(
+      'SELECT account_id FROM student_accounts WHERE student_id = ? AND offering_id = ?',
+      [student_id, offering_id]
+    );
+
+    if (existingAccount.length > 0) {
+      await connection.rollback();
+      return res.status(409).json({ error: 'Student account already exists for this course offering' });
+    }
+
+    // Get pricing for the selected type
+    const [pricingData] = await connection.execute(`
+      SELECT amount, currency
+      FROM course_pricing
+      WHERE offering_id = ? AND pricing_type = ? AND is_active = TRUE
+      AND (expiry_date IS NULL OR expiry_date > NOW())
+    `, [offering_id, pricing_type]);
+
+    if (pricingData.length === 0) {
+      await connection.rollback();
+      return res.status(400).json({ 
+        error: `Pricing not available for type: ${pricing_type}` 
+      });
+    }
+
+    const totalDue = parseFloat(pricingData[0].amount);
+
+    // Calculate due date if not provided
+    let calculatedDueDate = due_date;
+    if (!calculatedDueDate) {
+      const defaultDueDate = new Date();
+      defaultDueDate.setDate(defaultDueDate.getDate() + 30); // 30 days from now
+      calculatedDueDate = defaultDueDate.toISOString().split('T')[0];
+    }
+
+    // Create student account
+    const [accountResult] = await connection.execute(`
+      INSERT INTO student_accounts (
+        student_id, offering_id, total_due, amount_paid, scheme_id,
+        account_status, due_date, notes, created_at, updated_at
+      ) VALUES (?, ?, ?, 0.00, ?, 'active', ?, ?, NOW(), NOW())
+    `, [
+      student_id,
+      offering_id,
+      totalDue,
+      scheme_id || null,
+      calculatedDueDate,
+      notes || null
+    ]);
+
+    const accountId = accountResult.insertId;
+
+    // Create enrollment record if it doesn't exist
+    const [existingEnrollment] = await connection.execute(
+      'SELECT enrollment_id FROM student_enrollments WHERE student_id = ? AND offering_id = ?',
+      [student_id, offering_id]
+    );
+
+    let enrollmentId;
+    if (existingEnrollment.length === 0) {
+      const [enrollmentResult] = await connection.execute(`
+        INSERT INTO student_enrollments (
+          student_id, offering_id, enrollment_date, enrollment_status,
+          completion_percentage, attendance_percentage
+        ) VALUES (?, ?, NOW(), 'enrolled', 0.00, NULL)
+      `, [student_id, offering_id]);
+
+      enrollmentId = enrollmentResult.insertId;
+
+      // Update current enrollees count in course offering
+      await connection.execute(`
+        UPDATE course_offerings 
+        SET current_enrollees = current_enrollees + 1,
+            updated_at = NOW()
+        WHERE offering_id = ?
+      `, [offering_id]);
+    } else {
+      enrollmentId = existingEnrollment[0].enrollment_id;
+    }
+
+    await connection.commit();
+
+    // Fetch complete account details for response
+    const [accountDetails] = await connection.execute(`
+      SELECT sa.account_id, sa.student_id, sa.offering_id, sa.total_due, 
+             sa.amount_paid, sa.balance, sa.account_status, sa.due_date,
+             sa.created_at, sa.notes,
+             p.first_name, p.last_name, p.email,
+             c.course_name, c.course_code, co.batch_identifier,
+             ps.scheme_name
+      FROM student_accounts sa
+      JOIN students s ON sa.student_id = s.student_id
+      JOIN persons p ON s.person_id = p.person_id
+      JOIN course_offerings co ON sa.offering_id = co.offering_id
+      JOIN courses c ON co.course_id = c.course_id
+      LEFT JOIN payment_schemes ps ON sa.scheme_id = ps.scheme_id
+      WHERE sa.account_id = ?
+    `, [accountId]);
+
+    // Send notification email if email service is available
+    let emailSent = false;
+    try {
+      if (emailTransporter && accountDetails[0].email) {
+        const student = accountDetails[0];
+        await sendEnrollmentConfirmationEmail(
+          student.email,
+          student.first_name,
+          student.last_name,
+          student.course_name,
+          student.batch_identifier,
+          student.total_due,
+          student.due_date
+        );
+        emailSent = true;
+      }
+    } catch (emailError) {
+      console.error('Failed to send enrollment confirmation email:', emailError);
+    }
+
+    res.status(201).json({
+      message: 'Student account created successfully',
+      account: accountDetails[0],
+      enrollment_id: enrollmentId,
+      email_sent: emailSent
+    });
+
+  } catch (error) {
+    await connection.rollback();
+    console.error('Student account creation error:', error);
+
+    if (error.code === 'ER_DUP_ENTRY') {
+      res.status(409).json({ error: 'Student account already exists for this course offering' });
+    } else {
+      res.status(500).json({
+        error: 'Failed to create student account',
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  } finally {
+    connection.release();
+  }
+});
+
+// GET /api/student-accounts - Get all student accounts with filtering
+app.get('/api/student-accounts', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
+  try {
+    const { 
+      student_id, 
+      offering_id, 
+      course_id, 
+      account_status, 
+      overdue_only,
+      search,
+      page = 1,
+      limit = 50
+    } = req.query;
+
+    let query = `
+      SELECT sa.account_id, sa.student_id, sa.offering_id, sa.total_due,
+             sa.amount_paid, sa.balance, sa.account_status, sa.due_date,
+             sa.last_payment_date, sa.payment_reminder_count, sa.created_at,
+             p.first_name, p.last_name, p.email,
+             c.course_name, c.course_code, co.batch_identifier, co.start_date,
+             ps.scheme_name,
+             CASE 
+               WHEN sa.due_date < CURDATE() AND sa.balance > 0 THEN TRUE
+               ELSE FALSE
+             END as is_overdue,
+             DATEDIFF(CURDATE(), sa.due_date) as days_overdue
+      FROM student_accounts sa
+      JOIN students s ON sa.student_id = s.student_id
+      JOIN persons p ON s.person_id = p.person_id
+      JOIN course_offerings co ON sa.offering_id = co.offering_id
+      JOIN courses c ON co.course_id = c.course_id
+      LEFT JOIN payment_schemes ps ON sa.scheme_id = ps.scheme_id
+      WHERE 1=1
+    `;
+
+    const params = [];
+    const conditions = [];
+
+    if (student_id) {
+      conditions.push('sa.student_id = ?');
+      params.push(student_id);
+    }
+
+    if (offering_id) {
+      conditions.push('sa.offering_id = ?');
+      params.push(offering_id);
+    }
+
+    if (course_id) {
+      conditions.push('co.course_id = ?');
+      params.push(course_id);
+    }
+
+    if (account_status) {
+      conditions.push('sa.account_status = ?');
+      params.push(account_status);
+    }
+
+    if (overdue_only === 'true') {
+      conditions.push('sa.due_date < CURDATE() AND sa.balance > 0');
+    }
+
+    if (search) {
+      conditions.push('(p.first_name LIKE ? OR p.last_name LIKE ? OR p.email LIKE ? OR c.course_name LIKE ?)');
+      const searchParam = `%${search}%`;
+      params.push(searchParam, searchParam, searchParam, searchParam);
+    }
+
+    if (conditions.length > 0) {
+      query += ' AND ' + conditions.join(' AND ');
+    }
+
+    query += ' ORDER BY sa.created_at DESC';
+
+    // Add pagination
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+    query += ' LIMIT ? OFFSET ?';
+    params.push(parseInt(limit), offset);
+
+    const [accounts] = await pool.execute(query, params);
+
+    // Get total count for pagination
+    let countQuery = query.replace(/SELECT.*?FROM/, 'SELECT COUNT(*) as total FROM');
+    countQuery = countQuery.replace(/ORDER BY.*?LIMIT.*?OFFSET.*?$/, '');
+    const countParams = params.slice(0, -2); // Remove limit and offset params
+
+    const [countResult] = await pool.execute(countQuery, countParams);
+    const totalRecords = countResult[0].total;
+
+    res.json({
+      accounts,
+      pagination: {
+        current_page: parseInt(page),
+        per_page: parseInt(limit),
+        total_records: totalRecords,
+        total_pages: Math.ceil(totalRecords / parseInt(limit))
+      }
+    });
+
+  } catch (error) {
+    console.error('Student accounts fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch student accounts' });
+  }
+});
+
+// GET /api/student-accounts/:accountId - Get specific student account
+app.get('/api/student-accounts/:accountId', authenticateToken, async (req, res) => {
+  try {
+    const { accountId } = req.params;
+
+    const [accounts] = await pool.execute(`
+      SELECT sa.*, 
+             p.first_name, p.last_name, p.email, p.phone,
+             c.course_name, c.course_code, c.duration_weeks,
+             co.batch_identifier, co.start_date, co.end_date,
+             ps.scheme_name, ps.installment_count
+      FROM student_accounts sa
+      JOIN students s ON sa.student_id = s.student_id
+      JOIN persons p ON s.person_id = p.person_id
+      JOIN course_offerings co ON sa.offering_id = co.offering_id
+      JOIN courses c ON co.course_id = c.course_id
+      LEFT JOIN payment_schemes ps ON sa.scheme_id = ps.scheme_id
+      WHERE sa.account_id = ?
+    `, [accountId]);
+
+    if (accounts.length === 0) {
+      return res.status(404).json({ error: 'Student account not found' });
+    }
+
+    res.json(accounts[0]);
+  } catch (error) {
+    console.error('Student account fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch student account' });
+  }
+});
+
+// Helper function for sending enrollment confirmation emails
+async function sendEnrollmentConfirmationEmail(email, firstName, lastName, courseName, batchId, totalDue, dueDate) {
+  const mailOptions = {
+    from: process.env.EMAIL_FROM || 'noreply@8cons.com',
+    to: email,
+    subject: `Enrollment Confirmation - ${courseName}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #333; text-align: center;">Enrollment Confirmation</h2>
+        
+        <p>Dear ${firstName} ${lastName},</p>
+        
+        <p>Congratulations! You have been successfully enrolled in:</p>
+        
+        <div style="background-color: #f5f5f5; padding: 20px; border-radius: 5px; margin: 20px 0;">
+          <h3 style="color: #2c5282; margin-top: 0;">${courseName}</h3>
+          <p><strong>Batch:</strong> ${batchId}</p>
+          <p><strong>Total Amount Due:</strong> ₱${parseFloat(totalDue).toLocaleString()}</p>
+          <p><strong>Payment Due Date:</strong> ${new Date(dueDate).toLocaleDateString()}</p>
+        </div>
+        
+        <p>Please ensure payment is made by the due date to secure your enrollment.</p>
+        
+        <p>If you have any questions, please don't hesitate to contact us.</p>
+        
+        <p>Best regards,<br>8Cons Trading Academy</p>
+      </div>
+    `
+  };
+
+  if (emailTransporter) {
+    return await emailTransporter.sendMail(mailOptions);
+  }
+}
 
 app.post('/api/enrollments', [
   authenticateToken,

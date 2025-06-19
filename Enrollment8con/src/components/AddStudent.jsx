@@ -371,149 +371,384 @@ const StudentForm = () => {
     return true;
   };
 
-  const handleSubmit = async () => {
-    if (!validateForm()) {
+//   const handleSubmit = async () => {
+//     if (!validateForm()) {
+//       return;
+//     }
+
+//     if (!checkAuthentication()) {
+//       return;
+//     }
+
+//     setLoading(true);
+//     setError(null);
+//     setSuccess(null);
+
+//     try {
+//       // Generate random password
+//       const generatedPassword = generateRandomPassword();
+      
+//       // Prepare data for the server (matching the API schema)
+//       const submitData = {
+//         first_name: formData.first_name,
+//         middle_name: formData.middle_name || null,
+//         last_name: formData.last_name,
+//         birth_date: formData.birth_date || null,
+//         birth_place: formData.birth_place || null,
+//         gender: formData.gender || null,
+//         email: formData.email,
+//         education: formData.education || null,
+//         phone: formData.phone || null,
+//         address: formData.address || null,
+//         password: generatedPassword,
+//         trading_level_id: formData.trading_level_id ? parseInt(formData.trading_level_id) : null,
+//         course_id: formData.course_id ? parseInt(formData.course_id) : null,
+//         referred_by: selectedReferrer ? selectedReferrer.student_id : null,
+//         device_type: formData.device_type.length > 0 ? formData.device_type.join(',') : null,
+//         learning_style: formData.learning_style.length > 0 ? formData.learning_style.join(',') : null
+//       };
+
+//       console.log('Submitting student data:', submitData);
+
+//       const token = localStorage.getItem('token');
+//       const response = await fetch('http://localhost:3000/api/students', {
+//         method: 'POST',
+//         headers: {
+//           'Authorization': `Bearer ${token}`,
+//           'Content-Type': 'application/json',
+//         },
+//         body: JSON.stringify(submitData)
+//       });
+      
+//       if (!response.ok) {
+//         const errorData = await response.json();
+//         throw new Error(errorData.error || `Failed to create student: ${response.statusText}`);
+//       }
+
+//       const result = await response.json();
+//       console.log('Student created successfully:', result);
+
+//       // Try to send email with generated password
+//       let emailSent = false;
+//       let emailError = null;
+
+//       try {
+//         emailSent = await sendPasswordEmail(
+//           formData.email, 
+//           generatedPassword, 
+//           formData.first_name, 
+//           formData.last_name
+//         );
+//       } catch (emailErr) {
+//         console.error('Email sending failed:', emailErr);
+//         emailError = emailErr.message;
+//       }
+
+//       // Provide user feedback based on API response and email status
+//       if (result.email_sent || emailSent) {
+//         setSuccess('Student created successfully! Login credentials have been sent to their email address.');
+//       } else {
+//         setSuccess(`Student created successfully! 
+
+// Login Credentials:
+// Email: ${formData.email}
+// Password: ${generatedPassword}
+
+// ${emailError ? `Email Error: ${emailError}` : 'Email service may be unavailable.'} 
+// Please provide these credentials to the student manually.`);
+        
+//         // Also log to console for admin reference
+//         console.log('=== STUDENT LOGIN CREDENTIALS ===');
+//         console.log('Email:', formData.email);
+//         console.log('Password:', generatedPassword);
+//         console.log('Student ID:', result.student?.student_id || 'N/A');
+//         console.log('================================');
+//       }
+      
+//       // Reset the form
+//       setFormData({
+//         first_name: '',
+//         middle_name: '',
+//         last_name: '',
+//         birth_date: '',
+//         birth_place: '',
+//         gender: '',
+//         email: '',
+//         education: '',
+//         phone: '',
+//         address: '',
+//         trading_level_id: '',
+//         course_id: '',
+//         device_type: [],
+//         learning_style: [],
+//       });
+
+//       // Reset referrer fields
+//       setSelectedReferrer(null);
+//       setReferrerSearchTerm('');
+//       setReferrerSearchResults([]);
+
+//     } catch (err) {
+//       console.error('Submission error:', err);
+      
+//       // Handle specific error types
+//       let errorMessage = 'Failed to create student: ';
+      
+//       if (err.message.includes('401') || err.message.includes('unauthorized')) {
+//         errorMessage = 'Authentication failed. Please log in again.';
+//       } else if (err.message.includes('403') || err.message.includes('forbidden')) {
+//         errorMessage = 'You do not have permission to create students.';
+//       } else if (err.message.includes('409') || err.message.includes('already exists')) {
+//         errorMessage = 'A student with this email already exists.';
+//       } else if (err.message.includes('400')) {
+//         errorMessage = 'Invalid data provided. Please check all required fields.';
+//       } else if (err.message.includes('500')) {
+//         errorMessage = 'Server error. Please try again later.';
+//       } else {
+//         errorMessage += err.message;
+//       }
+      
+//       setError(errorMessage);
+//     } finally {
+//       setLoading(false);
+//     }
+//   };
+const handleSubmit = async () => {
+  if (!validateForm()) {
+    return;
+  }
+  if (!checkAuthentication()) {
+    return;
+  }
+  
+  setLoading(true);
+  setError(null);
+  setSuccess(null);
+  
+  try {
+    // Validate required fields before submission
+    if (!formData.course_id) {
+      setError('Please select a course');
       return;
     }
 
-    if (!checkAuthentication()) {
-      return;
+    // Prepare data for the new API endpoint
+    const submitData = {
+      first_name: formData.first_name.trim(),
+      last_name: formData.last_name.trim(),
+      email: formData.email.trim(),
+      course_id: parseInt(formData.course_id) // Changed back to course_id
+    };
+
+    // Add optional fields only if they have values
+    if (formData.middle_name && formData.middle_name.trim()) {
+      submitData.middle_name = formData.middle_name.trim();
+    }
+    
+    if (formData.birth_date) {
+      submitData.birth_date = formData.birth_date;
+    }
+    
+    if (formData.birth_place && formData.birth_place.trim()) {
+      submitData.birth_place = formData.birth_place.trim();
+    }
+    
+    if (formData.gender) {
+      submitData.gender = formData.gender;
+    }
+    
+    if (formData.education && formData.education.trim()) {
+      submitData.education = formData.education.trim();
+    }
+    
+    if (formData.phone && formData.phone.trim()) {
+      submitData.phone = formData.phone.trim();
+    }
+    
+    if (formData.address && formData.address.trim()) {
+      submitData.address = formData.address.trim();
+    }
+    
+    if (formData.trading_level_id) {
+      submitData.trading_level_id = parseInt(formData.trading_level_id);
+    }
+    
+    if (selectedReferrer && selectedReferrer.student_id) {
+      submitData.referred_by = parseInt(selectedReferrer.student_id);
+    }
+    
+    if (formData.device_type && formData.device_type.length > 0) {
+      submitData.device_type = formData.device_type.join(',');
+    }
+    
+    if (formData.learning_style && formData.learning_style.length > 0) {
+      submitData.learning_style = formData.learning_style.join(',');
+    }
+    
+    if (formData.scheme_id) {
+      submitData.scheme_id = parseInt(formData.scheme_id);
+    }
+    
+    if (formData.total_due) {
+      submitData.total_due = parseFloat(formData.total_due);
+    }
+    
+    if (formData.amount_paid) {
+      submitData.amount_paid = parseFloat(formData.amount_paid);
     }
 
-    setLoading(true);
-    setError(null);
-    setSuccess(null);
-
-    try {
-      // Generate random password
-      const generatedPassword = generateRandomPassword();
+    console.log('Submitting student registration data:', submitData);
+    
+    const token = localStorage.getItem('token');
+    const response = await fetch('http://localhost:3000/api/students/register', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(submitData)
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.log('Server error response:', errorData);
       
-      // Prepare data for the server (matching the API schema)
-      const submitData = {
-        first_name: formData.first_name,
-        middle_name: formData.middle_name || null,
-        last_name: formData.last_name,
-        birth_date: formData.birth_date || null,
-        birth_place: formData.birth_place || null,
-        gender: formData.gender || null,
-        email: formData.email,
-        education: formData.education || null,
-        phone: formData.phone || null,
-        address: formData.address || null,
-        password: generatedPassword,
-        trading_level_id: formData.trading_level_id ? parseInt(formData.trading_level_id) : null,
-        course_id: formData.course_id ? parseInt(formData.course_id) : null,
-        referred_by: selectedReferrer ? selectedReferrer.student_id : null,
-        device_type: formData.device_type.length > 0 ? formData.device_type.join(',') : null,
-        learning_style: formData.learning_style.length > 0 ? formData.learning_style.join(',') : null
-      };
-
-      console.log('Submitting student data:', submitData);
-
-      const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:3000/api/students', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(submitData)
-      });
+      // Handle validation errors with detailed feedback
+      if (errorData.details && Array.isArray(errorData.details)) {
+        const validationErrors = errorData.details.map(err => `${err.field}: ${err.message}`).join('\n');
+        throw new Error(`Validation errors:\n${validationErrors}`);
+      }
       
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || `Failed to create student: ${response.statusText}`);
-      }
-
-      const result = await response.json();
-      console.log('Student created successfully:', result);
-
-      // Try to send email with generated password
-      let emailSent = false;
-      let emailError = null;
-
-      try {
-        emailSent = await sendPasswordEmail(
-          formData.email, 
-          generatedPassword, 
-          formData.first_name, 
-          formData.last_name
-        );
-      } catch (emailErr) {
-        console.error('Email sending failed:', emailErr);
-        emailError = emailErr.message;
-      }
-
-      // Provide user feedback based on API response and email status
-      if (result.email_sent || emailSent) {
-        setSuccess('Student created successfully! Login credentials have been sent to their email address.');
-      } else {
-        setSuccess(`Student created successfully! 
+      throw new Error(errorData.error || `Failed to register student: ${response.statusText}`);
+    }
+    
+    const result = await response.json();
+    console.log('Student registered successfully:', result);
+    
+    // Provide user feedback based on API response
+    if (result.email_sent) {
+      setSuccess(`Student registered successfully for ${result.course_offering.course_name}! 
+Login credentials have been sent to their email address.
+Student ID: ${result.student.student_id}
+Batch: ${result.course_offering.batch_identifier}
+Offering ID: ${result.course_offering.offering_id}`);
+    } else {
+      setSuccess(`Student registered successfully for ${result.course_offering.course_name}!
 
 Login Credentials:
-Email: ${formData.email}
-Password: ${generatedPassword}
+Email: ${result.credentials.email}
+Password: ${result.credentials.password}
+Student ID: ${result.student.student_id}
+Batch: ${result.course_offering.batch_identifier}
+Offering ID: ${result.course_offering.offering_id}
 
-${emailError ? `Email Error: ${emailError}` : 'Email service may be unavailable.'} 
+${result.email_error ? `Email Error: ${result.email_error}` : 'Email service may be unavailable.'} 
 Please provide these credentials to the student manually.`);
-        
-        // Also log to console for admin reference
-        console.log('=== STUDENT LOGIN CREDENTIALS ===');
-        console.log('Email:', formData.email);
-        console.log('Password:', generatedPassword);
-        console.log('Student ID:', result.student?.student_id || 'N/A');
-        console.log('================================');
-      }
       
-      // Reset the form
-      setFormData({
-        first_name: '',
-        middle_name: '',
-        last_name: '',
-        birth_date: '',
-        birth_place: '',
-        gender: '',
-        email: '',
-        education: '',
-        phone: '',
-        address: '',
-        trading_level_id: '',
-        course_id: '',
-        device_type: [],
-        learning_style: [],
-      });
-
-      // Reset referrer fields
-      setSelectedReferrer(null);
-      setReferrerSearchTerm('');
-      setReferrerSearchResults([]);
-
-    } catch (err) {
-      console.error('Submission error:', err);
-      
-      // Handle specific error types
-      let errorMessage = 'Failed to create student: ';
-      
-      if (err.message.includes('401') || err.message.includes('unauthorized')) {
-        errorMessage = 'Authentication failed. Please log in again.';
-      } else if (err.message.includes('403') || err.message.includes('forbidden')) {
-        errorMessage = 'You do not have permission to create students.';
-      } else if (err.message.includes('409') || err.message.includes('already exists')) {
-        errorMessage = 'A student with this email already exists.';
-      } else if (err.message.includes('400')) {
-        errorMessage = 'Invalid data provided. Please check all required fields.';
-      } else if (err.message.includes('500')) {
-        errorMessage = 'Server error. Please try again later.';
-      } else {
-        errorMessage += err.message;
-      }
-      
-      setError(errorMessage);
-    } finally {
-      setLoading(false);
+      // Also log to console for admin reference
+      console.log('=== STUDENT LOGIN CREDENTIALS ===');
+      console.log('Email:', result.credentials.email);
+      console.log('Password:', result.credentials.password);
+      console.log('Student ID:', result.student.student_id);
+      console.log('Course:', result.course_offering.course_name);
+      console.log('Batch:', result.course_offering.batch_identifier);
+      console.log('Offering ID:', result.course_offering.offering_id);
+      console.log('================================');
     }
-  };
+    
+    // Reset the form
+    setFormData({
+      first_name: '',
+      middle_name: '',
+      last_name: '',
+      birth_date: '',
+      birth_place: '',
+      gender: '',
+      email: '',
+      education: '',
+      phone: '',
+      address: '',
+      trading_level_id: '',
+      course_id: '', // Changed back to course_id
+      device_type: [],
+      learning_style: [],
+      scheme_id: '',
+      total_due: '',
+      amount_paid: ''
+    });
+    
+    // Reset referrer fields
+    setSelectedReferrer(null);
+    setReferrerSearchTerm('');
+    setReferrerSearchResults([]);
+    
+  } catch (err) {
+    console.error('Registration error:', err);
+    
+    // Handle specific error types
+    let errorMessage = 'Failed to register student: ';
+    
+    if (err.message.includes('401') || err.message.includes('unauthorized')) {
+      errorMessage = 'Authentication failed. Please log in again.';
+    } else if (err.message.includes('403') || err.message.includes('forbidden')) {
+      errorMessage = 'You do not have permission to register students.';
+    } else if (err.message.includes('409')) {
+      if (err.message.includes('already exists')) {
+        errorMessage = 'A student with this email already exists.';
+      } else if (err.message.includes('already enrolled')) {
+        errorMessage = 'Student is already enrolled in this course offering.';
+      }
+    } else if (err.message.includes('404')) {
+      errorMessage = 'Course offering not found or not available.';
+    } else if (err.message.includes('full')) {
+      errorMessage = 'Course offering is full. Please select a different offering.';
+    } else if (err.message.includes('Validation errors:')) {
+      errorMessage = err.message; // Show detailed validation errors
+    } else if (err.message.includes('400')) {
+      errorMessage = 'Invalid data provided. Please check all required fields.';
+    } else if (err.message.includes('500')) {
+      errorMessage = 'Server error. Please try again later.';
+    } else {
+      errorMessage += err.message;
+    }
+    
+    setError(errorMessage);
+  } finally {
+    setLoading(false);
+  }
+};
 
+// Function to fetch available courses for the form dropdown
+const fetchAvailableCourses = async () => {
+  try {
+    const token = localStorage.getItem('token');
+    const response = await fetch('http://localhost:3000/api/courses/available', {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to fetch available courses');
+    }
+    
+    const result = await response.json();
+    return result.courses;
+  } catch (error) {
+    console.error('Error fetching available courses:', error);
+    return [];
+  }
+};
+
+// Use this in your component to populate the courses dropdown
+useEffect(() => {
+  const loadAvailableCourses = async () => {
+    const courses = await fetchAvailableCourses();
+    setAvailableCourses(courses);
+  };
+  loadAvailableCourses();
+}, []);
   const styles = {
     container: {
       maxWidth: '900px',
