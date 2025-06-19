@@ -1,1067 +1,1145 @@
-import { useState, useEffect } from 'react'
-import { Search, Filter, Edit2, Check, X, Eye, Calendar, DollarSign, User, Phone, Mail, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react'
+import React, { useState, useEffect } from "react";
+import { Check, X, Eye, Clock, Filter, ChevronDown } from "lucide-react";
 
-const PendingPayment = () => {
-  const [payments, setPayments] = useState([])
-  const [filteredPayments, setFilteredPayments] = useState([])
-  const [filters, setFilters] = useState({
-    name: '',
-    sortOrder: 'ascending',
-    paymentStatus: 'pending'
-  })
-  const [showFilters, setShowFilters] = useState(false)
-  const [editingPayment, setEditingPayment] = useState(null)
-  const [viewingPayment, setViewingPayment] = useState(null)
-  const [currentPage, setCurrentPage] = useState(1)
-  const [entriesPerPage] = useState(10)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
+// Enhanced responsive styles object
+const styles = {
+  mainContainer: {
+    backgroundColor: "#f5f5f0",
+    minHeight: "100vh",
+    padding: "24px",
+  },
+  headerCard: {
+    backgroundColor: "white",
+    borderRadius: "12px",
+    padding: "32px",
+    marginBottom: "24px",
+    boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.1)",
+  },
+  headerTitle: {
+    fontSize: "32px",
+    fontWeight: "bold",
+    color: "#2d3748",
+    marginBottom: "8px",
+  },
+  headerSubtitle: {
+    fontSize: "16px",
+    color: "#718096",
+  },
+  statsContainer: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
+    gap: "24px",
+    marginBottom: "24px",
+  },
+  statCard: {
+    backgroundColor: "white",
+    borderRadius: "12px",
+    padding: "24px",
+    boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.1)",
+  },
+  statNumber: {
+    fontSize: "36px",
+    fontWeight: "bold",
+    color: "#2d3748",
+    marginBottom: "8px",
+  },
+  statLabel: {
+    fontSize: "14px",
+    color: "#718096",
+  },
+  filterSection: {
+    backgroundColor: "white",
+    borderRadius: "12px",
+    padding: "24px",
+    marginBottom: "24px",
+    boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.1)",
+  },
+  filterTitle: {
+    fontSize: "20px",
+    fontWeight: "bold",
+    color: "#2d3748",
+    marginBottom: "20px",
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+  },
+  filterGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+    gap: "20px",
+    alignItems: "end",
+  },
+  filterGroup: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "8px",
+  },
+  filterLabel: {
+    fontSize: "14px",
+    fontWeight: "500",
+    color: "#4a5568",
+    marginBottom: "4px",
+  },
+  filterInput: {
+    padding: "12px 16px",
+    border: "1px solid #e2e8f0",
+    borderRadius: "8px",
+    fontSize: "14px",
+    outline: "none",
+    transition: "border-color 0.2s",
+    width: "100%",
+  },
+  filterSelect: {
+    padding: "12px 16px",
+    border: "1px solid #e2e8f0",
+    borderRadius: "8px",
+    fontSize: "14px",
+    outline: "none",
+    backgroundColor: "white",
+    cursor: "pointer",
+    transition: "border-color 0.2s",
+    width: "100%",
+  },
+  tableContainer: {
+    backgroundColor: "white",
+    borderRadius: "12px",
+    overflow: "hidden",
+    boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.1)",
+  },
+  tableHeader: {
+    backgroundColor: "#4a5568",
+    color: "white",
+    padding: "20px 24px",
+    fontSize: "18px",
+    fontWeight: "bold",
+  },
+  table: {
+    width: "100%",
+    borderCollapse: "collapse",
+  },
+  tableHead: {
+    background: "linear-gradient(135deg, #375e4b 0%, #6d8f81 100%)",
+    color: "white",
+  },
+  tableHeaderCell: {
+    padding: "16px 20px",
+    textAlign: "left",
+    fontSize: "14px",
+    fontWeight: "600",
+    borderRight: "1px solid rgba(255, 255, 255, 0.2)",
+  },
+  tableBody: {
+    backgroundColor: "white",
+  },
+  tableRow: {
+    borderBottom: "1px solid #e2e8f0",
+    transition: "background-color 0.2s",
+  },
+  tableRowHover: {
+    backgroundColor: "#f7fafc",
+  },
+  tableCell: {
+    padding: "16px 20px",
+    fontSize: "14px",
+    color: "#2d3748",
+    borderRight: "1px solid #e2e8f0",
+  },
+  actionButtons: {
+    display: "flex",
+    gap: "8px",
+    flexWrap: "wrap",
+  },
+  iconButton: {
+    padding: "8px",
+    borderRadius: "6px",
+    border: "none",
+    cursor: "pointer",
+    transition: "all 0.2s",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  viewButton: {
+    backgroundColor: "#3182ce",
+    color: "white",
+  },
+  approveButton: {
+    backgroundColor: "#38a169",
+    color: "white",
+  },
+  rejectButton: {
+    backgroundColor: "#e53e3e",
+    color: "white",
+  },
+  disabledButton: {
+    opacity: 0.5,
+    cursor: "not-allowed",
+  },
+  icon: {
+    width: "16px",
+    height: "16px",
+  },
+  emptyState: {
+    textAlign: "center",
+    padding: "60px 20px",
+    backgroundColor: "white",
+  },
+  emptyIcon: {
+    margin: "0 auto 16px auto",
+    height: "64px",
+    width: "64px",
+    color: "#a0aec0",
+  },
+  emptyText: {
+    color: "#718096",
+    fontSize: "16px",
+  },
+  loadingContainer: {
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "center",
+    height: "200px",
+    backgroundColor: "white",
+  },
+  spinner: {
+    animation: "spin 1s linear infinite",
+    borderRadius: "50%",
+    height: "40px",
+    width: "40px",
+    borderWidth: "4px",
+    borderStyle: "solid",
+    borderColor: "transparent",
+    borderTopColor: "#4a5568",
+  },
+  modal: {
+    position: "fixed",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0, 0, 0, 0.6)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 50,
+    padding: "20px",
+  },
+  modalContent: {
+    backgroundColor: "white",
+    borderRadius: "12px",
+    padding: "32px",
+    maxWidth: "500px",
+    width: "100%",
+    maxHeight: "90vh",
+    overflowY: "auto",
+    boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1)",
+  },
+  modalTitle: {
+    fontSize: "24px",
+    fontWeight: "bold",
+    marginBottom: "24px",
+    color: "#2d3748",
+  },
+  modalDetails: {
+    display: "grid",
+    gap: "16px",
+    fontSize: "16px",
+    marginBottom: "32px",
+  },
+  modalDetailRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: "12px 0",
+    borderBottom: "1px solid #e2e8f0",
+  },
+  modalLabel: {
+    fontWeight: "600",
+    color: "#4a5568",
+  },
+  modalValue: {
+    color: "#2d3748",
+  },
+  modalActions: {
+    display: "flex",
+    justifyContent: "flex-end",
+    gap: "12px",
+    flexWrap: "wrap",
+  },
+  closeButton: {
+    padding: "12px 24px",
+    color: "#4a5568",
+    backgroundColor: "#e2e8f0",
+    borderRadius: "8px",
+    border: "none",
+    cursor: "pointer",
+    fontSize: "14px",
+    fontWeight: "500",
+    transition: "background-color 0.2s",
+  },
+  approveActionButton: {
+    padding: "12px 24px",
+    backgroundColor: "#38a169",
+    color: "white",
+    borderRadius: "8px",
+    border: "none",
+    cursor: "pointer",
+    fontSize: "14px",
+    fontWeight: "500",
+    transition: "background-color 0.2s",
+  },
+  rejectActionButton: {
+    padding: "12px 24px",
+    backgroundColor: "#e53e3e",
+    color: "white",
+    borderRadius: "8px",
+    border: "none",
+    cursor: "pointer",
+    fontSize: "14px",
+    fontWeight: "500",
+    transition: "background-color 0.2s",
+  },
+  mobileCard: {
+    backgroundColor: "white",
+    borderRadius: "8px",
+    padding: "16px",
+    marginBottom: "12px",
+    boxShadow: "0 2px 4px rgba(0, 0, 0, 0.1)",
+  },
+  mobileCardHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: "12px",
+  },
+  mobileCardTitle: {
+    fontSize: "16px",
+    fontWeight: "bold",
+    color: "#2d3748",
+  },
+  mobileCardSubtitle: {
+    fontSize: "14px",
+    color: "#718096",
+  },
+  mobileCardDetails: {
+    display: "grid",
+    gap: "8px",
+    marginBottom: "16px",
+  },
+  mobileCardRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  mobileCardLabel: {
+    fontSize: "12px",
+    color: "#718096",
+    fontWeight: "500",
+  },
+  mobileCardValue: {
+    fontSize: "14px",
+    color: "#2d3748",
+    fontWeight: "500",
+  },
+  statusBadge: {
+    padding: "4px 12px",
+    borderRadius: "20px",
+    fontSize: "12px",
+    fontWeight: "500",
+    textTransform: "uppercase",
+  },
+  statusPending: {
+    backgroundColor: "#fed7d7",
+    color: "#c53030",
+  },
+};
 
-  // Color palette from the dashboard
-  const colors = {
-    darkGreen: '#2d4a3d',
-    lightGreen: '#7a9b8a', 
-    dustyRose: '#c19a9a',
-    coral: '#d85c5c',
-    red: '#d63447',
-    cream: '#f5f2e8',
-    olive: '#6b7c5c',
-    black: '#2c2c2c'
-  }
+// Mock API functions
+const getPendingPaymentsAPI = async () => {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      resolve([
+        {
+          id: "PAY-001",
+          enrolleeName: "John Doe",
+          enrolleeId: "STU-2024-001",
+          paymentType: "Tuition",
+          tuitionFee: 25000,
+          paymentMethod: "Bank Transfer",
+          uploadDate: "2024-01-15",
+          status: "pending",
+          dueDate: "2024-01-25",
+          course: "Computer Science",
+        },
+        {
+          id: "PAY-002",
+          enrolleeName: "Jane Smith",
+          enrolleeId: "STU-2024-002",
+          paymentType: "Registration",
+          tuitionFee: 5000,
+          paymentMethod: "Credit Card",
+          uploadDate: "2024-01-16",
+          status: "pending",
+          dueDate: "2024-01-26",
+          course: "Business Administration",
+        },
+        {
+          id: "PAY-005",
+          enrolleeName: "Alex Johnson",
+          enrolleeId: "STU-2024-005",
+          paymentType: "Laboratory Fee",
+          tuitionFee: 3000,
+          paymentMethod: "Online Payment",
+          uploadDate: "2024-01-17",
+          status: "pending",
+          dueDate: "2024-01-27",
+          course: "Engineering",
+        },
+        {
+          id: "PAY-006",
+          enrolleeName: "Sarah Williams",
+          enrolleeId: "STU-2024-006",
+          paymentType: "Tuition",
+          tuitionFee: 28000,
+          paymentMethod: "Bank Transfer",
+          uploadDate: "2024-01-18",
+          status: "pending",
+          dueDate: "2024-01-28",
+          course: "Medical Technology",
+        },
+        {
+          id: "PAY-007",
+          enrolleeName: "Michael Brown",
+          enrolleeId: "STU-2024-007",
+          paymentType: "Miscellaneous",
+          tuitionFee: 2500,
+          paymentMethod: "Cash",
+          uploadDate: "2024-01-19",
+          status: "pending",
+          dueDate: "2024-01-29",
+          course: "Information Technology",
+        },
+      ]);
+    }, 500);
+  });
+};
 
-  // Get auth token from localStorage with debugging
-  const getAuthToken = () => {
-    const token = localStorage.getItem('token')
-    console.log('Retrieved token:', token ? 'Token found' : 'No token found')
-    console.log('Available localStorage keys:', Object.keys(localStorage))
-    return token
-  }
+const processPaymentAPI = async (paymentId, action) => {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      resolve({
+        success: true,
+        message: `Payment ${action} successfully`,
+      });
+    }, 1000);
+  });
+};
 
-  // API call to fetch payments
-  const fetchPayments = async () => {
-    setLoading(true)
-    setError(null)
-    
-    try {
-      const token = getAuthToken()
-      console.log('Token check:', token ? 'Found' : 'Not found')
-      
-      if (!token) {
-        throw new Error('No authentication token found. Please log in again.')
-      }
+const PendingPayments = ({ onPaymentProcessed }) => {
+  const [payments, setPayments] = useState([]);
+  const [filteredPayments, setFilteredPayments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedPayment, setSelectedPayment] = useState(null);
+  const [processing, setProcessing] = useState(null);
+  const [hoveredRow, setHoveredRow] = useState(null);
+  const [hoveredButton, setHoveredButton] = useState(null);
+  const [isMobile, setIsMobile] = useState(false);
 
-      const queryParams = new URLSearchParams()
-      if (filters.name) queryParams.append('student_search', filters.name)
-      if (filters.paymentStatus !== 'all') queryParams.append('status', filters.paymentStatus)
-      if (filters.sortOrder) queryParams.append('name_sort', filters.sortOrder)
+  // Filter states
+  const [nameFilter, setNameFilter] = useState("");
+  const [sortBy, setSortBy] = useState("latest");
+  const [dateRange, setDateRange] = useState("all");
 
-      const apiUrl = `http://localhost:3000/api/payments?${queryParams}`
-      console.log('Making API call to:', apiUrl)
-
-      const response = await fetch(apiUrl, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      })
-
-      console.log('Response status:', response.status)
-      console.log('Response headers:', Object.fromEntries(response.headers.entries()))
-
-      if (!response.ok) {
-        if (response.status === 401) {
-          throw new Error('Unauthorized - please log in again')
-        }
-        const errorText = await response.text()
-        console.log('Error response:', errorText)
-        throw new Error(`Failed to fetch payments: ${response.status} - ${errorText}`)
-      }
-
-      const data = await response.json()
-      console.log('Received data:', data)
-      
-      // Transform the server data to match our component's expected format
-      const transformedData = data.map(payment => ({
-        id: payment.payment_id || `PAY${payment.payment_id}`,
-        studentName: `${payment.first_name} ${payment.last_name}`,
-        email: payment.email || 'N/A',
-        phone: payment.phone || 'N/A',
-        course: payment.course_name || 'N/A',
-        amount: payment.payment_amount || 0,
-        dueDate: payment.payment_date ? new Date(payment.payment_date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-        dateCreated: payment.created_at ? new Date(payment.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-        status: payment.payment_status || 'pending',
-        paymentMethod: payment.method_name || 'N/A',
-        notes: payment.notes || '',
-        referenceNumber: payment.reference_number || '',
-        studentId: payment.student_id,
-        accountId: payment.account_id,
-        methodId: payment.method_id,
-        totalDue: payment.total_due || 0,
-        balance: payment.balance || 0
-      }))
-
-      console.log('Transformed data:', transformedData)
-      setPayments(transformedData)
-    } catch (err) {
-      console.error('Error fetching payments:', err)
-      setError(err.message)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  // Apply filters based on flowchart logic
   useEffect(() => {
-    let filtered = [...payments]
+    fetchPendingPayments();
+
+    // Check if mobile
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth <= 768);
+    };
+
+    checkMobile();
+    window.addEventListener("resize", checkMobile);
+
+    return () => window.removeEventListener("resize", checkMobile);
+  }, []);
+
+  // Filter and sort payments whenever filters change
+  useEffect(() => {
+    let filtered = [...payments];
 
     // Filter by name
-    if (filters.name) {
-      filtered = filtered.filter(payment => 
-        payment.studentName.toLowerCase().includes(filters.name.toLowerCase())
-      )
+    if (nameFilter.trim()) {
+      filtered = filtered.filter((payment) =>
+        payment.enrolleeName.toLowerCase().includes(nameFilter.toLowerCase())
+      );
     }
 
-    // Filter by payment status
-    if (filters.paymentStatus !== 'all') {
-      filtered = filtered.filter(payment => payment.status === filters.paymentStatus)
+    // Filter by date range
+    if (dateRange !== "all") {
+      const today = new Date();
+      const filterDate = new Date();
+
+      switch (dateRange) {
+        case "week":
+          filterDate.setDate(today.getDate() - 7);
+          break;
+        case "month":
+          filterDate.setMonth(today.getMonth() - 1);
+          break;
+        case "quarter":
+          filterDate.setMonth(today.getMonth() - 3);
+          break;
+      }
+
+      filtered = filtered.filter((payment) => {
+        const paymentDate = new Date(payment.uploadDate);
+        return paymentDate >= filterDate;
+      });
     }
 
-    // Sort by name
-    filtered.sort((a, b) => {
-      const comparison = a.studentName.localeCompare(b.studentName)
-      return filters.sortOrder === 'ascending' ? comparison : -comparison
-    })
+    // Sort payments
+    switch (sortBy) {
+      case "latest":
+        filtered.sort(
+          (a, b) => new Date(b.uploadDate) - new Date(a.uploadDate)
+        );
+        break;
+      case "oldest":
+        filtered.sort(
+          (a, b) => new Date(a.uploadDate) - new Date(b.uploadDate)
+        );
+        break;
+      case "amount-high":
+        filtered.sort((a, b) => b.tuitionFee - a.tuitionFee);
+        break;
+      case "amount-low":
+        filtered.sort((a, b) => a.tuitionFee - b.tuitionFee);
+        break;
+      case "due-date":
+        filtered.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+        break;
+      default:
+        break;
+    }
 
-    setFilteredPayments(filtered)
-    setCurrentPage(1)
-  }, [payments, filters])
+    setFilteredPayments(filtered);
+  }, [payments, nameFilter, sortBy, dateRange]);
 
-  // Initial data fetch
-  useEffect(() => {
-    fetchPayments()
-  }, [])
-
-  const handleFilterChange = (filterType, value) => {
-    setFilters(prev => ({
-      ...prev,
-      [filterType]: value
-    }))
-  }
-
-  const updatePaymentStatus = async (paymentId, newStatus) => {
+  const fetchPendingPayments = async () => {
     try {
-      const token = getAuthToken()
-      if (!token) {
-        throw new Error('No authentication token found')
-      }
-
-      const payment = payments.find(p => p.id === paymentId)
-      if (!payment) {
-        throw new Error('Payment not found')
-      }
-
-      // Use the PUT endpoint to update payment status
-      const response = await fetch(`http://localhost:3000/api/payments/${paymentId}/status`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          status: newStatus,
-          notes: `Payment ${newStatus} on ${new Date().toISOString().split('T')[0]}`
-        })
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        throw new Error(`Failed to update payment status: ${response.status} - ${errorText}`)
-      }
-
-      // Update local state
-      setPayments(prev => prev.map(payment => 
-        payment.id === paymentId 
-          ? { ...payment, status: newStatus, updatedDate: new Date().toISOString().split('T')[0] }
-          : payment
-      ))
-
-      // Refresh data from server
-      await fetchPayments()
-
-    } catch (err) {
-      console.error('Error updating payment status:', err)
-      setError(err.message)
+      const data = await getPendingPaymentsAPI();
+      setPayments(data);
+    } catch (error) {
+      console.error("Failed to fetch pending payments:", error);
+    } finally {
+      setLoading(false);
     }
-  }
+  };
 
-  const updatePaymentDetails = async (paymentId, updatedData) => {
+  const handlePaymentAction = async (paymentId, action) => {
+    setProcessing(paymentId);
     try {
-      const token = getAuthToken()
-      if (!token) {
-        throw new Error('No authentication token found')
+      const result = await processPaymentAPI(paymentId, action);
+      if (result.success) {
+        setPayments((prev) => prev.filter((p) => p.id !== paymentId));
+        setSelectedPayment(null);
+        onPaymentProcessed && onPaymentProcessed(paymentId, action);
       }
-
-      // Use the PUT endpoint to update payment details
-      const response = await fetch(`http://localhost:3000/api/payments/${paymentId}`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          payment_amount: updatedData.amount,
-          reference_number: updatedData.referenceNumber,
-          notes: updatedData.notes
-        })
-      })
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        throw new Error(`Failed to update payment details: ${response.status} - ${errorText}`)
-      }
-
-      // Update local state
-      setPayments(prev => prev.map(payment => 
-        payment.id === paymentId 
-          ? { ...payment, ...updatedData, updatedDate: new Date().toISOString().split('T')[0] }
-          : payment
-      ))
-
-      setEditingPayment(null)
-      
-      // Optionally refresh from server
-      await fetchPayments()
-
-    } catch (err) {
-      console.error('Error updating payment details:', err)
-      setError(err.message)
+    } catch (error) {
+      console.error("Payment processing failed:", error);
+    } finally {
+      setProcessing(null);
     }
-  }
+  };
 
-  const getStatusColor = (status) => {
-    switch (status) {
-      case 'pending': return colors.coral
-      case 'confirmed': 
-      case 'completed': return colors.lightGreen
-      case 'cancelled': 
-      case 'failed': return colors.red
-      default: return colors.olive
+  const getButtonStyle = (
+    baseStyle,
+    hoverStyle,
+    buttonId,
+    isDisabled = false
+  ) => {
+    if (isDisabled) {
+      return { ...baseStyle, ...styles.disabledButton };
     }
-  }
+    return hoveredButton === buttonId
+      ? { ...baseStyle, ...hoverStyle }
+      : baseStyle;
+  };
 
-  const styles = {
-    container: {
-      padding: '24px',
-      backgroundColor: colors.cream,
-      minHeight: '100vh',
-      fontFamily: 'Arial, sans-serif'
-    },
+  const totalPendingAmount = payments.reduce(
+    (sum, payment) => sum + payment.tuitionFee,
+    0
+  );
 
-    header: {
-      backgroundColor: '#ffffff',
-      borderRadius: '12px',
-      padding: '24px',
-      marginBottom: '24px',
-      border: '1px solid #e2e8f0'
-    },
+  const formatDate = (dateString) => {
+    return new Date(dateString).toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  };
 
-    title: {
-      fontSize: '28px',
-      fontWeight: 'bold',
-      color: colors.black,
-      margin: 0,
-      marginBottom: '8px'
-    },
+  const formatCurrency = (amount) => {
+    return `₱${amount.toLocaleString()}`;
+  };
 
-    subtitle: {
-      fontSize: '16px',
-      color: colors.lightGreen,
-      margin: 0
-    },
+  // Mobile Card Component
+  const MobilePaymentCard = ({ payment }) => (
+    <div style={styles.mobileCard}>
+      <div style={styles.mobileCardHeader}>
+        <div>
+          <div style={styles.mobileCardTitle}>{payment.enrolleeName}</div>
+          <div style={styles.mobileCardSubtitle}>{payment.id}</div>
+        </div>
+        <div style={{ ...styles.statusBadge, ...styles.statusPending }}>
+          {payment.status}
+        </div>
+      </div>
 
+      <div style={styles.mobileCardDetails}>
+        <div style={styles.mobileCardRow}>
+          <span style={styles.mobileCardLabel}>Course</span>
+          <span style={styles.mobileCardValue}>{payment.course}</span>
+        </div>
+        <div style={styles.mobileCardRow}>
+          <span style={styles.mobileCardLabel}>Amount</span>
+          <span style={styles.mobileCardValue}>
+            {formatCurrency(payment.tuitionFee)}
+          </span>
+        </div>
+        <div style={styles.mobileCardRow}>
+          <span style={styles.mobileCardLabel}>Due Date</span>
+          <span style={styles.mobileCardValue}>
+            {formatDate(payment.dueDate)}
+          </span>
+        </div>
+        <div style={styles.mobileCardRow}>
+          <span style={styles.mobileCardLabel}>Upload Date</span>
+          <span style={styles.mobileCardValue}>
+            {formatDate(payment.uploadDate)}
+          </span>
+        </div>
+      </div>
 
-
-    filterSection: {
-      backgroundColor: '#ffffff',
-      borderRadius: '12px',
-      padding: '20px',
-      marginBottom: '24px',
-      border: '1px solid #e2e8f0'
-    },
-
-    filterHeader: {
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      marginBottom: showFilters ? '20px' : '0'
-    },
-
-    filterToggle: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: '8px',
-      backgroundColor: colors.darkGreen,
-      color: '#ffffff',
-      border: 'none',
-      borderRadius: '8px',
-      padding: '10px 16px',
-      cursor: 'pointer',
-      fontSize: '14px',
-      fontWeight: '500'
-    },
-
-    filterControls: {
-      display: showFilters ? 'grid' : 'none',
-      gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
-      gap: '16px'
-    },
-
-    filterGroup: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: '8px'
-    },
-
-    filterLabel: {
-      fontSize: '14px',
-      fontWeight: '500',
-      color: colors.black
-    },
-
-    filterInput: {
-      padding: '10px 12px',
-      border: `1px solid ${colors.lightGreen}`,
-      borderRadius: '6px',
-      fontSize: '14px'
-    },
-
-    filterSelect: {
-      padding: '10px 12px',
-      border: `1px solid ${colors.lightGreen}`,
-      borderRadius: '6px',
-      fontSize: '14px',
-      backgroundColor: '#ffffff'
-    },
-
-    statsCard: {
-      backgroundColor: '#ffffff',
-      borderRadius: '12px',
-      padding: '20px',
-      marginBottom: '24px',
-      border: '1px solid #e2e8f0'
-    },
-
-    statsGrid: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-      gap: '16px'
-    },
-
-    statItem: {
-      textAlign: 'center',
-      padding: '16px',
-      backgroundColor: colors.cream,
-      borderRadius: '8px'
-    },
-
-    statValue: {
-      fontSize: '24px',
-      fontWeight: 'bold',
-      color: colors.darkGreen,
-      margin: 0
-    },
-
-    statLabel: {
-      fontSize: '14px',
-      color: colors.olive,
-      margin: 0
-    },
-
-    paymentsTable: {
-      backgroundColor: '#ffffff',
-      borderRadius: '12px',
-      overflow: 'hidden',
-      border: '1px solid #e2e8f0'
-    },
-
-    tableHeader: {
-      backgroundColor: colors.darkGreen,
-      color: '#ffffff',
-      padding: '16px 20px',
-      fontSize: '18px',
-      fontWeight: 'bold'
-    },
-
-    table: {
-      width: '100%',
-      borderCollapse: 'collapse'
-    },
-
-    tableHeaderRow: {
-      backgroundColor: colors.lightGreen,
-      color: '#ffffff'
-    },
-
-    tableHeaderCell: {
-      padding: '12px 16px',
-      textAlign: 'left',
-      fontSize: '14px',
-      fontWeight: '600'
-    },
-
-    tableRow: {
-      borderBottom: '1px solid #e2e8f0'
-    },
-
-    tableCell: {
-      padding: '12px 16px',
-      fontSize: '14px',
-      color: colors.black
-    },
-
-    statusBadge: {
-      padding: '4px 12px',
-      borderRadius: '20px',
-      fontSize: '12px',
-      fontWeight: '500',
-      textTransform: 'uppercase',
-      color: '#ffffff'
-    },
-
-    actionButton: {
-      padding: '8px 18px',
-      border: 'none',
-      borderRadius: '6px',
-      fontSize: '12px',
-      fontWeight: '500',
-      cursor: 'pointer',
-      margin: '0 2px',
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: '4px'
-    },
-
-    completeButton: {
-      backgroundColor: colors.lightGreen,
-      color: '#ffffff'
-    },
-
-    cancelButton: {
-      backgroundColor: colors.red,
-      color: '#ffffff'
-    },
-
-    editButton: {
-      backgroundColor: colors.olive,
-      color: '#ffffff'
-    },
-
-    viewButton: {
-      backgroundColor: colors.dustyRose,
-      color: '#ffffff'
-    },
-
-    modal: {
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      backgroundColor: 'rgba(0, 0, 0, 0.5)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 1000
-    },
-
-    modalContent: {
-      backgroundColor: '#ffffff',
-      borderRadius: '12px',
-      padding: '24px',
-      width: '90%',
-      maxWidth: '500px',
-      maxHeight: '80vh',
-      overflowY: 'auto'
-    },
-
-    modalHeader: {
-      fontSize: '20px',
-      fontWeight: 'bold',
-      color: colors.black,
-      marginBottom: '20px'
-    },
-
-    formGroup: {
-      marginBottom: '16px'
-    },
-
-    formLabel: {
-      display: 'block',
-      fontSize: '14px',
-      fontWeight: '500',
-      color: colors.black,
-      marginBottom: '6px'
-    },
-
-    formInput: {
-      width: '100%',
-      padding: '10px 12px',
-      border: `1px solid ${colors.lightGreen}`,
-      borderRadius: '6px',
-      fontSize: '14px',
-      boxSizing: 'border-box'
-    },
-
-    formActions: {
-      display: 'flex',
-      gap: '12px',
-      justifyContent: 'flex-end',
-      marginTop: '24px'
-    },
-
-    saveButton: {
-      backgroundColor: colors.darkGreen,
-      color: '#ffffff',
-      border: 'none',
-      borderRadius: '6px',
-      padding: '10px 20px',
-      fontSize: '14px',
-      fontWeight: '500',
-      cursor: 'pointer'
-    },
-
-    cancelButtonModal: {
-      backgroundColor: colors.red,
-      color: '#ffffff',
-      border: 'none',
-      borderRadius: '6px',
-      padding: '10px 20px',
-      fontSize: '14px',
-      fontWeight: '500',
-      cursor: 'pointer'
-    },
-
-    pagination: {
-      backgroundColor: '#ffffff',
-      borderRadius: '12px',
-      padding: '20px',
-      marginTop: '24px',
-      border: '1px solid #e2e8f0',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between'
-    },
-
-    paginationInfo: {
-      fontSize: '14px',
-      color: colors.black
-    },
-
-    paginationControls: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: '8px'
-    },
-
-    paginationButton: {
-      padding: '8px 12px',
-      border: `1px solid ${colors.lightGreen}`,
-      borderRadius: '6px',
-      fontSize: '14px',
-      fontWeight: '500',
-      cursor: 'pointer',
-      backgroundColor: '#ffffff',
-      color: colors.black
-    },
-
-    paginationButtonActive: {
-      backgroundColor: colors.darkGreen,
-      color: '#ffffff',
-      border: `1px solid ${colors.darkGreen}`
-    },
-
-    paginationButtonDisabled: {
-      backgroundColor: '#f5f5f5',
-      color: '#999',
-      cursor: 'not-allowed',
-      border: '1px solid #ddd'
-    },
-
-    errorMessage: {
-      backgroundColor: '#fee',
-      color: colors.red,
-      padding: '12px',
-      borderRadius: '6px',
-      marginBottom: '20px',
-      border: `1px solid ${colors.red}`
-    },
-
-    loadingMessage: {
-      textAlign: 'center',
-      padding: '40px',
-      color: colors.olive,
-      fontSize: '16px'
-    }
-  }
-
-  const pendingCount = payments.filter(p => p.status === 'pending').length
-  const totalAmount = payments.filter(p => p.status === 'pending').reduce((sum, p) => sum + p.amount, 0)
-
-  // Pagination calculations
-  const totalPages = Math.ceil(filteredPayments.length / entriesPerPage)
-  const startIndex = (currentPage - 1) * entriesPerPage
-  const endIndex = startIndex + entriesPerPage
-  const paginatedPayments = filteredPayments.slice(startIndex, endIndex)
-
-  const handlePageChange = (pageNumber) => {
-    setCurrentPage(pageNumber)
-  }
-
-  const handlePrevPage = () => {
-    if (currentPage > 1) {
-      setCurrentPage(currentPage - 1)
-    }
-  }
-
-  const handleNextPage = () => {
-    if (currentPage < totalPages) {
-      setCurrentPage(currentPage + 1)
-    }
-  }
-
-  const getPageNumbers = () => {
-    const pageNumbers = []
-    const maxVisiblePages = 5
-    
-    if (totalPages <= maxVisiblePages) {
-      for (let i = 1; i <= totalPages; i++) {
-        pageNumbers.push(i)
-      }
-    } else {
-      const startPage = Math.max(1, currentPage - 2)
-      const endPage = Math.min(totalPages, startPage + maxVisiblePages - 1)
-      
-      for (let i = startPage; i <= endPage; i++) {
-        pageNumbers.push(i)
-      }
-    }
-    
-    return pageNumbers
-  }
+      <div style={styles.actionButtons}>
+        <button
+          style={getButtonStyle(
+            styles.iconButton,
+            { backgroundColor: "#2c5282" },
+            `view-${payment.id}`
+          )}
+          onMouseEnter={() => setHoveredButton(`view-${payment.id}`)}
+          onMouseLeave={() => setHoveredButton(null)}
+          onClick={() => setSelectedPayment(payment)}
+          title="View Details"
+        >
+          <Eye style={styles.icon} />
+        </button>
+        <button
+          style={getButtonStyle(
+            { ...styles.iconButton, ...styles.approveButton },
+            { backgroundColor: "#2f855a" },
+            `approve-${payment.id}`,
+            processing === payment.id
+          )}
+          onMouseEnter={() => setHoveredButton(`approve-${payment.id}`)}
+          onMouseLeave={() => setHoveredButton(null)}
+          onClick={() => handlePaymentAction(payment.id, "approved")}
+          disabled={processing === payment.id}
+          title="Approve Payment"
+        >
+          <Check style={styles.icon} />
+        </button>
+        <button
+          style={getButtonStyle(
+            { ...styles.iconButton, ...styles.rejectButton },
+            { backgroundColor: "#c53030" },
+            `reject-${payment.id}`,
+            processing === payment.id
+          )}
+          onMouseEnter={() => setHoveredButton(`reject-${payment.id}`)}
+          onMouseLeave={() => setHoveredButton(null)}
+          onClick={() => handlePaymentAction(payment.id, "rejected")}
+          disabled={processing === payment.id}
+          title="Reject Payment"
+        >
+          <X style={styles.icon} />
+        </button>
+      </div>
+    </div>
+  );
 
   if (loading) {
     return (
-      <div style={styles.container}>
-        <div style={styles.loadingMessage}>
-          <RefreshCw size={24} style={{ animation: 'spin 1s linear infinite' }} />
-          <p>Loading payments...</p>
+      <div style={styles.mainContainer}>
+        <div style={styles.headerCard}>
+          <h1 style={styles.headerTitle}>Pending Payments</h1>
+          <p style={styles.headerSubtitle}>
+            Manage and track all pending student payments
+          </p>
         </div>
+        <div style={styles.tableContainer}>
+          <div style={styles.loadingContainer}>
+            <div style={styles.spinner}></div>
+          </div>
+        </div>
+        <style>
+          {`
+            @keyframes spin {
+              from { transform: rotate(0deg); }
+              to { transform: rotate(360deg); }
+            }
+          `}
+        </style>
       </div>
-    )
+    );
   }
 
   return (
-    <div style={styles.container}>
+    <div style={styles.mainContainer}>
       {/* Header */}
-      <div style={styles.header}>
-        <h1 style={styles.title}>Pending Payments</h1>
-        <p style={styles.subtitle}>Manage and track all pending student payments</p>
+      <div style={styles.headerCard}>
+        <h1 style={styles.headerTitle}>Pending Payments</h1>
+        <p style={styles.headerSubtitle}>
+          Manage and track all pending student payments
+        </p>
       </div>
 
-      {/* Error Message */}
-      {error && (
-        <div style={styles.errorMessage}>
-          Error: {error}
+      {/* Stats Cards */}
+      <div style={styles.statsContainer}>
+        <div style={styles.statCard}>
+          <div style={styles.statNumber}>{payments.length}</div>
+          <div style={styles.statLabel}>Total Pending</div>
         </div>
-      )}
-
-      {/* Statistics Card */}
-      <div style={styles.statsCard}>
-        <div style={styles.statsGrid}>
-          <div style={styles.statItem}>
-            <div style={styles.statValue}>{pendingCount}</div>
-            <div style={styles.statLabel}>Pending Payments</div>
+        <div style={styles.statCard}>
+          <div style={styles.statNumber}>
+            {formatCurrency(totalPendingAmount)}
           </div>
-          <div style={styles.statItem}>
-            <div style={styles.statValue}>₱{totalAmount.toLocaleString()}</div>
-            <div style={styles.statLabel}>Total Pending Amount</div>
-          </div>
-          <div style={styles.statItem}>
-            <div style={styles.statValue}>{filteredPayments.length}</div>
-            <div style={styles.statLabel}>Filtered Results</div>
-          </div>
+          <div style={styles.statLabel}>Total Pending Amount</div>
+        </div>
+        <div style={styles.statCard}>
+          <div style={styles.statNumber}>{filteredPayments.length}</div>
+          <div style={styles.statLabel}>Filtered Results</div>
         </div>
       </div>
 
       {/* Filter Section */}
       <div style={styles.filterSection}>
-        <div style={styles.filterHeader}>
-          <h3 style={{ margin: 0, color: colors.black }}>Filter Payments</h3>
-          <button
-            style={styles.filterToggle}
-            onClick={() => setShowFilters(!showFilters)}
-          >
-            <Filter size={16} />
-            {showFilters ? 'Hide Filters' : 'Show Filters'}
-            {showFilters ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-          </button>
+        <div style={styles.filterTitle}>
+          <Filter style={styles.icon} />
+          Filter Pending Payments
         </div>
-
-        <div style={styles.filterControls}>
+        <div style={styles.filterGrid}>
           <div style={styles.filterGroup}>
             <label style={styles.filterLabel}>Filter by Name</label>
             <input
               type="text"
               placeholder="Enter student name..."
-              value={filters.name}
-              onChange={(e) => handleFilterChange('name', e.target.value)}
+              value={nameFilter}
+              onChange={(e) => setNameFilter(e.target.value)}
               style={styles.filterInput}
             />
           </div>
-
           <div style={styles.filterGroup}>
-            <label style={styles.filterLabel}>Sort Order</label>
+            <label style={styles.filterLabel}>Sort By</label>
             <select
-              value={filters.sortOrder}
-              onChange={(e) => handleFilterChange('sortOrder', e.target.value)}
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
               style={styles.filterSelect}
             >
-              <option value="ascending">Ascending</option>
-              <option value="descending">Descending</option>
+              <option value="latest">Latest Uploaded</option>
+              <option value="oldest">Oldest First</option>
+              <option value="amount-high">Amount (High to Low)</option>
+              <option value="amount-low">Amount (Low to High)</option>
+              <option value="due-date">Due Date</option>
             </select>
           </div>
-
           <div style={styles.filterGroup}>
-            <label style={styles.filterLabel}>Payment Status</label>
+            <label style={styles.filterLabel}>Date Range</label>
             <select
-              value={filters.paymentStatus}
-              onChange={(e) => handleFilterChange('paymentStatus', e.target.value)}
+              value={dateRange}
+              onChange={(e) => setDateRange(e.target.value)}
               style={styles.filterSelect}
             >
-              <option value="all">All Status</option>
-              <option value="pending">Pending</option>
-              <option value="confirmed">Confirmed</option>
-              <option value="completed">Completed</option>
-              <option value="cancelled">Cancelled</option>
-              <option value="failed">Failed</option>
+              <option value="all">All Time</option>
+              <option value="week">Last Week</option>
+              <option value="month">Last Month</option>
+              <option value="quarter">Last 3 Months</option>
             </select>
           </div>
         </div>
       </div>
 
-      {/* Payments Table */}
-      <div style={styles.paymentsTable}>
+      {/* Payment Table/Cards */}
+      <div style={styles.tableContainer}>
         <div style={styles.tableHeader}>
-          Payment Tracker {filters.name || filters.paymentStatus !== 'all' ? '(Filtered)' : '(Unfiltered)'}
+          Payment Tracker (Filtered: {filteredPayments.length})
         </div>
-        
-        <table style={styles.table}>
-          <thead>
-            <tr style={styles.tableHeaderRow}>
-              <th style={styles.tableHeaderCell}>Payment ID</th>
-              <th style={styles.tableHeaderCell}>Student Name</th>
-              <th style={styles.tableHeaderCell}>Course</th>
-              <th style={styles.tableHeaderCell}>Amount</th>
-              <th style={styles.tableHeaderCell}>Due Date</th>
-              <th style={styles.tableHeaderCell}>Status</th>
-              <th style={styles.tableHeaderCell}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {paginatedPayments.map((payment) => (
-              <tr key={payment.id} style={styles.tableRow}>
-                <td style={styles.tableCell}>{payment.id}</td>
-                <td style={styles.tableCell}>{payment.studentName}</td>
-                <td style={styles.tableCell}>{payment.course}</td>
-                <td style={styles.tableCell}>₱{payment.amount.toLocaleString()}</td>
-                <td style={styles.tableCell}>{payment.dueDate}</td>
-                <td style={styles.tableCell}>
-                  <span
-                    style={{
-                      ...styles.statusBadge,
-                      backgroundColor: getStatusColor(payment.status)
-                    }}
-                  >
-                    {payment.status}
-                  </span>
-                </td>
-                <td style={styles.tableCell}>
-                  <button
-                    style={{...styles.actionButton, ...styles.viewButton}}
-                    onClick={() => setViewingPayment(payment)}
-                  >
-                    <Eye size={14} />
-                    View
-                  </button>
-                  <button
-                    style={{...styles.actionButton, ...styles.editButton}}
-                    onClick={() => setEditingPayment(payment)}
-                  >
-                    <Edit2 size={14} />
-                    Edit
-                  </button>
-                  {payment.status === 'pending' && (
-                    <>
-                      <button
-                        style={{...styles.actionButton, ...styles.completeButton}}
-                        onClick={() => updatePaymentStatus(payment.id, 'confirmed')}
-                      >
-                        <Check size={14} />
-                        Confirm
-                      </button>
-                      <button
-                        style={{...styles.actionButton, ...styles.cancelButton}}
-                        onClick={() => updatePaymentStatus(payment.id, 'cancelled')}
-                      >
-                        <X size={14} />
-                        Cancel
-                      </button>
-                    </>
-                  )}
-                </td>
-              </tr>
+
+        {filteredPayments.length === 0 ? (
+          <div style={styles.emptyState}>
+            <Clock style={styles.emptyIcon} />
+            <p style={styles.emptyText}>
+              {nameFilter || dateRange !== "all"
+                ? "No payments match your filters"
+                : "No pending payments found"}
+            </p>
+          </div>
+        ) : isMobile ? (
+          <div style={{ padding: "16px" }}>
+            {filteredPayments.map((payment) => (
+              <MobilePaymentCard key={payment.id} payment={payment} />
             ))}
-          </tbody>
-        </table>
+          </div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={styles.table}>
+              <thead style={styles.tableHead}>
+                <tr>
+                  <th style={styles.tableHeaderCell}>Payment ID</th>
+                  <th style={styles.tableHeaderCell}>Student Name</th>
+                  <th style={styles.tableHeaderCell}>Course</th>
+                  <th style={styles.tableHeaderCell}>Amount</th>
+                  <th style={styles.tableHeaderCell}>Due Date</th>
+                  <th style={styles.tableHeaderCell}>Status</th>
+                  <th
+                    style={{ ...styles.tableHeaderCell, borderRight: "none" }}
+                  >
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody style={styles.tableBody}>
+                {filteredPayments.map((payment) => (
+                  <tr
+                    key={payment.id}
+                    style={{
+                      ...styles.tableRow,
+                      ...(hoveredRow === payment.id
+                        ? styles.tableRowHover
+                        : {}),
+                    }}
+                    onMouseEnter={() => setHoveredRow(payment.id)}
+                    onMouseLeave={() => setHoveredRow(null)}
+                  >
+                    <td style={styles.tableCell}>{payment.id}</td>
+                    <td style={styles.tableCell}>{payment.enrolleeName}</td>
+                    <td style={styles.tableCell}>{payment.course}</td>
+                    <td style={styles.tableCell}>
+                      {formatCurrency(payment.tuitionFee)}
+                    </td>
+                    <td style={styles.tableCell}>
+                      {formatDate(payment.dueDate)}
+                    </td>
+                    <td style={styles.tableCell}>
+                      <span
+                        style={{
+                          ...styles.statusBadge,
+                          ...styles.statusPending,
+                        }}
+                      >
+                        {payment.status}
+                      </span>
+                    </td>
+                    <td style={{ ...styles.tableCell, borderRight: "none" }}>
+                      <div style={styles.actionButtons}>
+                        <button
+                          style={getButtonStyle(
+                            { ...styles.iconButton, ...styles.viewButton },
+                            { backgroundColor: "#2c5282" },
+                            `view-${payment.id}`
+                          )}
+                          onMouseEnter={() =>
+                            setHoveredButton(`view-${payment.id}`)
+                          }
+                          onMouseLeave={() => setHoveredButton(null)}
+                          onClick={() => setSelectedPayment(payment)}
+                          title="View Details"
+                        >
+                          <Eye style={styles.icon} />
+                        </button>
+                        <button
+                          style={getButtonStyle(
+                            { ...styles.iconButton, ...styles.approveButton },
+                            { backgroundColor: "#2f855a" },
+                            `approve-${payment.id}`,
+                            processing === payment.id
+                          )}
+                          onMouseEnter={() =>
+                            setHoveredButton(`approve-${payment.id}`)
+                          }
+                          onMouseLeave={() => setHoveredButton(null)}
+                          onClick={() =>
+                            handlePaymentAction(payment.id, "approved")
+                          }
+                          disabled={processing === payment.id}
+                          title="Approve Payment"
+                        >
+                          <Check style={styles.icon} />
+                        </button>
+                        <button
+                          style={getButtonStyle(
+                            { ...styles.iconButton, ...styles.rejectButton },
+                            { backgroundColor: "#c53030" },
+                            `reject-${payment.id}`,
+                            processing === payment.id
+                          )}
+                          onMouseEnter={() =>
+                            setHoveredButton(`reject-${payment.id}`)
+                          }
+                          onMouseLeave={() => setHoveredButton(null)}
+                          onClick={() =>
+                            handlePaymentAction(payment.id, "rejected")
+                          }
+                          disabled={processing === payment.id}
+                          title="Reject Payment"
+                        >
+                          <X style={styles.icon} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
-      {/* Pagination */}
-      {filteredPayments.length > entriesPerPage && (
-        <div style={styles.pagination}>
-          <div style={styles.paginationInfo}>
-            Showing {startIndex + 1} to {Math.min(endIndex, filteredPayments.length)} of {filteredPayments.length} entries
-          </div>
-          
-          <div style={styles.paginationControls}>
-            <button
-              style={{
-                ...styles.paginationButton,
-                ...(currentPage === 1 ? styles.paginationButtonDisabled : {})
-              }}
-              onClick={handlePrevPage}
-              disabled={currentPage === 1}
+      {/* Payment Details Modal */}
+      {selectedPayment && (
+        <div style={styles.modal} className="pending-payments-modal">
+          <div
+            style={styles.modalContent}
+            className="pending-payments-modal-content"
+          >
+            <h3 style={styles.modalTitle}>Payment Details</h3>
+            <div
+              style={styles.modalDetails}
+              className="pending-payments-modal-details"
             >
-              Previous
-            </button>
-            
-            {getPageNumbers().map((pageNumber) => (
-              <button
-                key={pageNumber}
-                style={{
-                  ...styles.paginationButton,
-                  ...(currentPage === pageNumber ? styles.paginationButtonActive : {})
-                }}
-                onClick={() => handlePageChange(pageNumber)}
+              <div
+                style={styles.modalDetailRow}
+                className="pending-payments-modal-row"
               >
-                {pageNumber}
-              </button>
-            ))}
-            
-            <button
-              style={{
-                ...styles.paginationButton,
-                ...(currentPage === totalPages ? styles.paginationButtonDisabled : {})
-              }}
-              onClick={handleNextPage}
-              disabled={currentPage === totalPages}
+                <span
+                  style={styles.modalLabel}
+                  className="pending-payments-modal-label"
+                >
+                  Payment ID:
+                </span>
+                <span
+                  style={styles.modalValue}
+                  className="pending-payments-modal-value"
+                >
+                  {selectedPayment.id}
+                </span>
+              </div>
+              <div
+                style={styles.modalDetailRow}
+                className="pending-payments-modal-row"
+              >
+                <span
+                  style={styles.modalLabel}
+                  className="pending-payments-modal-label"
+                >
+                  Student Name:
+                </span>
+                <span
+                  style={styles.modalValue}
+                  className="pending-payments-modal-value"
+                >
+                  {selectedPayment.enrolleeName}
+                </span>
+              </div>
+              <div
+                style={styles.modalDetailRow}
+                className="pending-payments-modal-row"
+              >
+                <span
+                  style={styles.modalLabel}
+                  className="pending-payments-modal-label"
+                >
+                  Student ID:
+                </span>
+                <span
+                  style={styles.modalValue}
+                  className="pending-payments-modal-value"
+                >
+                  {selectedPayment.enrolleeId}
+                </span>
+              </div>
+              <div
+                style={styles.modalDetailRow}
+                className="pending-payments-modal-row"
+              >
+                <span
+                  style={styles.modalLabel}
+                  className="pending-payments-modal-label"
+                >
+                  Course:
+                </span>
+                <span
+                  style={styles.modalValue}
+                  className="pending-payments-modal-value"
+                >
+                  {selectedPayment.course}
+                </span>
+              </div>
+              <div
+                style={styles.modalDetailRow}
+                className="pending-payments-modal-row"
+              >
+                <span
+                  style={styles.modalLabel}
+                  className="pending-payments-modal-label"
+                >
+                  Payment Type:
+                </span>
+                <span
+                  style={styles.modalValue}
+                  className="pending-payments-modal-value"
+                >
+                  {selectedPayment.paymentType}
+                </span>
+              </div>
+              <div
+                style={styles.modalDetailRow}
+                className="pending-payments-modal-row"
+              >
+                <span
+                  style={styles.modalLabel}
+                  className="pending-payments-modal-label"
+                >
+                  Amount:
+                </span>
+                <span
+                  style={styles.modalValue}
+                  className="pending-payments-modal-value"
+                >
+                  ₱{selectedPayment.tuitionFee.toLocaleString()}
+                </span>
+              </div>
+              <div
+                style={styles.modalDetailRow}
+                className="pending-payments-modal-row"
+              >
+                <span
+                  style={styles.modalLabel}
+                  className="pending-payments-modal-label"
+                >
+                  Payment Method:
+                </span>
+                <span
+                  style={styles.modalValue}
+                  className="pending-payments-modal-value"
+                >
+                  {selectedPayment.paymentMethod}
+                </span>
+              </div>
+              <div
+                style={styles.modalDetailRow}
+                className="pending-payments-modal-row"
+              >
+                <span
+                  style={styles.modalLabel}
+                  className="pending-payments-modal-label"
+                >
+                  Upload Date:
+                </span>
+                <span
+                  style={styles.modalValue}
+                  className="pending-payments-modal-value"
+                >
+                  {selectedPayment.uploadDate}
+                </span>
+              </div>
+              <div
+                style={{ ...styles.modalDetailRow, borderBottom: "none" }}
+                className="pending-payments-modal-row"
+              >
+                <span
+                  style={styles.modalLabel}
+                  className="pending-payments-modal-label"
+                >
+                  Due Date:
+                </span>
+                <span
+                  style={styles.modalValue}
+                  className="pending-payments-modal-value"
+                >
+                  {selectedPayment.dueDate}
+                </span>
+              </div>
+            </div>
+            <div
+              style={styles.modalActions}
+              className="pending-payments-modal-actions"
             >
-              Next
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* View Payment Modal */}
-      {viewingPayment && (
-        <div style={styles.modal} onClick={() => setViewingPayment(null)}>
-          <div style={styles.modalContent} onClick={(e) => e.stopPropagation()}>
-            <h2 style={styles.modalHeader}>Payment Details - {viewingPayment.id}</h2>
-            
-            <div style={styles.formGroup}>
-              <strong>Student Name:</strong> {viewingPayment.studentName}
-            </div>
-            <div style={styles.formGroup}>
-              <strong>Email:</strong> {viewingPayment.email}
-            </div>
-            <div style={styles.formGroup}>
-              <strong>Phone:</strong> {viewingPayment.phone}
-            </div>
-            <div style={styles.formGroup}>
-              <strong>Course:</strong> {viewingPayment.course}
-            </div>
-            <div style={styles.formGroup}>
-              <strong>Amount:</strong> ₱{viewingPayment.amount.toLocaleString()}
-            </div>
-            <div style={styles.formGroup}>
-              <strong>Due Date:</strong> {viewingPayment.dueDate}
-            </div>
-            <div style={styles.formGroup}>
-              <strong>Payment Method:</strong> {viewingPayment.paymentMethod}
-            </div>
-            <div style={styles.formGroup}>
-              <strong>Reference Number:</strong> {viewingPayment.referenceNumber || 'N/A'}
-            </div>
-            <div style={styles.formGroup}>
-              <strong>Status:</strong> 
-              <span
-                style={{
-                  ...styles.statusBadge,
-                  backgroundColor: getStatusColor(viewingPayment.status),
-                  marginLeft: '8px'
-                }}
-              >
-                {viewingPayment.status}
-              </span>
-            </div>
-            <div style={styles.formGroup}>
-              <strong>Notes:</strong> {viewingPayment.notes || 'N/A'}
-            </div>
-
-            <div style={styles.formActions}>
               <button
-                style={styles.cancelButtonModal}
-                onClick={() => setViewingPayment(null)}
+                onClick={() => setSelectedPayment(null)}
+                style={getButtonStyle(
+                  styles.closeButton,
+                  styles.closeButtonHover,
+                  "close-modal"
+                )}
+                className="pending-payments-modal-button"
+                onMouseEnter={() => setHoveredButton("close-modal")}
+                onMouseLeave={() => setHoveredButton(null)}
               >
                 Close
               </button>
+              <button
+                onClick={() =>
+                  handlePaymentAction(selectedPayment.id, "approve")
+                }
+                style={getButtonStyle(
+                  styles.approveActionButton,
+                  styles.approveActionButtonHover,
+                  "approve-modal"
+                )}
+                className="pending-payments-modal-button"
+                onMouseEnter={() => setHoveredButton("approve-modal")}
+                onMouseLeave={() => setHoveredButton(null)}
+              >
+                Approve
+              </button>
+              <button
+                onClick={() =>
+                  handlePaymentAction(selectedPayment.id, "reject")
+                }
+                style={getButtonStyle(
+                  styles.rejectActionButton,
+                  styles.rejectActionButtonHover,
+                  "reject-modal"
+                )}
+                className="pending-payments-modal-button"
+                onMouseEnter={() => setHoveredButton("reject-modal")}
+                onMouseLeave={() => setHoveredButton(null)}
+              >
+                Reject
+              </button>
             </div>
           </div>
         </div>
       )}
-
-      {/* Edit Payment Modal */}
-      {editingPayment && (
-        <div style={styles.modal} onClick={() => setEditingPayment(null)}>
-          <div style={styles.modalContent} onClick={(e) => e.stopPropagation()}>
-            <h2 style={styles.modalHeader}>Edit Payment - {editingPayment.id}</h2>
-            
-            <form onSubmit={(e) => {
-              e.preventDefault()
-              const formData = new FormData(e.target)
-              const updatedData = {
-                studentName: formData.get('studentName'),
-                email: formData.get('email'),
-                phone: formData.get('phone'),
-                course: formData.get('course'),
-                amount: parseFloat(formData.get('amount')),
-                dueDate: formData.get('dueDate'),
-                paymentMethod: formData.get('paymentMethod'),
-                notes: formData.get('notes')
-              }
-              updatePaymentDetails(editingPayment.id, updatedData)
-            }}>
-              <div style={styles.formGroup}>
-                <label style={styles.formLabel}>Student Name</label>
-                <input
-                  type="text"
-                  name="studentName"
-                  defaultValue={editingPayment.studentName}
-                  style={styles.formInput}
-                  required
-                />
-              </div>
-
-              <div style={styles.formGroup}>
-                <label style={styles.formLabel}>Email</label>
-                <input
-                  type="email"
-                  name="email"
-                  defaultValue={editingPayment.email}
-                  style={styles.formInput}
-                  required
-                />
-              </div>
-
-              <div style={styles.formGroup}>
-                <label style={styles.formLabel}>Phone</label>
-                <input
-                  type="text"
-                  name="phone"
-                  defaultValue={editingPayment.phone}
-                  style={styles.formInput}
-                  required
-                />
-              </div>
-
-              <div style={styles.formGroup}>
-                <label style={styles.formLabel}>Course</label>
-                <input
-                  type="text"
-                  name="course"
-                  defaultValue={editingPayment.course}
-                  style={styles.formInput}
-                  required
-                />
-              </div>
-
-              <div style={styles.formGroup}>
-                <label style={styles.formLabel}>Amount</label>
-                <input
-                  type="number"
-                  name="amount"
-                  defaultValue={editingPayment.amount}
-                  style={styles.formInput}
-                  required
-                />
-              </div>
-
-              <div style={styles.formGroup}>
-                <label style={styles.formLabel}>Due Date</label>
-                <input
-                  type="date"
-                  name="dueDate"
-                  defaultValue={editingPayment.dueDate}
-                  style={styles.formInput}
-                  required
-                />
-              </div>
-
-              <div style={styles.formGroup}>
-                <label style={styles.formLabel}>Payment Method</label>
-                <select
-                  name="paymentMethod"
-                  defaultValue={editingPayment.paymentMethod}
-                  style={styles.formInput}
-                  required
-                >
-                  <option value="Bank Transfer">Bank Transfer</option>
-                  <option value="GCash">GCash</option>
-                  <option value="PayMaya">PayMaya</option>
-                  <option value="Credit Card">Credit Card</option>
-                  <option value="Cash">Cash</option>
-                </select>
-              </div>
-
-              <div style={styles.formGroup}>
-                <label style={styles.formLabel}>Notes</label>
-                <textarea
-                  name="notes"
-                  defaultValue={editingPayment.notes}
-                  style={{...styles.formInput, height: '80px', resize: 'vertical'}}
-                  rows="3"
-                />
-              </div>
-
-              <div style={styles.formActions}>
-                <button type="submit" style={styles.saveButton}>
-                  Save Changes
-                </button>
-                <button
-                  type="button"
-                  style={styles.cancelButtonModal}
-                  onClick={() => setEditingPayment(null)}
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <style>
+        {`
+         @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+          
+          @media (max-width: 480px) {
+            .stats-grid {
+              grid-template-columns: 1fr !important;
+            }
+          }
+        `}
+      </style>
     </div>
-  )
-}
+  );
+};
 
-export default PendingPayment
+export default PendingPayments;

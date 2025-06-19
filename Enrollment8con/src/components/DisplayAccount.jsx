@@ -6,6 +6,8 @@ const DisplayAccount = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState('students');
+  const [modalData, setModalData] = useState(null);
+  const [modalType, setModalType] = useState(null); // 'student' or 'staff'
 
   const colors = {
     darkGreen: '#2d4a3d',
@@ -18,118 +20,108 @@ const DisplayAccount = () => {
     black: '#2c2c2c',
   };
 
-  useEffect(() => { fetchAccounts(); }, []);
+  useEffect(() => { 
+    fetchAccounts(); 
+  }, []);
+
+  // Helper function to get auth token
+  const getAuthToken = () => {
+    try {
+      return localStorage.getItem('token') || localStorage.getItem('authToken');
+    } catch (e) {
+      console.warn('Could not access localStorage:', e);
+      return null;
+    }
+  };
+
+  // Helper function to make authenticated API calls
+  const makeAuthenticatedRequest = async (url, options = {}) => {
+    const token = getAuthToken();
+    
+    if (!token) {
+      throw new Error('No authentication token found. Please log in.');
+    }
+
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        ...options.headers,
+      },
+    });
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error('Authentication failed. Please log in again.');
+      } else if (response.status === 403) {
+        throw new Error('Access denied. Insufficient permissions.');
+      } else if (response.status === 404) {
+        throw new Error('Data not found.');
+      } else {
+        throw new Error(`Server error: ${response.status} ${response.statusText}`);
+      }
+    }
+
+    return response.json();
+  };
 
   const fetchAccounts = async () => {
     try {
       setLoading(true);
-      setError(null); // Clear previous errors
+      setError(null);
       
-      // Check for token first
-      const token = localStorage.getItem('token');
+      // Check if we have an auth token
+      const token = getAuthToken();
       if (!token) {
-        setError('No authentication token found');
-        setLoading(false);
+        setError('No authentication token found. Please log in to view accounts.');
         return;
       }
-
-      const headers = {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      };
-
-      // Call both sub-fetches with Promise.all for better error handling
-      await Promise.all([
-        fetchStudents(headers),
-        fetchStaff(headers)
+      
+      // Fetch students and staff data concurrently
+      const [studentsResult, staffResult] = await Promise.allSettled([
+        makeAuthenticatedRequest(`http://localhost:3000/api/students`),
+        makeAuthenticatedRequest(`http://localhost:3000/api/admin/staff`)
       ]);
+
+      // Handle students data
+      if (studentsResult.status === 'fulfilled') {
+        setStudents(studentsResult.value || []);
+      } else {
+        console.error('Failed to fetch students:', studentsResult.reason.message);
+        if (studentsResult.reason.message.includes('Access denied')) {
+          console.warn('Student data access denied - user may not have sufficient permissions');
+        }
+      }
+
+      // Handle staff data  
+      if (staffResult.status === 'fulfilled') {
+        setStaff(staffResult.value || []);
+      } else {
+        console.error('Failed to fetch staff:', staffResult.reason.message);
+        if (staffResult.reason.message.includes('Access denied')) {
+          console.warn('Staff data access denied - user may not have admin permissions');
+        }
+      }
+
+      // Set error only if both requests failed
+      if (studentsResult.status === 'rejected' && staffResult.status === 'rejected') {
+        const primaryError = studentsResult.reason.message.includes('Authentication') 
+          ? studentsResult.reason.message 
+          : 'Failed to fetch account data. Please check your permissions and try again.';
+        setError(primaryError);
+      } else if (studentsResult.status === 'rejected' || staffResult.status === 'rejected') {
+        // Partial failure - show warning but don't block the UI
+        const failedType = studentsResult.status === 'rejected' ? 'students' : 'staff';
+        const reason = studentsResult.status === 'rejected' ? studentsResult.reason : staffResult.reason;
+        setError(`Warning: Could not load ${failedType} data. ${reason.message}`);
+      }
 
     } catch (err) {
       console.error('Error fetching accounts:', err);
-      setError(err.message);
+      setError(`Unexpected error: ${err.message}`);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const fetchStudents = async (headers) => {
-    try {
-      console.log('Fetching students...');
-      const response = await fetch('http://localhost:3000/api/students', { headers });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch students: ${response.status} ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      console.log('Students data:', data);
-      
-      // Ensure data is an array
-      if (Array.isArray(data)) {
-        setStudents(data);
-      } else {
-        console.warn('Students data is not an array:', data);
-        setStudents([]);
-      }
-    } catch (err) {
-      console.error('Error in fetchStudents:', err);
-      throw err; // Re-throw to be caught by main function
-    }
-  };
-
-  const fetchStaff = async (headers) => {
-    try {
-      console.log('Fetching staff...');
-      const response = await fetch('http://localhost:3000/api/admin/staff', { headers });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch staff: ${response.status} ${response.statusText}`);
-      }
-
-      const accounts = await response.json();
-      console.log('staff accounts:', accounts);
-
-      // Ensure accounts is an array before processing
-      if (Array.isArray(accounts)) {
-        // Transform nested data to flat structure for display
-        const staffData = accounts.map(account => ({
-          // Use nested person data
-          first_name: account.person?.first_name || account.first_name,
-          last_name: account.person?.last_name || account.last_name,
-          middle_name: account.person?.middle_name || account.middle_name,
-          birth_date: account.person?.birth_date || account.birth_date,
-          gender: account.person?.gender || account.gender,
-          email: account.person?.email || account.email,
-          
-          // Use nested account data
-          account_id: account.account?.account_id || account.account_id,
-          username: account.account?.username || account.username,
-          account_status: account.account?.account_status || account.account_status,
-          last_login: account.account?.last_login || account.last_login,
-          role_name: account.account?.role || account.role_name,
-          
-          // Staff specific data
-          staff_id: account.staff_id,
-          employee_id: account.employee_id,
-          hire_date: account.hire_date,
-          
-          // Contact info
-          primary_email: account.contact?.primary_email,
-          phone_numbers: account.contact?.phone_numbers,
-          
-          // Add a unique identifier for React keys
-          user_identifier: account.staff_id || account.employee_id || account.account?.account_id || account.account_id
-        }));
-        
-        console.log('Transformed staff data:', staffData);
-        setStaff(staffData);
-      } else {
-        console.warn('Staff accounts data is not an array:', accounts);
-        setStaff([]);
-      }
-    } catch (err) {
-      console.error('Error in fetchStaff:', err);
-      throw err; // Re-throw to be caught by main function
     }
   };
 
@@ -151,7 +143,10 @@ const DisplayAccount = () => {
       enrolled: '#007bff',
       graduated: '#28a745',
       dropped: '#dc3545',
-      staff: '#17a2b8'
+      staff: '#17a2b8',
+      admin: '#6f42c1',
+      teacher: '#fd7e14',
+      unknown: '#6c757d'
     };
 
     return {
@@ -162,6 +157,67 @@ const DisplayAccount = () => {
       fontSize: '12px',
       fontWeight: 'bold'
     };
+  };
+
+  const openModal = (data, type) => {
+    setModalData(data);
+    setModalType(type);
+  };
+
+  const closeModal = () => {
+    setModalData(null);
+    setModalType(null);
+  };
+
+  const renderModalContent = () => {
+    if (!modalData || !modalType) return null;
+
+    const allFields = Object.entries(modalData).filter(([key, value]) => 
+      value !== null && value !== undefined && value !== '' && 
+      key !== 'originalData' && key !== 'user_identifier'
+    );
+
+    return (
+      <div style={styles.modalContent}>
+        <div style={styles.modalHeader}>
+          <h3 style={styles.modalTitle}>
+            Complete {modalType === 'student' ? 'Student' : 'Staff'} Information
+          </h3>
+          <button style={styles.closeButton} onClick={closeModal}>
+            ×
+          </button>
+        </div>
+        
+        <div style={styles.modalBody}>
+          <div style={styles.expandedGrid}>
+            {allFields.map(([key, value]) => (
+              <div key={key} style={styles.expandedRow}>
+                <span style={styles.expandedLabel}>
+                  {key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:
+                </span>
+                <span style={styles.expandedValue}>
+                  {typeof value === 'object' && value !== null 
+                    ? JSON.stringify(value, null, 2)
+                    : key.includes('date') 
+                      ? formatDate(value)
+                      : String(value)
+                  }
+                </span>
+              </div>
+            ))}
+          </div>
+          
+          {modalType === 'staff' && modalData.originalData && (
+            <div style={styles.rawDataSection}>
+              <h4 style={styles.rawDataTitle}>Raw API Data</h4>
+              <pre style={styles.rawDataPre}>
+                {JSON.stringify(modalData.originalData, null, 2)}
+              </pre>
+            </div>
+          )}
+        </div>
+      </div>
+    );
   };
 
   const styles = {
@@ -211,12 +267,33 @@ const DisplayAccount = () => {
       backgroundColor: '#ffebee',
       borderRadius: '4px',
       border: `1px solid ${colors.red}`,
+      marginBottom: '20px',
+    },
+    warning: {
+      color: '#856404',
+      textAlign: 'center',
+      padding: '15px',
+      backgroundColor: '#fff3cd',
+      borderRadius: '4px',
+      border: '1px solid #ffeaa7',
+      marginBottom: '20px',
     },
     loading: {
       textAlign: 'center',
       padding: '40px',
       fontSize: '18px',
       color: colors.olive,
+    },
+    refreshButton: {
+      backgroundColor: colors.lightGreen,
+      color: 'white',
+      border: 'none',
+      padding: '10px 20px',
+      borderRadius: '5px',
+      cursor: 'pointer',
+      fontSize: '14px',
+      marginLeft: '10px',
+      transition: 'background-color 0.2s ease',
     },
     accountsGrid: {
       display: 'grid',
@@ -230,6 +307,7 @@ const DisplayAccount = () => {
       borderRadius: '8px',
       padding: '20px',
       transition: 'transform 0.2s ease, box-shadow 0.2s ease',
+      cursor: 'pointer',
     },
     accountCardHover: {
       transform: 'translateY(-2px)',
@@ -294,16 +372,121 @@ const DisplayAccount = () => {
       color: colors.olive,
       fontSize: '16px',
     },
-    refreshButton: {
-      backgroundColor: colors.coral,
+    viewMoreButton: {
+      backgroundColor: colors.lightGreen,
       color: 'white',
       border: 'none',
-      padding: '10px 20px',
+      padding: '8px 16px',
       borderRadius: '5px',
       cursor: 'pointer',
-      fontSize: '14px',
-      marginBottom: '20px',
+      fontSize: '12px',
+      marginTop: '15px',
       transition: 'background-color 0.2s ease',
+      width: '100%',
+    },
+    // Modal styles
+    modalOverlay: {
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: 'rgba(0, 0, 0, 0.6)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 1000,
+      padding: '20px',
+    },
+    modalContent: {
+      backgroundColor: 'white',
+      borderRadius: '12px',
+      maxWidth: '800px',
+      width: '100%',
+      maxHeight: '90vh',
+      overflow: 'hidden',
+      boxShadow: '0 20px 40px rgba(0, 0, 0, 0.3)',
+    },
+    modalHeader: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      padding: '20px 24px',
+      borderBottom: '1px solid #e9ecef',
+      backgroundColor: colors.cream,
+    },
+    modalTitle: {
+      margin: 0,
+      color: colors.darkGreen,
+      fontSize: '20px',
+      fontWeight: 'bold',
+    },
+    closeButton: {
+      background: 'none',
+      border: 'none',
+      fontSize: '28px',
+      cursor: 'pointer',
+      color: colors.coral,
+      padding: '0',
+      width: '32px',
+      height: '32px',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: '50%',
+      transition: 'background-color 0.2s ease',
+    },
+    modalBody: {
+      padding: '24px',
+      maxHeight: 'calc(90vh - 100px)',
+      overflowY: 'auto',
+    },
+    expandedGrid: {
+      display: 'grid',
+      gridTemplateColumns: '1fr',
+      gap: '8px',
+    },
+    expandedRow: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 2fr',
+      gap: '10px',
+      padding: '12px',
+      backgroundColor: '#f8f9fa',
+      borderRadius: '6px',
+      border: '1px solid #e9ecef',
+    },
+    expandedLabel: {
+      fontWeight: 'bold',
+      color: colors.black,
+      fontSize: '14px',
+    },
+    expandedValue: {
+      color: colors.olive,
+      fontSize: '14px',
+      wordBreak: 'break-word',
+    },
+    rawDataSection: {
+      marginTop: '24px',
+      padding: '20px',
+      backgroundColor: '#f8f9fa',
+      borderRadius: '8px',
+      border: '1px solid #e9ecef',
+    },
+    rawDataTitle: {
+      color: colors.darkGreen,
+      marginBottom: '12px',
+      fontSize: '16px',
+      fontWeight: 'bold',
+    },
+    rawDataPre: {
+      backgroundColor: 'white',
+      padding: '16px',
+      borderRadius: '6px',
+      fontSize: '12px',
+      maxHeight: '300px',
+      overflow: 'auto',
+      border: '1px solid #dee2e6',
+      margin: 0,
     }
   };
 
@@ -315,34 +498,35 @@ const DisplayAccount = () => {
     );
   }
 
-  if (error) {
+  if (error && (students.length === 0 && staff.length === 0)) {
     return (
       <div style={styles.container}>
-        <div style={styles.error}>Error: {error}</div>
-        <button 
-          style={styles.refreshButton} 
-          onClick={fetchAccounts}
-          onMouseOver={(e) => e.target.style.backgroundColor = colors.dustyRose}
-          onMouseOut={(e) => e.target.style.backgroundColor = colors.coral}
-        >
-          Retry
-        </button>
+        <div style={styles.error}>
+          {error}
+          <br />
+          <button 
+            style={styles.refreshButton}
+            onClick={fetchAccounts}
+            onMouseOver={(e) => e.target.style.backgroundColor = colors.darkGreen}
+            onMouseOut={(e) => e.target.style.backgroundColor = colors.lightGreen}
+          >
+            Retry
+          </button>
+        </div>
       </div>
     );
   }
 
   return (
     <div style={styles.container}>
-      <h1 style={styles.heading}>Account Management</h1>
+      <h1 style={styles.heading}>
+        Account Management
+      </h1>
       
-      <button 
-        style={styles.refreshButton} 
-        onClick={fetchAccounts}
-        onMouseOver={(e) => e.target.style.backgroundColor = colors.dustyRose}
-        onMouseOut={(e) => e.target.style.backgroundColor = colors.coral}
-      >
-        Refresh Data
-      </button>
+      {/* Show warning if there was a partial error */}
+      {error && (students.length > 0 || staff.length > 0) && (
+        <div style={styles.warning}>{error}</div>
+      )}
 
       <div style={styles.tabContainer}>
         <button
@@ -374,92 +558,75 @@ const DisplayAccount = () => {
           
           {students.length === 0 ? (
             <div style={styles.emptyState}>
-              No students registered yet.
+              No students data available. This could be due to access restrictions or empty database.
             </div>
           ) : (
             <div style={styles.accountsGrid}>
-              {students.map((student) => (
-                <div
-                  key={student.student_id}
-                  style={styles.accountCard}
-                  onMouseEnter={(e) => {
-                    Object.assign(e.currentTarget.style, styles.accountCardHover);
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = 'translateY(0)';
-                    e.currentTarget.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.1)';
-                  }}
-                >
-                  <div style={styles.accountHeader}>
-                    <h3 style={styles.accountName}>
-                      {student.first_name} {student.last_name}
-                    </h3>
-                    <div style={styles.accountId}>
-                      ID: {student.student_id}
-                    </div>
-                  </div>
-                  
-                  <div style={styles.accountInfo}>
-                    <div style={styles.infoRow}>
-                      <span style={styles.infoLabel}>Status:</span>
-                      <span style={getStatusBadge(student.graduation_status)}>
-                        {student.graduation_status || 'N/A'}
-                      </span>
+              {students.map((student, index) => {
+                const cardId = student.student_id || `student-${index}`;
+                
+                return (
+                  <div
+                    key={cardId}
+                    style={styles.accountCard}
+                    onMouseEnter={(e) => {
+                      Object.assign(e.currentTarget.style, styles.accountCardHover);
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.1)';
+                    }}
+                  >
+                    <div style={styles.accountHeader}>
+                      <h3 style={styles.accountName}>
+                        {student.first_name || 'Unknown'} {student.last_name || 'Student'}
+                      </h3>
+                      <div style={styles.accountId}>
+                        ID: {student.student_id || 'N/A'}
+                      </div>
                     </div>
                     
-                    <div style={styles.infoRow}>
-                      <span style={styles.infoLabel}>Academic Standing:</span>
-                      <span style={styles.infoValue}>
-                        {student.academic_standing || 'N/A'}
-                      </span>
-                    </div>
-                    
-                    <div style={styles.infoRow}>
-                      <span style={styles.infoLabel}>Trading Level:</span>
-                      <span style={styles.infoValue}>
-                        {student.current_trading_level || 'Not assigned'}
-                      </span>
-                    </div>
-                    
-                    <div style={styles.infoRow}>
-                      <span style={styles.infoLabel}>Registered:</span>
-                      <span style={styles.infoValue}>
-                        {formatDate(student.registration_date)}
-                      </span>
-                    </div>
-                    
-                    <div style={styles.infoRow}>
-                      <span style={styles.infoLabel}>Birth Date:</span>
-                      <span style={styles.infoValue}>
-                        {formatDate(student.birth_date)}
-                      </span>
-                    </div>
-                    
-                    <div style={styles.infoRow}>
-                      <span style={styles.infoLabel}>Gender:</span>
-                      <span style={styles.infoValue}>
-                        {student.gender || 'N/A'}
-                      </span>
-                    </div>
-                    
-                    <div style={styles.infoRow}>
-                      <span style={styles.infoLabel}>Enrollments:</span>
-                      <span style={styles.infoValue}>
-                        {student.total_enrollments || 0}
-                      </span>
-                    </div>
-                    
-                    {student.gpa && (
+                    <div style={styles.accountInfo}>
                       <div style={styles.infoRow}>
-                        <span style={styles.infoLabel}>GPA:</span>
-                        <span style={styles.infoValue}>
-                          {student.gpa.toFixed(2)}
+                        <span style={styles.infoLabel}>Status:</span>
+                        <span style={getStatusBadge(student.graduation_status)}>
+                          {student.graduation_status || 'N/A'}
                         </span>
                       </div>
-                    )}
+                      
+                      <div style={styles.infoRow}>
+                        <span style={styles.infoLabel}>Academic Standing:</span>
+                        <span style={styles.infoValue}>
+                          {student.academic_standing || 'N/A'}
+                        </span>
+                      </div>
+                      
+                      <div style={styles.infoRow}>
+                        <span style={styles.infoLabel}>Trading Level:</span>
+                        <span style={styles.infoValue}>
+                          {student.current_trading_level || 'Not assigned'}
+                        </span>
+                      </div>
+                      
+                      <div style={styles.infoRow}>
+                        <span style={styles.infoLabel}>Registered:</span>
+                        <span style={styles.infoValue}>
+                          {formatDate(student.registration_date)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <button
+                      style={styles.viewMoreButton}
+                      onClick={() => openModal(student, 'student')}
+                      onMouseOver={(e) => e.target.style.backgroundColor = colors.darkGreen}
+                      onMouseOut={(e) => e.target.style.backgroundColor = colors.lightGreen}
+                    >
+                      View More Info
+                    </button>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -473,71 +640,102 @@ const DisplayAccount = () => {
           </div>
           {staff.length === 0 ? (
             <div style={styles.emptyState}>
-              No staff members found. Check console for debugging info.
+              No staff data available. This could be due to insufficient admin privileges or empty database.
             </div>
           ) : (
             <div style={styles.accountsGrid}>
-              {staff.map((member, index) => (
-                <div
-                  key={member.account_id || member.user_identifier || index}
-                  style={styles.accountCard}
-                  onMouseEnter={(e) => {
-                    Object.assign(e.currentTarget.style, styles.accountCardHover);
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = 'translateY(0)';
-                    e.currentTarget.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.1)';
-                  }}
-                >
-                  <div style={styles.accountHeader}>
-                    <h3 style={styles.accountName}>
-                      {member.first_name} {member.last_name}
-                    </h3>
-                    <div style={styles.accountId}>
-                      ID: {member.user_identifier || member.account_id}
+              {staff.map((member, index) => {
+                const cardId = member.account_id || member.user_identifier || `staff-${index}`;
+                
+                return (
+                  <div
+                    key={cardId}
+                    style={styles.accountCard}
+                    onMouseEnter={(e) => {
+                      Object.assign(e.currentTarget.style, styles.accountCardHover);
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.1)';
+                    }}
+                  >
+                    <div style={styles.accountHeader}>
+                      <h3 style={styles.accountName}>
+                        {member.first_name} {member.last_name}
+                      </h3>
+                      <div style={styles.accountId}>
+                        ID: {member.user_identifier || member.account_id || 'N/A'}
+                      </div>
                     </div>
+                    
+                    <div style={styles.accountInfo}>
+                      <div style={styles.infoRow}>
+                        <span style={styles.infoLabel}>Role:</span>
+                        <span style={getStatusBadge(member.role_name)}>
+                          {member.role_name || 'N/A'}
+                        </span>
+                      </div>
+                      
+                      <div style={styles.infoRow}>
+                        <span style={styles.infoLabel}>Employee ID:</span>
+                        <span style={styles.infoValue}>
+                          {member.employee_id || 'N/A'}
+                        </span>
+                      </div>
+                      
+                      <div style={styles.infoRow}>
+                        <span style={styles.infoLabel}>Account Status:</span>
+                        <span style={getStatusBadge(member.account_status)}>
+                          {member.account_status || 'N/A'}
+                        </span>
+                      </div>
+                      
+                      <div style={styles.infoRow}>
+                        <span style={styles.infoLabel}>Last Login:</span>
+                        <span style={styles.infoValue}>
+                          {formatDate(member.last_login)}
+                        </span>
+                      </div>
+                      
+                      <div style={styles.infoRow}>
+                        <span style={styles.infoLabel}>Email:</span>
+                        <span style={styles.infoValue}>
+                          {member.email || member.primary_email || 'N/A'}
+                        </span>
+                      </div>
+                      
+                      {member.hire_date && (
+                        <div style={styles.infoRow}>
+                          <span style={styles.infoLabel}>Hire Date:</span>
+                          <span style={styles.infoValue}>
+                            {formatDate(member.hire_date)}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    <button
+                      style={styles.viewMoreButton}
+                      onClick={() => openModal(member, 'staff')}
+                      onMouseOver={(e) => e.target.style.backgroundColor = colors.darkGreen}
+                      onMouseOut={(e) => e.target.style.backgroundColor = colors.lightGreen}
+                    >
+                      View More Info
+                    </button>
                   </div>
-                  
-                  <div style={styles.accountInfo}>
-                    <div style={styles.infoRow}>
-                      <span style={styles.infoLabel}>Role:</span>
-                      <span style={getStatusBadge(member.role_name)}>
-                        {member.role_name || 'N/A'}
-                      </span>
-                    </div>
-                    
-                    <div style={styles.infoRow}>
-                      <span style={styles.infoLabel}>Username:</span>
-                      <span style={styles.infoValue}>
-                        {member.username || 'N/A'}
-                      </span>
-                    </div>
-                    
-                    <div style={styles.infoRow}>
-                      <span style={styles.infoLabel}>Account Status:</span>
-                      <span style={getStatusBadge(member.account_status)}>
-                        {member.account_status || 'N/A'}
-                      </span>
-                    </div>
-                    
-                    <div style={styles.infoRow}>
-                      <span style={styles.infoLabel}>Last Login:</span>
-                      <span style={styles.infoValue}>
-                        {formatDate(member.last_login)}
-                      </span>
-                    </div>
-                    
-                    <div style={styles.infoRow}>
-                      <span style={styles.infoLabel}>Account ID:</span>
-                      <span style={styles.infoValue}>
-                        {member.account_id || 'N/A'}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Modal */}
+      {modalData && (
+        <div style={styles.modalOverlay} onClick={closeModal}>
+          <div onClick={(e) => e.stopPropagation()}>
+            {renderModalContent()}
+          </div>
         </div>
       )}
     </div>

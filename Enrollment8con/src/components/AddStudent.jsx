@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 const StudentForm = () => {
   const [formData, setFormData] = useState({
@@ -14,23 +14,48 @@ const StudentForm = () => {
     phone: '',
     address: '',
     
-    // Account Information
-    username: '',
-    password: '',
-    confirmPassword: '',
-    
     // Additional fields for learning preferences
     trading_level_id: '',
+    course_id: '',
     device_type: [],
     learning_style: [],
   });
 
   const [tradingLevels, setTradingLevels] = useState([]);
+  const [courses, setCourses] = useState([]);
+  const [dataLoading, setDataLoading] = useState(true);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [loading, setLoading] = useState(false);
 
+  // Referrer search states
+  const [referrerSearchTerm, setReferrerSearchTerm] = useState('');
+  const [referrerSearchResults, setReferrerSearchResults] = useState([]);
+  const [selectedReferrer, setSelectedReferrer] = useState(null);
+  const [referrerSearchLoading, setReferrerSearchLoading] = useState(false);
+  const referrerSearchTimeoutRef = useRef(null);
+
   const colors = {
+    primary: '#4F46E5',
+    primaryDark: '#4338CA',
+    primaryLight: '#6366F1',
+    secondary: '#10B981',
+    danger: '#EF4444',
+    success: '#22C55E',
+    warning: '#F59E0B',
+    gray: {
+      50: '#F9FAFB',
+      100: '#F3F4F6',
+      200: '#E5E7EB',
+      300: '#D1D5DB',
+      400: '#9CA3AF',
+      500: '#6B7280',
+      600: '#4B5563',
+      700: '#374151',
+      800: '#1F2937',
+      900: '#111827',
+    },
+    // Legacy colors for backward compatibility
     darkGreen: '#2d4a3d',
     lightGreen: '#7a9b8a',
     dustyRose: '#c19a9a',
@@ -41,24 +66,240 @@ const StudentForm = () => {
     black: '#2c2c2c',
   };
 
-  // Fetch trading levels on component mount
+  // Icon components
+  const SearchIcon = ({ size = 16 }) => (
+    <svg width={size} height={size} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+    </svg>
+  );
+
+  const XIcon = ({ size = 12 }) => (
+    <svg width={size} height={size} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+    </svg>
+  );
+
+  const LoadingSpinner = ({ size = 20 }) => (
+    <svg width={size} height={size} className="animate-spin" viewBox="0 0 24 24">
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+    </svg>
+  );
+
+  // Check authentication helper
+  const checkAuthentication = () => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      setError('Please log in to access this feature.');
+      return false;
+    }
+    return true;
+  };
+
+  // Generate random password function
+  const generateRandomPassword = (length = 12) => {
+    const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
+    let password = "";
+    
+    // Ensure at least one of each type
+    const lowercase = "abcdefghijklmnopqrstuvwxyz";
+    const uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const numbers = "0123456789";
+    const symbols = "!@#$%^&*";
+    
+    password += lowercase[Math.floor(Math.random() * lowercase.length)];
+    password += uppercase[Math.floor(Math.random() * uppercase.length)];
+    password += numbers[Math.floor(Math.random() * numbers.length)];
+    password += symbols[Math.floor(Math.random() * symbols.length)];
+    
+    // Fill the rest randomly
+    for (let i = 4; i < length; i++) {
+      password += charset[Math.floor(Math.random() * charset.length)];
+    }
+    
+    // Shuffle the password
+    return password.split('').sort(() => Math.random() - 0.5).join('');
+  };
+
+  // Send email with password function
+  const sendPasswordEmail = async (email, password, firstName, lastName) => {
+    try {
+      const token = localStorage.getItem('token');
+      const emailData = {
+        to: email,
+        subject: 'Your Trading Academy Account Credentials',
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #2d4a3d;">Welcome to Trading Academy!</h2>
+            <p>Dear ${firstName} ${lastName},</p>
+            <p>Your student account has been successfully created. Here are your login credentials:</p>
+            <div style="background-color: #f5f2e8; padding: 20px; border-radius: 5px; margin: 20px 0;">
+              <p><strong>Email:</strong> ${email}</p>
+              <p><strong>Password:</strong> <code style="background-color: #fff; padding: 2px 4px; border-radius: 3px;">${password}</code></p>
+            </div>
+            <p><strong>Important:</strong> Please change your password after your first login for security purposes.</p>
+            <p>You can log in to your account using your email address and the password provided above.</p>
+            <p>If you have any questions, please don't hesitate to contact our support team.</p>
+            <p>Best regards,<br>Trading Academy Team</p>
+          </div>
+        `
+      };
+
+      console.log('Attempting to send email to:', email);
+
+      const response = await fetch('http://localhost:3000/api/send-email', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(emailData)
+      });
+
+      if (!response.ok) {
+        throw new Error(`Email service error: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      console.log('Email sent successfully:', result);
+      return true;
+
+    } catch (err) {
+      console.error('Email sending error:', err);
+      throw err;
+    }
+  };
+
+  // Improved search for existing students to be referrers
+  const searchReferrers = useCallback(async (searchValue) => {
+    if (!searchValue.trim()) {
+      setReferrerSearchResults([]);
+      return;
+    }
+
+    setReferrerSearchLoading(true);
+    
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setError('Please log in to search for students');
+        setReferrerSearchLoading(false);
+        return;
+      }
+
+      const apiUrl = `http://localhost:3000/api/students?search=${encodeURIComponent(searchValue)}`;
+      
+      const response = await fetch(apiUrl, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (response.ok) {
+        const contentType = response.headers.get('content-type');
+        
+        if (contentType && contentType.includes('application/json')) {
+          const studentsData = await response.json();
+          setReferrerSearchResults(studentsData);
+          console.log('Referrer search results:', studentsData);
+          
+          if (studentsData.length === 0) {
+            console.log('No students found matching search criteria');
+          }
+        } else {
+          console.error('Invalid response from server');
+          setReferrerSearchResults([]);
+        }
+      } else {
+        let errorMessage = 'Failed to search students';
+        
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorMessage;
+        } catch {
+          errorMessage = response.statusText || errorMessage;
+        }
+        
+        console.error('Search error:', errorMessage);
+        setReferrerSearchResults([]);
+      }
+    } catch (error) {
+      console.error('Failed to search referrers:', error);
+      setReferrerSearchResults([]);
+    } finally {
+      setReferrerSearchLoading(false);
+    }
+  }, []);
+
+  // Fetch trading levels and courses on component mount
   useEffect(() => {
-    fetchTradingLevels();
+    const loadInitialData = async () => {
+      if (checkAuthentication()) {
+        setDataLoading(true);
+        await Promise.all([
+          fetchTradingLevels(),
+          fetchCourses()
+        ]);
+        setDataLoading(false);
+      } else {
+        setDataLoading(false);
+      }
+    };
+
+    loadInitialData();
+    
+    // Cleanup timeout on unmount
+    return () => {
+      if (referrerSearchTimeoutRef.current) {
+        clearTimeout(referrerSearchTimeoutRef.current);
+      }
+    };
   }, []);
 
   const fetchTradingLevels = async () => {
     try {
+      const token = localStorage.getItem('token');
       const response = await fetch('http://localhost:3000/api/trading-levels', {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}` // If authentication is required
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
         }
       });
-      if (response.ok) {
-        const levels = await response.json();
-        setTradingLevels(levels);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
+      
+      const levels = await response.json();
+      setTradingLevels(levels);
+      console.log('Trading levels fetched successfully:', levels);
     } catch (err) {
       console.error('Failed to fetch trading levels:', err);
+      setTradingLevels([]);
+    }
+  };
+
+  const fetchCourses = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch('http://localhost:3000/api/courses', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const courses = await response.json();
+      setCourses(courses);
+      console.log('Courses fetched successfully:', courses);
+    } catch (err) {
+      console.error('Failed to fetch courses:', err);
+      setCourses([]);
     }
   };
 
@@ -82,22 +323,42 @@ const StudentForm = () => {
     if (success) setSuccess(null);
   };
 
+  // Handle referrer search input changes
+  const handleReferrerSearchChange = (e) => {
+    const value = e.target.value;
+    setReferrerSearchTerm(value);
+    
+    // Clear error messages when user starts typing
+    if (error) setError(null);
+    if (success) setSuccess(null);
+    
+    if (!value.trim()) {
+      setReferrerSearchResults([]);
+      return;
+    }
+    
+    if (referrerSearchTimeoutRef.current) {
+      clearTimeout(referrerSearchTimeoutRef.current);
+    }
+    
+    referrerSearchTimeoutRef.current = setTimeout(() => {
+      searchReferrers(value);
+    }, 300);
+  };
+
+  // Handle referrer selection
+  const handleReferrerSelect = (referrer) => {
+    setSelectedReferrer(referrer);
+    setReferrerSearchTerm(`${referrer.first_name} ${referrer.last_name} (${referrer.student_id})`);
+    setReferrerSearchResults([]);
+  };
+
   const validateForm = () => {
-    const requiredFields = ['first_name', 'last_name', 'email', 'username', 'password'];
+    const requiredFields = ['first_name', 'last_name', 'email'];
     const missingFields = requiredFields.filter(field => !formData[field].trim());
     
     if (missingFields.length > 0) {
       setError(`Please fill in all required fields: ${missingFields.join(', ')}`);
-      return false;
-    }
-
-    if (formData.password !== formData.confirmPassword) {
-      setError("Passwords do not match.");
-      return false;
-    }
-
-    if (formData.password.length < 6) {
-      setError("Password must be at least 6 characters long.");
       return false;
     }
 
@@ -110,10 +371,12 @@ const StudentForm = () => {
     return true;
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    
+  const handleSubmit = async () => {
     if (!validateForm()) {
+      return;
+    }
+
+    if (!checkAuthentication()) {
       return;
     }
 
@@ -122,7 +385,10 @@ const StudentForm = () => {
     setSuccess(null);
 
     try {
-      // Prepare data for the server
+      // Generate random password
+      const generatedPassword = generateRandomPassword();
+      
+      // Prepare data for the server (matching the API schema)
       const submitData = {
         first_name: formData.first_name,
         middle_name: formData.middle_name || null,
@@ -134,27 +400,70 @@ const StudentForm = () => {
         education: formData.education || null,
         phone: formData.phone || null,
         address: formData.address || null,
-        username: formData.username,
-        password: formData.password,
-        trading_level_id: formData.trading_level_id ? parseInt(formData.trading_level_id) : null
+        password: generatedPassword,
+        trading_level_id: formData.trading_level_id ? parseInt(formData.trading_level_id) : null,
+        course_id: formData.course_id ? parseInt(formData.course_id) : null,
+        referred_by: selectedReferrer ? selectedReferrer.student_id : null,
+        device_type: formData.device_type.length > 0 ? formData.device_type.join(',') : null,
+        learning_style: formData.learning_style.length > 0 ? formData.learning_style.join(',') : null
       };
 
+      console.log('Submitting student data:', submitData);
+
+      const token = localStorage.getItem('token');
       const response = await fetch('http://localhost:3000/api/students', {
         method: 'POST',
         headers: {
+          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}` // Add auth token if available
         },
         body: JSON.stringify(submitData)
       });
-
-      const result = await response.json();
-
+      
       if (!response.ok) {
-        throw new Error(result.error || 'Something went wrong');
+        const errorData = await response.json();
+        throw new Error(errorData.error || `Failed to create student: ${response.statusText}`);
       }
 
-      setSuccess('Student created successfully!');
+      const result = await response.json();
+      console.log('Student created successfully:', result);
+
+      // Try to send email with generated password
+      let emailSent = false;
+      let emailError = null;
+
+      try {
+        emailSent = await sendPasswordEmail(
+          formData.email, 
+          generatedPassword, 
+          formData.first_name, 
+          formData.last_name
+        );
+      } catch (emailErr) {
+        console.error('Email sending failed:', emailErr);
+        emailError = emailErr.message;
+      }
+
+      // Provide user feedback based on API response and email status
+      if (result.email_sent || emailSent) {
+        setSuccess('Student created successfully! Login credentials have been sent to their email address.');
+      } else {
+        setSuccess(`Student created successfully! 
+
+Login Credentials:
+Email: ${formData.email}
+Password: ${generatedPassword}
+
+${emailError ? `Email Error: ${emailError}` : 'Email service may be unavailable.'} 
+Please provide these credentials to the student manually.`);
+        
+        // Also log to console for admin reference
+        console.log('=== STUDENT LOGIN CREDENTIALS ===');
+        console.log('Email:', formData.email);
+        console.log('Password:', generatedPassword);
+        console.log('Student ID:', result.student?.student_id || 'N/A');
+        console.log('================================');
+      }
       
       // Reset the form
       setFormData({
@@ -168,44 +477,40 @@ const StudentForm = () => {
         education: '',
         phone: '',
         address: '',
-        username: '',
-        password: '',
-        confirmPassword: '',
         trading_level_id: '',
+        course_id: '',
         device_type: [],
         learning_style: [],
       });
 
-      // If preferences were provided, save them separately
-      if (formData.device_type.length > 0 || formData.learning_style.length > 0) {
-        await saveStudentPreferences(result.student_id);
-      }
+      // Reset referrer fields
+      setSelectedReferrer(null);
+      setReferrerSearchTerm('');
+      setReferrerSearchResults([]);
 
     } catch (err) {
       console.error('Submission error:', err);
-      setError(err.message);
+      
+      // Handle specific error types
+      let errorMessage = 'Failed to create student: ';
+      
+      if (err.message.includes('401') || err.message.includes('unauthorized')) {
+        errorMessage = 'Authentication failed. Please log in again.';
+      } else if (err.message.includes('403') || err.message.includes('forbidden')) {
+        errorMessage = 'You do not have permission to create students.';
+      } else if (err.message.includes('409') || err.message.includes('already exists')) {
+        errorMessage = 'A student with this email already exists.';
+      } else if (err.message.includes('400')) {
+        errorMessage = 'Invalid data provided. Please check all required fields.';
+      } else if (err.message.includes('500')) {
+        errorMessage = 'Server error. Please try again later.';
+      } else {
+        errorMessage += err.message;
+      }
+      
+      setError(errorMessage);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const saveStudentPreferences = async (studentId) => {
-    try {
-      const preferencesData = {
-        device_type: formData.device_type.join(','),
-        learning_style: formData.learning_style.join(',')
-      };
-
-      await fetch(`http://localhost:3000/api/students/${studentId}/preferences`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
-        body: JSON.stringify(preferencesData)
-      });
-    } catch (err) {
-      console.error('Failed to save preferences:', err);
     }
   };
 
@@ -256,7 +561,7 @@ const StudentForm = () => {
       color: colors.black,
     },
     input: {
-      width: '80%',
+      width: '90%',
       padding: '10px',
       marginBottom: '16px',
       border: '1px solid #ccc',
@@ -299,11 +604,14 @@ const StudentForm = () => {
     success: {
       color: colors.darkGreen,
       marginBottom: '16px',
-      textAlign: 'center',
-      padding: '10px',
+      textAlign: 'left',
+      padding: '15px',
       backgroundColor: '#e8f5e8',
       borderRadius: '4px',
       border: `1px solid ${colors.darkGreen}`,
+      whiteSpace: 'pre-line',
+      fontSize: '14px',
+      lineHeight: '1.5',
     },
     button: {
       backgroundColor: loading ? colors.lightGreen : colors.coral,
@@ -323,13 +631,90 @@ const StudentForm = () => {
       color: colors.red,
       fontSize: '14px',
       marginLeft: '4px',
-    }
+    },
+    // Improved referrer search styles (matching AddDocument.jsx)
+    referrerInputGroup: {
+      position: 'relative',
+      marginBottom: '16px',
+    },
+    referrerInputIcon: {
+      position: 'absolute',
+      left: '12px',
+      top: '50%',
+      transform: 'translateY(-50%)',
+      color: colors.gray[400],
+      pointerEvents: 'none',
+      zIndex: 1,
+    },
+    referrerInput: {
+      width: '90%',
+      padding: '10px 12px 10px 40px',
+      border: `1px solid ${colors.gray[300]}`,
+      borderRadius: '6px',
+      fontSize: '16px',
+      outline: 'none',
+      transition: 'border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out',
+      marginBottom: '0',
+    },
+    referrerSearchResults: {
+      marginTop: '8px',
+      maxHeight: '240px',
+      overflowY: 'auto',
+      border: `1px solid ${colors.gray[200]}`,
+      borderRadius: '6px',
+      backgroundColor: '#fff',
+      boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+    },
+    referrerSearchResultItem: {
+      padding: '12px 16px',
+      borderBottom: `1px solid ${colors.gray[100]}`,
+      cursor: 'pointer',
+      transition: 'background-color 0.15s ease-in-out',
+    },
+    selectedReferrer: {
+      marginTop: '8px',
+      backgroundColor: '#EEF2FF',
+      border: `1px solid ${colors.primaryLight}`,
+      borderRadius: '6px',
+      padding: '16px',
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+    },
+    closeButton: {
+      background: 'none',
+      border: 'none',
+      cursor: 'pointer',
+      color: colors.primary,
+      padding: '4px',
+      borderRadius: '4px',
+      transition: 'background-color 0.15s ease-in-out',
+    },
+    loadingContainer: {
+      padding: '12px 16px',
+      textAlign: 'center',
+      color: colors.gray[500],
+      fontSize: '14px',
+    },
+    noResultsContainer: {
+      padding: '12px 16px',
+      textAlign: 'center',
+      color: colors.gray[500],
+      fontSize: '14px',
+    },
   };
 
   return (
     <div style={styles.container}>
       <h1 style={styles.heading}>Student Registration Form</h1>
-      <div>
+      
+      {dataLoading ? (
+        <div style={{ textAlign: 'center', padding: '40px 0' }}>
+          <LoadingSpinner size={40} />
+          <p style={{ marginTop: '16px', color: colors.gray[500] }}>Loading form data...</p>
+        </div>
+      ) : (
+        <div>
         {error && <div style={styles.error}>{error}</div>}
         {success && <div style={styles.success}>{success}</div>}
 
@@ -392,7 +777,6 @@ const StudentForm = () => {
                 <option value="">--Select--</option>
                 <option value="Female">Female</option>
                 <option value="Male">Male</option>
-                <option value="Other">Other</option>
               </select>
             </div>
 
@@ -446,6 +830,22 @@ const StudentForm = () => {
             </div>
           </div>
         </fieldset>
+        
+        <fieldset style={styles.fieldset}>
+          <legend style={styles.legend}>Address Information</legend>
+          <div style={styles.formRow}>
+            <div style={styles.fullWidthGroup}>
+              <label style={styles.label}>Address</label>
+              <input 
+                style={styles.input} 
+                name="address" 
+                value={formData.address} 
+                onChange={handleChange} 
+                disabled={loading}
+              />
+            </div>
+          </div>
+        </fieldset>
 
         <fieldset style={styles.fieldset}>
           <legend style={styles.legend}>Trading Preferences</legend>
@@ -461,11 +861,37 @@ const StudentForm = () => {
                 disabled={loading}
               >
                 <option value="">--Select Trading Level--</option>
-                {tradingLevels.map((level) => (
-                  <option key={level.level_id} value={level.level_id}>
-                    {level.level_name}
-                  </option>
-                ))}
+                {tradingLevels.length === 0 ? (
+                  <option value="" disabled>No trading levels available</option>
+                ) : (
+                  tradingLevels.map((level) => (
+                    <option key={level.level_id} value={level.level_id}>
+                      {level.level_name}
+                    </option>
+                  ))
+                )}
+              </select>
+            </div>
+
+            <div style={styles.formGroup}>
+              <label style={styles.label}>Course</label>
+              <select 
+                name="course_id" 
+                style={styles.select} 
+                value={formData.course_id} 
+                onChange={handleChange} 
+                disabled={loading}
+              >
+                <option value="">--Select Course--</option>
+                {courses.length === 0 ? (
+                  <option value="" disabled>No courses available</option>
+                ) : (
+                  courses.map((course) => (
+                    <option key={course.course_id} value={course.course_id}>
+                      {course.course_name} ({course.duration_weeks} weeks)
+                    </option>
+                  ))
+                )}
               </select>
             </div>
           </div>
@@ -506,77 +932,146 @@ const StudentForm = () => {
         </fieldset>
 
         <fieldset style={styles.fieldset}>
-          <legend style={styles.legend}>Address Information</legend>
+          <legend style={styles.legend}>Referral Information</legend>
           <div style={styles.formRow}>
             <div style={styles.fullWidthGroup}>
-              <label style={styles.label}>Address</label>
-              <input 
-                style={styles.input} 
-                name="address" 
-                value={formData.address} 
-                onChange={handleChange} 
-                disabled={loading}
-              />
+              <label style={styles.label}>Referred by:</label>
+              <div style={styles.referrerInputGroup}>
+                <div style={styles.referrerInputIcon}>
+                  <SearchIcon />
+                </div>
+                <input 
+                  style={styles.referrerInput}
+                  placeholder="Search for existing student who referred them..."
+                  value={referrerSearchTerm}
+                  onChange={handleReferrerSearchChange}
+                  disabled={loading}
+                  onFocus={(e) => {
+                    e.target.style.borderColor = colors.primary;
+                    e.target.style.boxShadow = `0 0 0 3px ${colors.primary}20`;
+                    if (selectedReferrer && referrerSearchTerm.includes('(')) {
+                      setSelectedReferrer(null);
+                      setReferrerSearchTerm('');
+                    }
+                  }}
+                  onBlur={(e) => {
+                    e.target.style.borderColor = colors.gray[300];
+                    e.target.style.boxShadow = 'none';
+                  }}
+                />
+              </div>
+
+              {referrerSearchLoading && (
+                <div style={styles.loadingContainer}>
+                  <div style={{ display: 'inline-flex', alignItems: 'center' }}>
+                    <LoadingSpinner size={16} />
+                    <span style={{ marginLeft: '8px' }}>Searching students...</span>
+                  </div>
+                </div>
+              )}
+
+              {referrerSearchResults.length > 0 && !selectedReferrer && (
+                <div style={styles.referrerSearchResults}>
+                  {referrerSearchResults.map((referrer) => (
+                    <div
+                      key={referrer.student_id}
+                      style={styles.referrerSearchResultItem}
+                      onClick={() => handleReferrerSelect(referrer)}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = colors.gray[50];
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <div style={{ fontWeight: '500', color: colors.gray[900] }}>
+                            {referrer.first_name} {referrer.last_name}
+                          </div>
+                          <div style={{ fontSize: '14px', color: colors.gray[500], marginTop: '2px' }}>
+                            ID: {referrer.student_id} • {referrer.email}
+                          </div>
+                        </div>
+                        <div style={{ textAlign: 'right' }}>
+                          <div style={{ fontSize: '12px', color: colors.gray[500] }}>
+                            Status: {referrer.graduation_status || 'Active'}
+                          </div>
+                          <div style={{ fontSize: '12px', color: colors.gray[500] }}>
+                            Level: {referrer.current_trading_level || 'Not assigned'}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {referrerSearchTerm && !referrerSearchLoading && referrerSearchResults.length === 0 && !selectedReferrer && (
+                <div style={styles.noResultsContainer}>
+                  <span style={{ color: colors.gray[500] }}>No students found matching your search</span>
+                </div>
+              )}
+
+              {selectedReferrer && (
+                <div style={styles.selectedReferrer}>
+                  <div>
+                    <div style={{ fontWeight: '500', color: colors.primary }}>
+                      {selectedReferrer.first_name} {selectedReferrer.last_name}
+                    </div>
+                    <div style={{ fontSize: '14px', color: colors.primaryLight, marginTop: '2px' }}>
+                      ID: {selectedReferrer.student_id} • {selectedReferrer.email}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    style={styles.closeButton}
+                    onClick={() => {
+                      setSelectedReferrer(null);
+                      setReferrerSearchTerm('');
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = colors.gray[200];
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                  >
+                    <XIcon />
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </fieldset>
 
-        <fieldset style={styles.fieldset}>
-          <legend style={styles.legend}>Account Information</legend>
-          <div style={styles.formRow}>
-            <div style={styles.formGroup}>
-              <label style={styles.label}>
-                Username<span style={styles.required}>*</span>
-              </label>
-              <input 
-                style={styles.input} 
-                name="username" 
-                value={formData.username} 
-                onChange={handleChange} 
-                required 
-                minLength="3"
-                maxLength="50"
-                disabled={loading}
-              />
+        <button 
+          type="button" 
+          style={styles.button}
+          disabled={loading}
+          onClick={handleSubmit}
+          onMouseEnter={(e) => {
+            if (!loading) {
+              e.currentTarget.style.backgroundColor = colors.red;
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (!loading) {
+              e.currentTarget.style.backgroundColor = colors.coral;
+            }
+          }}
+        >
+          {loading ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+              <LoadingSpinner size={18} />
+              <span>Creating Student...</span>
             </div>
-
-            <div style={styles.formGroup}>
-              <label style={styles.label}>
-                Password<span style={styles.required}>*</span>
-              </label>
-              <input 
-                type="password" 
-                style={styles.input} 
-                name="password" 
-                value={formData.password} 
-                onChange={handleChange} 
-                required 
-                minLength="6"
-                disabled={loading}
-              />
-            </div>
-
-            <div style={styles.formGroup}>
-              <label style={styles.label}>
-                Confirm Password<span style={styles.required}>*</span>
-              </label>
-              <input 
-                type="password" 
-                style={styles.input} 
-                name="confirmPassword" 
-                value={formData.confirmPassword} 
-                onChange={handleChange} 
-                required 
-                disabled={loading}
-              />
-            </div>
-          </div>
-        </fieldset>
-
-        <button type="button" style={styles.button} disabled={loading} onClick={handleSubmit}>
-          {loading ? 'Creating Student...' : 'Submit'}
+          ) : (
+            'Register Student'
+          )}
         </button>
       </div>
+      )}
     </div>
   );
 };

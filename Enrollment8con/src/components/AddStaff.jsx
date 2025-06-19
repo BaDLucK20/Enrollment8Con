@@ -61,7 +61,7 @@ const StaffForm = () => {
 
   const validateForm = () => {
     // Required fields validation
-    const requiredFields = ['firstName', 'lastName', 'email', 'placeOfBirth', 'username', 'password'];
+    const requiredFields = ['firstName', 'lastName', 'email', 'placeOfBirth'];
     for (let field of requiredFields) {
       if (!formData[field].trim()) {
         setError(`${field.replace(/([A-Z])/g, ' $1').toLowerCase()} is required`);
@@ -76,11 +76,11 @@ const StaffForm = () => {
       return false;
     }
 
-    // Password validation
-    if (formData.password.length < 6) {
-      setError('Password must be at least 6 characters long');
-      return false;
-    }
+    // // Password validation
+    // if (formData.password.length < 6) {
+    //   setError('Password must be at least 6 characters long');
+    //   return false;
+    // }
 
     // Password confirmation
     if (formData.password !== formData.confirmPassword) {
@@ -88,11 +88,11 @@ const StaffForm = () => {
       return false;
     }
 
-    // Username validation (3-50 characters)
-    if (formData.username.length < 3 || formData.username.length > 50) {
-      setError('Username must be between 3 and 50 characters');
-      return false;
-    }
+    // // Username validation (3-50 characters)
+    // if (formData.username.length < 3 || formData.username.length > 50) {
+    //   setError('Username must be between 3 and 50 characters');
+    //   return false;
+    // }
 
     return true;
   };
@@ -376,7 +376,6 @@ const StaffForm = () => {
                 <option value="">--Select--</option>
                 <option value="Female">Female</option>
                 <option value="Male">Male</option>
-                <option value="Other">Other</option>
               </select>
             </div>
 
@@ -454,7 +453,7 @@ const StaffForm = () => {
               <label style={styles.label}>Role</label>
               <select name="role" style={styles.select} value={formData.role} onChange={handleChange} disabled={loading}>
                 <option value="staff">Staff</option>
-                <option value="admin">Admin</option>
+                {/* <option value="admin">Admin</option> */}
               </select>
             </div>
           </div>
@@ -537,58 +536,6 @@ const StaffForm = () => {
                 name="province" 
                 value={formData.province} 
                 onChange={handleChange} 
-                disabled={loading}
-              />
-            </div>
-          </div>
-        </fieldset>
-
-        <fieldset style={styles.fieldset}>
-          <legend style={styles.legend}>Account Information</legend>
-          <div style={styles.formRow}>
-            <div style={styles.formGroup}>
-              <label style={styles.label}>
-                Username<span style={styles.required}>*</span>
-              </label>
-              <input 
-                style={styles.input} 
-                name="username" 
-                value={formData.username} 
-                onChange={handleChange} 
-                required 
-                minLength="3"
-                maxLength="50"
-                disabled={loading}
-              />
-            </div>
-
-            <div style={styles.formGroup}>
-              <label style={styles.label}>
-                Password<span style={styles.required}>*</span>
-              </label>
-              <input 
-                type="password" 
-                style={styles.input} 
-                name="password" 
-                value={formData.password} 
-                onChange={handleChange} 
-                required 
-                minLength="6"
-                disabled={loading}
-              />
-            </div>
-
-            <div style={styles.formGroup}>
-              <label style={styles.label}>
-                Confirm Password<span style={styles.required}>*</span>
-              </label>
-              <input 
-                type="password" 
-                style={styles.input} 
-                name="confirmPassword" 
-                value={formData.confirmPassword} 
-                onChange={handleChange} 
-                required 
                 disabled={loading}
               />
             </div>

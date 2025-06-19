@@ -8,8 +8,10 @@ import StaffForm from './AddStaff'
 import DisplayAccount from './DisplayAccount'
 import AddDocument from './AddDocument'
 import PendingDocument from './PendingDocument'
+import Courses from './Courses'
 
 import { useNavigate } from 'react-router-dom'
+import UploadPayments from './UploadPayment'
 
 // API configuration
 const API_BASE_URL = 'http://localhost:3000/api'
@@ -166,9 +168,21 @@ function UniversalDashboard() {
       roles: ['admin', 'staff'],
       hasChildren: true,
       children: [
+        { id: 'UploadPayments', label: 'Upload Payments'},
         { id: 'PendingPayments', label: 'Pending Payments' },
         { id: 'CompletedPayments', label: 'Completed Payments' }
       ]
+    },
+    { 
+      id: 'courses', 
+      label: 'Courses', 
+      icon: Award, 
+      color: colors.blue,
+      roles: ['admin', 'staff'],
+      // hasChildren: true,
+      // children: [
+      //   { id: 'skill-assessment', label: 'Skill Assessment' },
+      // ]
     },
     { 
       id: 'competency-assessment', 
@@ -719,7 +733,9 @@ function UniversalDashboard() {
       case 'CompletedPayments':
         return <CompletedPayment />
 
-      case 'PaymentHistory':
+      case 'UploadPayments':
+        return <UploadPayments/>
+
       case 'payment-tracker':
         return <PaymentHistory />
 
@@ -735,6 +751,9 @@ function UniversalDashboard() {
 
       case 'add-documents':
         return <AddDocument />
+
+      case 'courses':
+        return <Courses/>
 
       case 'pending-documents':
         return <PendingDocument/>

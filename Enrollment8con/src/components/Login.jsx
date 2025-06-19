@@ -48,6 +48,7 @@ const getToken = async (email, password) => {
     }
 
     const { token } = await response.json();
+    console.log(token);
     return token;
   } catch (err) {
     throw new Error(err.message || 'Token fetch failed');

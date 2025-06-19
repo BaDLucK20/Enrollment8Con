@@ -109,7 +109,7 @@ const AddDocument = () => {
         return;
       }
 
-      const response = await fetch('/api/document-types', {
+      const response = await fetch('http://localhost:3000/api/document-types', {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -140,7 +140,7 @@ const AddDocument = () => {
       const token = localStorage?.getItem('token');
       if (!token) return;
 
-      const response = await fetch(`/api/documents/student/${studentId}`, {
+      const response = await fetch(`http://localhost:3000/api/documents/student/${studentId}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'

@@ -11,12 +11,11 @@ import crypto from 'crypto';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { body, validationResult } from 'express-validator';
-import nodemailer from 'nodemailer';
 
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(64).toString('hex');
 
 // ============================================================================
@@ -100,6 +99,7 @@ async function initializeDatabase() {
       
       await connection.execute(`
         CREATE PROCEDURE sp_register_user_with_synced_ids(
+          IN p_username VARCHAR(15),
           IN p_password_hash VARCHAR(255),
           IN p_first_name VARCHAR(50),
           IN p_middle_name VARCHAR(50),
@@ -128,8 +128,8 @@ async function initializeDatabase() {
           START TRANSACTION;
 
           -- Create account first
-          INSERT INTO accounts (password_hash, token, account_status)
-          VALUES ( p_password_hash, '', 'active');
+          INSERT INTO accounts (username, password_hash, token, account_status)
+          VALUES (p_username, p_password_hash, '', 'active');
           
           SET p_account_id = LAST_INSERT_ID();
 
@@ -251,67 +251,6 @@ async function initializeDatabase() {
   }
 }
 
-// Create email transporter
-const createEmailTransporter = () => {
-  // You can use different email services. Here are examples:
-  
-  // For Gmail:
-  if (process.env.EMAIL_SERVICE === 'gmail') {
-    return nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_APP_PASSWORD // Use app-specific password for Gmail
-      }
-    });
-  }
-  
-  // For Outlook/Hotmail:
-  if (process.env.EMAIL_SERVICE === 'outlook') {
-    return nodemailer.createTransport({
-      service: 'hotmail',
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASSWORD
-      }
-    });
-  }
-  
-  // For custom SMTP:
-  return nodemailer.createTransport({
-    host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-    port: process.env.EMAIL_PORT || 587,
-    secure: process.env.EMAIL_SECURE === 'true', // true for 465, false for other ports
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASSWORD
-    }
-  });
-};
-
-let emailTransporter = null;
-
-// Initialize email transporter
-const initializeEmailService = async () => {
-  try {
-    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
-      console.warn('⚠️  Email service not configured. Please set EMAIL_USER and EMAIL_PASSWORD in .env file');
-      return false;
-    }
-    
-    emailTransporter = createEmailTransporter();
-    
-    // Verify connection
-    await emailTransporter.verify();
-    console.log('✅ Email service connected successfully');
-    return true;
-  } catch (error) {
-    console.error('❌ Email service connection failed:', error.message);
-    console.warn('⚠️  Email functionality will be disabled');
-    return false;
-  }
-};
-
 // ============================================================================
 // FILE UPLOAD CONFIGURATION
 // ============================================================================
@@ -374,7 +313,7 @@ const authenticateToken = async (req, res, next) => {
     const decoded = jwt.verify(token, JWT_SECRET);
     
     const [userRows] = await pool.execute(`
-      SELECT a.account_id, a.account_status, ar.role_id, r.role_name, r.permissions,
+      SELECT a.account_id, a.username, a.account_status, ar.role_id, r.role_name, r.permissions,
              p.first_name, p.last_name, 
              COALESCE(s.student_id, st.staff_id) as user_id,
              a.account_id as person_id
@@ -393,6 +332,7 @@ const authenticateToken = async (req, res, next) => {
 
     req.user = {
       accountId: userRows[0].account_id,
+      username: userRows[0].username,
       role: userRows[0].role_name,
       permissions: userRows[0].permissions,
       firstName: userRows[0].first_name,
@@ -456,121 +396,6 @@ const authorizeStudentAccess = async (req, res, next) => {
 // ============================================================================
 // AUTHENTICATION ROUTES (Updated to use synced IDs)
 // ============================================================================
-// Email sending endpoint
-app.post('/api/send-email', [
-  authenticateToken,
-  authorize(['admin', 'staff']),
-  body('to').isEmail().normalizeEmail(),
-  body('subject').trim().isLength({ min: 1, max: 200 }),
-  body('html').trim().isLength({ min: 1 })
-], validateInput, async (req, res) => {
-  try {
-    const { to, subject, html, text } = req.body;
-    
-    // Check if email service is configured
-    if (!emailTransporter) {
-      console.error('Email service not configured');
-      return res.status(503).json({ 
-        error: 'Email service is not configured. Please contact administrator.' 
-      });
-    }
-    
-    // Prepare email options
-    const mailOptions = {
-      from: `"${process.env.EMAIL_FROM_NAME || 'Trading Academy'}" <${process.env.EMAIL_USER}>`,
-      to: to,
-      subject: subject,
-      html: html,
-      text: text || html.replace(/<[^>]*>/g, '') // Strip HTML tags for text version
-    };
-    
-    console.log('📧 Sending email to:', to);
-    console.log('📧 Subject:', subject);
-    
-    // Send email
-    const info = await emailTransporter.sendMail(mailOptions);
-    
-    console.log('✅ Email sent successfully:', info.messageId);
-    
-    // Log email activity
-    await pool.execute(`
-      INSERT INTO activity_logs (account_id, action, description, created_at)
-      VALUES (?, 'email_sent', ?, CURRENT_TIMESTAMP)
-    `, [req.user.accountId, `Email sent to ${to} - Subject: ${subject}`]);
-    
-    res.json({ 
-      success: true,
-      message: 'Email sent successfully',
-      messageId: info.messageId
-    });
-    
-  } catch (error) {
-    console.error('❌ Email sending error:', error);
-    
-    // Log failed attempt
-    try {
-      await pool.execute(`
-        INSERT INTO activity_logs (account_id, action, description, created_at)
-        VALUES (?, 'email_failed', ?, CURRENT_TIMESTAMP)
-      `, [req.user.accountId, `Failed to send email to ${req.body.to} - Error: ${error.message}`]);
-    } catch (logError) {
-      console.error('Failed to log email error:', logError);
-    }
-    
-    res.status(500).json({ 
-      error: 'Failed to send email',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
-// Test email endpoint (for admin only)
-app.post('/api/test-email', [
-  authenticateToken,
-  authorize(['admin'])
-], async (req, res) => {
-  try {
-    if (!emailTransporter) {
-      return res.status(503).json({ 
-        error: 'Email service is not configured' 
-      });
-    }
-    
-    const testEmail = req.user.email || process.env.EMAIL_USER;
-    
-    const mailOptions = {
-      from: `"${process.env.EMAIL_FROM_NAME || 'Trading Academy'}" <${process.env.EMAIL_USER}>`,
-      to: testEmail,
-      subject: 'Test Email - Trading Academy',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #2d4a3d;">Test Email Successful!</h2>
-          <p>This is a test email from your Trading Academy system.</p>
-          <p>If you're receiving this, your email configuration is working correctly.</p>
-          <hr>
-          <p style="color: #666; font-size: 12px;">
-            Sent on: ${new Date().toLocaleString()}<br>
-            Environment: ${process.env.NODE_ENV || 'development'}
-          </p>
-        </div>
-      `
-    };
-    
-    await emailTransporter.sendMail(mailOptions);
-    
-    res.json({ 
-      success: true,
-      message: `Test email sent successfully to ${testEmail}`
-    });
-    
-  } catch (error) {
-    console.error('Test email error:', error);
-    res.status(500).json({ 
-      error: 'Failed to send test email',
-      details: error.message
-    });
-  }
-});
 
 app.post('/api/auth', [
   body('email').isEmail().normalizeEmail(),
@@ -582,7 +407,7 @@ app.post('/api/auth', [
     // Admin auto-setup and login
     if (email === 'admin@gmail.com' && password === 'admin123') {
       const [existingAdmin] = await pool.execute(
-        'SELECT * FROM persons WHERE email = ?',
+        'SELECT * FROM accounts WHERE username = ?',
         ['admin']
       );
 
@@ -591,8 +416,8 @@ app.post('/api/auth', [
       if (existingAdmin.length === 0) {
         const hash = await bcrypt.hash('admin123', 10);
         const [insertResult] = await pool.execute(
-          `INSERT INTO accounts (password_hash, token, account_status)
-           VALUES ( ?, '', 'active')`,
+          `INSERT INTO accounts (username, password_hash, token, account_status)
+           VALUES (?, ?, '', 'active')`,
           ['admin', hash]
         );
         adminId = insertResult.insertId;
@@ -633,6 +458,7 @@ app.post('/api/auth', [
       if (shouldUpdate) {
         token = jwt.sign({
           accountId: adminId,
+          username: 'admin',
           role: 'admin'
         }, JWT_SECRET, { expiresIn: '8h' });
 
@@ -646,6 +472,7 @@ app.post('/api/auth', [
         token,
         user: {
           accountId: adminId,
+          username: 'admin',
           role: 'admin',
           firstName: 'System',
           lastName: 'Administrator',
@@ -657,7 +484,7 @@ app.post('/api/auth', [
 
     const [userRows] = await pool.execute(`
       SELECT 
-        a.account_id, a.password_hash, a.account_status, 
+        a.account_id, a.username, a.password_hash, a.account_status, 
         a.failed_login_attempts, a.locked_until,
         ar.role_id, r.role_name, r.permissions,
         p.first_name, p.last_name
@@ -726,6 +553,7 @@ app.post('/api/auth', [
     if (shouldUpdate) {
       token = jwt.sign({
         accountId: user.account_id,
+        username: user.username,
         role: user.role_name
       }, JWT_SECRET, { expiresIn: '24h' });
 
@@ -756,6 +584,7 @@ app.post('/api/auth', [
       token,
       user: {
         accountId: user.account_id,
+        username: user.username,
         role: user.role_name,
         firstName: user.first_name,
         lastName: user.last_name,
@@ -772,15 +601,25 @@ app.post('/api/auth', [
 
 // SIGNUP (Updated to use stored procedure)
 app.post('/api/auth/signup', [
-  // Validation middleware
-  body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
-  body('email').isEmail().normalizeEmail().withMessage('Valid email is required'),
-  body('firstName').trim().isLength({ min: 1, max: 100 }).escape().withMessage('First name is required'),
-  body('lastName').trim().isLength({ min: 1, max: 100 }).escape().withMessage('Last name is required'),
-  body('role').optional().isIn(['student', 'staff']).withMessage('Role must be student or staff'),
-  body('phoneNumber').optional().isMobilePhone().withMessage('Valid phone number required'),
-  body('dateOfBirth').optional().isISO8601().withMessage('Date of birth must be YYYY-MM-DD'),
-  body('birthPlace').optional().trim().isLength({ min: 1, max: 500 }).withMessage('City of birth is required'),
+  body('username').trim().isLength({ min: 3, max: 50 }).escape()
+    .withMessage('Username must be between 3 and 50 characters'),
+  body('password').isLength({ min: 6 })
+    .withMessage('Password must be at least 6 characters'),
+  body('email').isEmail().normalizeEmail()
+    .withMessage('Valid email is required'),
+  body('firstName').trim().isLength({ min: 1, max: 100 }).escape()
+    .withMessage('First name is required'),
+  body('lastName').trim().isLength({ min: 1, max: 100 }).escape()
+    .withMessage('Last name is required'),
+  body('role').optional().isIn(['student', 'staff'])
+    .withMessage('Role must be either student or staff'),
+  body('phoneNumber').optional().isMobilePhone()
+    .withMessage('Valid phone number required'),
+  body('dateOfBirth').optional().isISO8601()
+    .withMessage('Valid date of birth required (YYYY-MM-DD)'),
+  body('birthPlace').optional().trim().isLength({ min: 1, max: 500 })
+    .withMessage('City of birth'),
+  // Additional validations from register endpoint
   body('address').optional().trim().isLength({ min: 1, max: 500 }),
   body('city').optional().trim().isLength({ min: 1, max: 100 }),
   body('province').optional().trim().isLength({ min: 1, max: 100 }),
@@ -788,100 +627,123 @@ app.post('/api/auth/signup', [
   body('education').optional().trim().isLength({ min: 1, max: 100 }),
   body('tradingLevel').optional().trim().isLength({ min: 1, max: 50 }),
   body('device').optional(),
-  body('learningStyle').optional(),
-  body('deliveryPreference').optional()
+  body('learningStyle').optional()
 ], validateInput, async (req, res) => {
   const connection = await pool.getConnection();
-
+  
   try {
-    const {
-      password,
-      email,
-      firstName,
+    const { 
+      username, 
+      password, 
+      email, 
+      firstName, 
       middleName = null,
-      lastName,
-      dateOfBirth = null,
-      birthPlace = null,
+      lastName, 
+      dateOfBirth = null, 
+      birthDate = dateOfBirth, // Support both field names
+      birthPlace,
       gender = null,
       education = null,
       phoneNumber = null,
-      role = 'student',
+      role = 'student', // Default to student
+      // Additional fields from register endpoint
       address = null,
       city = null,
       province = null,
       tradingLevel = null,
       device = null,
-      learningStyle = null,
-      deliveryPreference = null
+      learningStyle = null
     } = req.body;
 
-    console.log('Signup request:', { email, firstName, lastName, role });
+    // Check if username already exists
+    const [existingUser] = await connection.execute(
+      'SELECT account_id FROM accounts WHERE username = ?',
+      [username]
+    );
+
+    if (existingUser.length > 0) {
+      return res.status(409).json({ error: 'Username already exists' });
+    }
+
+    // Check if email already exists
+    const [existingEmail] = await connection.execute(
+      'SELECT person_id FROM persons WHERE email = ?',
+      [email]
+    );
+
+    if (existingEmail.length > 0) {
+      return res.status(409).json({ error: 'Email already exists' });
+    }
 
     // Hash password
-    const passwordHash = await bcrypt.hash(password, 12);
+    const saltRounds = 12;
+    const passwordHash = await bcrypt.hash(password, saltRounds);
+
+    // Use stored procedure for synced registration
+    const fullAddress = address && city && province ? `${address}, ${city}, ${province}` : address;
     
-    // Combine address components
-    const fullAddress = address && city && province 
-      ? `${address}, ${city}, ${province}` 
-      : address || null;
-
-    // Format device type (handle arrays)
-    const deviceType = Array.isArray(device) 
-      ? device.join(',') 
-      : device || null;
-
-    // Format learning style (handle arrays)
-    const formattedLearningStyle = Array.isArray(learningStyle) 
-      ? learningStyle.join(',') 
-      : learningStyle || null;
-
-    // Call the enhanced stored procedure
-    const [registerResult] = await connection.execute(`
-      CALL sp_register_user_complete(
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, @account_id, @student_id, @result
-      )
+    const [result] = await connection.execute(`
+      CALL sp_register_user_with_synced_ids(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, @account_id, @result)
     `, [
-      passwordHash,
-      firstName,
-      middleName,
-      lastName,
-      dateOfBirth,
-      birthPlace,
-      gender || 'Other',
-      email,
-      education || 'Not specified',
-      phoneNumber,
-      fullAddress,
-      role,
-      tradingLevel || 'No Experience',
-      deviceType,
-      formattedLearningStyle,
-      deliveryPreference || 'hybrid'
+      username, passwordHash, firstName, middleName, lastName, 
+      birthDate, birthPlace, gender || 'Other', email, education || 'Not specified', 
+      phoneNumber, fullAddress, role
     ]);
-
-    // Get output parameters
-    const [[output]] = await connection.execute(`
-      SELECT @account_id AS account_id, @student_id AS student_id, @result AS result
-    `);
     
-    const { account_id, student_id, result: procedureResult } = output;
+    const [output] = await connection.execute(`SELECT @account_id as account_id, @result as result`);
+    const { account_id, result: procedureResult } = output[0];
 
-    if (!procedureResult || !procedureResult.startsWith('SUCCESS')) {
-      return res.status(400).json({ 
-        error: procedureResult || 'Registration failed' 
-      });
+    if (!procedureResult.startsWith('SUCCESS')) {
+      return res.status(400).json({ error: procedureResult });
+    }
+
+    // Handle additional fields specific to students
+    if (role === 'student' && (tradingLevel || device || learningStyle)) {
+      const [studentData] = await connection.execute(`
+        SELECT student_id FROM students WHERE account_id = ?
+      `, [account_id]);
+      
+      if (studentData.length > 0) {
+        const student_id = studentData[0].student_id;
+        
+        // Update trading level if provided
+        if (tradingLevel) {
+          const [levelRows] = await connection.execute(`
+            SELECT level_id FROM trading_levels WHERE level_name = ?
+          `, [tradingLevel]);
+          
+          if (levelRows.length > 0) {
+            const level_id = levelRows[0].level_id;
+            
+            // Update the default level
+            await connection.execute(`
+              UPDATE student_trading_levels 
+              SET level_id = ?, assigned_date = CURRENT_TIMESTAMP
+              WHERE student_id = ? AND is_current = 1
+            `, [level_id, student_id]);
+          }
+        }
+
+        // Update learning preferences if provided
+        if (device || learningStyle) {
+          const deviceArray = Array.isArray(device) ? device : (device ? [device] : []);
+          const learningStyleArray = Array.isArray(learningStyle) ? learningStyle : (learningStyle ? [learningStyle] : []);
+          
+          await connection.execute(`
+            UPDATE learning_preferences 
+            SET device_type = ?, learning_style = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE student_id = ?
+          `, [deviceArray.join(','), learningStyleArray.join(','), student_id]);
+        }
+      }
     }
 
     // Generate JWT token
-    const token = jwt.sign(
-      { 
-        accountId: account_id, 
-        role: role,
-        studentId: student_id 
-      },
-      JWT_SECRET,
-      { expiresIn: '24h' }
-    );
+    const token = jwt.sign({
+      accountId: account_id,
+      username: username,
+      role: role
+    }, JWT_SECRET, { expiresIn: '24h' });
 
     // Update account with token
     await connection.execute(
@@ -889,133 +751,75 @@ app.post('/api/auth/signup', [
       [token, account_id]
     );
 
-    // Fetch complete user profile
-    const [userProfile] = await connection.execute(`
-      SELECT 
-        p.person_id,
-        p.first_name,
-        p.middle_name,
-        p.last_name,
-        p.birth_date,
-        p.birth_place,
-        p.gender,
-        p.email,
-        p.education,
-        a.account_status,
-        a.created_at,
-        r.role_name,
-        r.permissions
-      FROM persons p
-      JOIN accounts a ON p.person_id = a.account_id
-      JOIN account_roles ar ON a.account_id = ar.account_id
-      JOIN roles r ON ar.role_id = r.role_id
-      WHERE a.account_id = ?
-    `, [account_id]);
-
-    let additionalData = {};
-
-    if (role === 'student' && student_id) {
-      // Fetch student-specific data
-      const [studentData] = await connection.execute(`
-        SELECT 
-          s.student_id,
-          s.graduation_status,
-          s.academic_standing,
-          tl.level_name as trading_level,
-          lp.learning_style,
-          lp.delivery_preference,
-          lp.device_type,
-          sb.education_level,
-          sb.highest_degree
-        FROM students s
-        LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = 1
-        LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
-        LEFT JOIN learning_preferences lp ON s.student_id = lp.student_id
-        LEFT JOIN student_backgrounds sb ON s.student_id = sb.student_id
-        WHERE s.account_id = ?
+    // Prepare response
+    let profileData = {};
+    if (role === 'student') {
+      const [studentProfile] = await connection.execute(`
+        SELECT student_id, graduation_status, academic_standing
+        FROM students WHERE account_id = ?
       `, [account_id]);
-
-      if (studentData.length > 0) {
-        additionalData = {
-          student_id: studentData[0].student_id,
-          graduation_status: studentData[0].graduation_status,
-          academic_standing: studentData[0].academic_standing,
-          trading_level: studentData[0].trading_level,
-          learning_preferences: {
-            style: studentData[0].learning_style,
-            delivery: studentData[0].delivery_preference,
-            device: studentData[0].device_type
-          },
-          background: {
-            education_level: studentData[0].education_level,
-            highest_degree: studentData[0].highest_degree
-          }
-        };
-      }
+      
+      profileData = {
+        student_id: studentProfile[0]?.student_id,
+        graduation_status: 'enrolled',
+        academic_standing: 'good',
+        trading_level: tradingLevel || 'Beginner',
+        learning_preferences: {
+          device: device || null,
+          learning_style: learningStyle || null
+        }
+      };
     } else if (role === 'staff') {
-      // Fetch staff-specific data
-      const [staffData] = await connection.execute(`
-        SELECT 
-          staff_id,
-          employee_id,
-          hire_date,
-          employment_status
-        FROM staff
-        WHERE account_id = ?
+      const [staffProfile] = await connection.execute(`
+        SELECT staff_id, employee_id, employment_status
+        FROM staff WHERE account_id = ?
       `, [account_id]);
-
-      if (staffData.length > 0) {
-        additionalData = {
-          staff_id: staffData[0].staff_id,
-          employee_id: staffData[0].employee_id,
-          hire_date: staffData[0].hire_date,
-          employment_status: staffData[0].employment_status
-        };
-      }
+      
+      profileData = {
+        staff_id: staffProfile[0]?.staff_id,
+        employee_id: staffProfile[0]?.employee_id,
+        employment_status: 'active'
+      };
     }
 
-    // Prepare response
-    const responseData = {
+    // Get role permissions
+    const [rolePermissions] = await connection.execute(
+      'SELECT permissions FROM roles WHERE role_name = ?',
+      [role]
+    );
+
+    const permissions = rolePermissions[0]?.permissions || '';
+
+    res.status(201).json({
       message: 'Account created successfully',
       token,
       user: {
         accountId: account_id,
-        personId: userProfile[0].person_id,
-        firstName: userProfile[0].first_name,
-        middleName: userProfile[0].middle_name,
-        lastName: userProfile[0].last_name,
-        email: userProfile[0].email,
-        birthDate: userProfile[0].birth_date,
-        birthPlace: userProfile[0].birth_place,
-        gender: userProfile[0].gender,
-        education: userProfile[0].education,
-        role: userProfile[0].role_name,
-        permissions: JSON.parse(userProfile[0].permissions || '{}'),
-        accountStatus: userProfile[0].account_status,
-        createdAt: userProfile[0].created_at,
-        contactInfo: {
-          phone: phoneNumber,
-          address: fullAddress
-        },
-        ...additionalData
+        username: username,
+        role: role,
+        firstName: firstName,
+        middleName: middleName,
+        lastName: lastName,
+        email: email,
+        phoneNumber: phoneNumber,
+        dateOfBirth: birthDate,
+        gender: gender,
+        education: education,
+        address: fullAddress,
+        permissions: permissions,
+        profile: profileData
       }
-    };
-
-    res.status(201).json(responseData);
+    });
 
   } catch (error) {
     console.error('Signup error:', error);
-
+    
+    // Handle specific database errors
     if (error.code === 'ER_DUP_ENTRY') {
-      return res.status(409).json({ 
-        error: 'Email already exists' 
-      });
+      return res.status(409).json({ error: 'Username or email already exists' });
     }
-
-    res.status(500).json({ 
-      error: 'Account creation failed',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    
+    res.status(500).json({ error: 'Account creation failed' });
   } finally {
     connection.release();
   }
@@ -1029,22 +833,11 @@ app.post('/api/auth/login', [
 
     if (!token) return res.status(400).json({ error: 'Token required' });
 
-    console.log('🔐 Incoming token:', token);
+    const payload = jwt.verify(token, JWT_SECRET);
 
-    // Verify JWT
-    let payload;
-    try {
-      payload = jwt.verify(token, JWT_SECRET);
-      console.log('✅ Decoded JWT payload:', payload);
-    } catch (err) {
-      console.error('❌ JWT verification failed:', err.message);
-      return res.status(401).json({ error: 'Invalid or expired token' });
-    }
-
-    // Query the account using account_id and token from DB
     const [rows] = await pool.execute(`
-      SELECT  
-        a.account_id, a.account_status, a.last_login, a.failed_login_attempts, a.locked_until, a.created_at, a.updated_at,
+      SELECT 
+        a.*, 
         ar.role_id, 
         r.role_name, 
         r.permissions,
@@ -1060,10 +853,8 @@ app.post('/api/auth/login', [
       WHERE a.account_id = ? AND a.token = ?
     `, [payload.accountId, token]);
 
-    console.log('📦 Query result rows:', rows.length);
-
     if (rows.length === 0) {
-      return res.status(401).json({ error: 'Invalid or expired token (not matched in DB)' });
+      return res.status(401).json({ error: 'Invalid or expired token' });
     }
 
     const user = rows[0];
@@ -1084,6 +875,7 @@ app.post('/api/auth/login', [
     let additionalData = {};
     
     if (user.role_name === 'student' && user.student_id) {
+      // Fetch trading levels
       const [tradingLevels] = await pool.execute(`
         SELECT 
           tl.level_name,
@@ -1096,6 +888,7 @@ app.post('/api/auth/login', [
         ORDER BY stl.assigned_date DESC
       `, [user.student_id]);
 
+      // Fetch learning preferences
       const [learningPrefs] = await pool.execute(`
         SELECT device_type, learning_style, created_at
         FROM learning_preferences
@@ -1105,14 +898,14 @@ app.post('/api/auth/login', [
       additionalData = {
         trading_levels: tradingLevels,
         learning_preferences: learningPrefs,
-        enrollments: [] // Optional: You can query this later if needed
       };
     }
 
-    // Build user response object
+    // Build response user object
     const responseUser = {
       account: {
         account_id: user.account_id,
+        username: user.username,
         account_status: user.account_status,
         last_login: user.last_login,
         failed_login_attempts: user.failed_login_attempts,
@@ -1144,7 +937,7 @@ app.post('/api/auth/login', [
       additional_data: additionalData
     };
 
-    // Set role-specific profile
+    // Set role-specific profile data
     if (user.role_name === 'student') {
       responseUser.profile = {
         student_id: user.student_id,
@@ -1172,8 +965,6 @@ app.post('/api/auth/login', [
       WHERE account_id = ?
     `, [user.account_id]);
 
-    console.log('✅ Login successful for account:', user.account_id);
-
     return res.status(200).json({
       success: true,
       token,
@@ -1181,7 +972,7 @@ app.post('/api/auth/login', [
     });
 
   } catch (err) {
-    console.error('❌ Login token validation error:', err);
+    console.error('Login token validation error:', err);
     return res.status(401).json({ error: 'Invalid token' });
   }
 });
@@ -1735,512 +1526,163 @@ app.get('/api/students', authenticateToken, authorize(['admin', 'staff']), async
   }
 });
 
-// Improved Student Creation Endpoint
 app.post('/api/students', [
   authenticateToken,
   authorize(['admin', 'staff']),
   body('first_name').trim().isLength({ min: 1, max: 50 }).escape(),
   body('last_name').trim().isLength({ min: 1, max: 50 }).escape(),
   body('email').isEmail().normalizeEmail(),
-  body('password').isLength({ min: 6 })
+  body('password').optional().isLength({ min: 6 })
 ], validateInput, async (req, res) => {
   const connection = await pool.getConnection();
-
+  
   try {
     const { 
-      first_name, 
-      middle_name, 
-      last_name, 
-      birth_date, 
-      birth_place, 
-      gender,
-      email, 
-      education, 
-      phone, 
-      address, 
-      trading_level_id, 
-      password,
-      // Additional optional fields
-      learning_style,
-      delivery_preference,
-      device_type,
-      preferred_schedule,
-      goals,
-      background_info
+      first_name, middle_name, last_name, birth_date, birth_place, gender,
+      email, education, phone, address, password, trading_level_id 
     } = req.body;
 
-    console.log('Creating student with data:', {
-      first_name, middle_name, last_name, email
-    });
+    let account_id = null;
+    if (password) {
+      const saltRounds = 12;
+      const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-    await connection.beginTransaction();
-
-    // Check if email already exists
-    const [existingEmail] = await connection.execute(
-      'SELECT person_id FROM persons WHERE email = ?',
-      [email]
-    );
-
-    if (existingEmail.length > 0) {
-      await connection.rollback();
-      return res.status(409).json({ error: 'Email already exists' });
-    }
-
-    // Hash the password
-    const passwordHash = await bcrypt.hash(password, 12);
-
-    // Call the stored procedure
-    const [registerResult] = await connection.execute(`
-      CALL sp_register_user_with_synced_ids(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, @account_id, @result)
-    `, [
-      passwordHash,
-      first_name,
-      middle_name || null,
-      last_name,
-      birth_date || null,
-      birth_place || 'Not specified',
-      gender || 'Other',
-      email,
-      education || 'Not specified',
-      phone || null,
-      address || null,
-      'student'
-    ]);
-
-    const [[output]] = await connection.execute(`SELECT @account_id AS account_id, @result AS result`);
-
-    if (!output || !output.result || !output.result.startsWith('SUCCESS')) {
-      throw new Error(output?.result || 'Registration failed');
-    }
-
-    const account_id = output.account_id;
-
-    // Get the student_id
-    const [studentData] = await connection.execute(
-      'SELECT student_id FROM students WHERE account_id = ?',
-      [account_id]
-    );
-
-    const student_id = studentData[0]?.student_id;
-
-    if (!student_id) {
-      throw new Error('Student record not found after creation');
-    }
-
-    // Update trading level if different from default
-    if (trading_level_id && trading_level_id !== 1) {
-      await connection.execute(`
-        UPDATE student_trading_levels 
-        SET is_current = FALSE 
-        WHERE student_id = ? AND is_current = TRUE
-      `, [student_id]);
-
-      await connection.execute(`
-        INSERT INTO student_trading_levels (student_id, level_id, is_current, assigned_by)
-        VALUES (?, ?, TRUE, ?)
-      `, [student_id, trading_level_id, req.user.staffId || null]);
-    }
-
-    // Update learning preferences if provided
-    if (learning_style || delivery_preference || device_type || preferred_schedule) {
-      const updateFields = [];
-      const updateValues = [];
-
-      if (learning_style) {
-        updateFields.push('learning_style = ?');
-        updateValues.push(learning_style);
-      }
-      if (delivery_preference) {
-        updateFields.push('delivery_preference = ?');
-        updateValues.push(delivery_preference);
-      }
-      if (device_type) {
-        updateFields.push('device_type = ?');
-        updateValues.push(device_type);
-      }
-      if (preferred_schedule) {
-        updateFields.push('preferred_schedule = ?');
-        updateValues.push(preferred_schedule);
-      }
-
-      if (updateFields.length > 0) {
-        updateValues.push(student_id);
-        await connection.execute(`
-          UPDATE learning_preferences 
-          SET ${updateFields.join(', ')}
-          WHERE student_id = ?
-        `, updateValues);
-      }
-    }
-
-    // Add student goals if provided
-    if (goals && Array.isArray(goals)) {
-      for (const goal of goals) {
-        await connection.execute(`
-          INSERT INTO student_goals (
-            student_id, goal_type, goal_title, goal_description, 
-            target_date, priority_level, status
-          ) VALUES (?, ?, ?, ?, ?, ?, 'active')
-        `, [
-          student_id,
-          goal.type || 'personal',
-          goal.title,
-          goal.description,
-          goal.target_date || null,
-          goal.priority || 'medium'
-        ]);
-      }
-    }
-
-    // Update background info if provided
-    if (background_info) {
-      const { 
-        work_experience_years, 
-        current_occupation, 
-        industry,
-        financial_experience,
-        prior_trading_experience
-      } = background_info;
-
-      await connection.execute(`
-        UPDATE student_backgrounds 
-        SET work_experience_years = ?,
-            current_occupation = ?,
-            industry = ?,
-            financial_experience = ?,
-            prior_trading_experience = ?
-        WHERE student_id = ?
+      // Use stored procedure for synced creation
+      const [result] = await connection.execute(`
+        CALL sp_register_user_with_synced_ids(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, @account_id, @result)
       `, [
-        work_experience_years || 0,
-        current_occupation || null,
-        industry || null,
-        financial_experience || null,
-        prior_trading_experience || null,
-        student_id
+        email, hashedPassword, first_name, middle_name, last_name, 
+        birth_date, birth_place, gender, email, education, 
+        phone, address, 'student'
       ]);
-    }
-
-    await connection.commit();
-    console.log('Transaction committed successfully');
-
-    // Send welcome email
-    let emailSent = false;
-    try {
-      if (emailTransporter && email) {
-        await sendWelcomeEmail(email, first_name, last_name, password, 'student');
-        emailSent = true;
+      
+      const [output] = await connection.execute(`SELECT @account_id as account_id, @result as result`);
+      account_id = output[0].account_id;
+      
+      if (!output[0].result.startsWith('SUCCESS')) {
+        return res.status(400).json({ error: output[0].result });
       }
-    } catch (emailError) {
-      console.error('Failed to send welcome email:', emailError);
+    } else {
+      // Manual creation without account
+      await connection.beginTransaction();
+      
+      // Create person first to get an ID
+      const [personResult] = await connection.execute(`
+        INSERT INTO persons (first_name, middle_name, last_name, birth_date, birth_place, gender, email, education)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `, [first_name, middle_name || null, last_name, birth_date, birth_place, gender, email, education]);
+
+      const person_id = personResult.insertId;
+      const student_id = `S${Date.now()}_${person_id}`;
+
+      // Insert into students table
+      await connection.execute(`
+        INSERT INTO students (student_id, person_id, account_id, registration_date)
+        VALUES (?, ?, ?, CURRENT_DATE)
+      `, [student_id, person_id, null]);
+
+      // Insert contact information
+      if (phone) {
+        await connection.execute(`
+          INSERT INTO contact_info (person_id, student_id, contact_type, contact_value, is_primary)
+          VALUES (?, ?, 'phone', ?, TRUE)
+        `, [person_id, student_id, phone]);
+      }
+
+      if (address) {
+        await connection.execute(`
+          INSERT INTO contact_info (person_id, student_id, contact_type, contact_value, is_primary)
+          VALUES (?, ?, 'address', ?, TRUE)
+        `, [person_id, student_id, address]);
+      }
+
+      await connection.execute(`
+        INSERT INTO contact_info (person_id, student_id, contact_type, contact_value, is_primary)
+        VALUES (?, ?, 'email', ?, TRUE)
+      `, [person_id, student_id, email]);
+
+      await connection.commit();
+      account_id = person_id;
     }
 
-    // Fetch complete student data
-    const [completeStudentData] = await connection.execute(`
-      SELECT 
-        s.student_id,
-        s.registration_date,
-        p.first_name,
-        p.last_name,
-        p.email,
-        tl.level_name as trading_level,
-        lp.delivery_preference,
-        lp.learning_style
-      FROM students s
-      JOIN persons p ON s.person_id = p.person_id
-      LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
-      LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
-      LEFT JOIN learning_preferences lp ON s.student_id = lp.student_id
-      WHERE s.student_id = ?
-    `, [student_id]);
+    // Assign trading level if provided
+    if (trading_level_id && account_id) {
+      const [studentData] = await connection.execute(`
+        SELECT student_id FROM students WHERE account_id = ? OR person_id = ?
+      `, [account_id, account_id]);
+      
+      if (studentData.length > 0) {
+        const student_id = studentData[0].student_id;
+        
+        const [staffRows] = await connection.execute(`
+          SELECT staff_id FROM staff WHERE account_id = ?
+        `, [req.user.accountId]);
+        
+        const assigned_by = staffRows[0]?.staff_id || null;
+
+        await connection.execute(`
+          INSERT INTO student_trading_levels (student_id, level_id, assigned_by, is_current)
+          VALUES (?, ?, ?, TRUE)
+        `, [student_id, trading_level_id, assigned_by]);
+      }
+    }
 
     res.status(201).json({ 
-      message: emailSent 
-        ? 'Student created successfully! Login credentials have been sent to their email.'
-        : 'Student created successfully!',
-      student: completeStudentData[0],
-      email_sent: emailSent,
-      credentials: !emailSent ? { email, password } : undefined
+      account_id,
+      message: 'Student created successfully' 
     });
 
   } catch (error) {
     await connection.rollback();
     console.error('Student creation error:', error);
-
+    
     if (error.code === 'ER_DUP_ENTRY') {
-      res.status(409).json({ error: 'Email already exists' });
+      res.status(409).json({ error: 'Username or email already exists' });
     } else {
-      res.status(500).json({ 
-        error: 'Failed to create student',
-        details: process.env.NODE_ENV === 'development' ? error.message : undefined
-      });
+      res.status(500).json({ error: 'Failed to create student' });
     }
   } finally {
     connection.release();
   }
 });
 
-// Staff Creation Endpoint
-app.post('/api/staff', [
-  authenticateToken,
-  authorize(['admin']),
-  body('first_name').trim().isLength({ min: 1, max: 50 }).escape(),
-  body('last_name').trim().isLength({ min: 1, max: 50 }).escape(),
-  body('email').isEmail().normalizeEmail(),
-  body('password').isLength({ min: 6 })
-], validateInput, async (req, res) => {
-  const connection = await pool.getConnection();
-
+app.get('/api/students/:studentId', authenticateToken, authorize(['admin', 'staff', 'student']), authorizeStudentAccess, async (req, res) => {
   try {
-    const { 
-      first_name, 
-      middle_name, 
-      last_name, 
-      birth_date, 
-      birth_place, 
-      gender,
-      email, 
-      education, 
-      phone, 
-      address, 
-      password,
-      position_id,
-      department,
-      emergency_contact
-    } = req.body;
+    const { studentId } = req.params;
 
-    await connection.beginTransaction();
+    const [students] = await pool.execute(`
+      SELECT s.student_id, s.graduation_status, s.academic_standing, s.gpa, s.registration_date,
+             p.person_id, p.first_name, p.middle_name, p.last_name, p.birth_date, p.birth_place, p.gender, p.email, p.education,
+             tl.level_name as current_trading_level, tl.level_id,
+             a.username, a.account_status
+      FROM students s
+      JOIN persons p ON s.person_id = p.person_id
+      LEFT JOIN accounts a ON s.account_id = a.account_id
+      LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
+      LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
+      WHERE s.student_id = ?
+    `, [studentId]);
 
-    // Check if email already exists
-    const [existingEmail] = await connection.execute(
-      'SELECT person_id FROM persons WHERE email = ?',
-      [email]
-    );
-
-    if (existingEmail.length > 0) {
-      await connection.rollback();
-      return res.status(409).json({ error: 'Email already exists' });
+    if (students.length === 0) {
+      return res.status(404).json({ error: 'Student not found' });
     }
 
-    // Hash the password
-    const passwordHash = await bcrypt.hash(password, 12);
+    const [contacts] = await pool.execute(`
+      SELECT contact_type, contact_value, is_primary
+      FROM contact_info
+      WHERE student_id = ?
+    `, [studentId]);
 
-    // Call the stored procedure
-    const [registerResult] = await connection.execute(`
-      CALL sp_register_user_with_synced_ids(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, @account_id, @result)
-    `, [
-      passwordHash,
-      first_name,
-      middle_name || null,
-      last_name,
-      birth_date || null,
-      birth_place || 'Not specified',
-      gender || 'Other',
-      email,
-      education || 'Not specified',
-      phone || null,
-      address || null,
-      'staff'
-    ]);
-
-    const [[output]] = await connection.execute(`SELECT @account_id AS account_id, @result AS result`);
-
-    if (!output || !output.result || !output.result.startsWith('SUCCESS')) {
-      throw new Error(output?.result || 'Registration failed');
-    }
-
-    const account_id = output.account_id;
-
-    // Get the staff_id
-    const [staffData] = await connection.execute(
-      'SELECT staff_id, employee_id FROM staff WHERE account_id = ?',
-      [account_id]
-    );
-
-    const { staff_id, employee_id } = staffData[0] || {};
-
-    if (!staff_id) {
-      throw new Error('Staff record not found after creation');
-    }
-
-    // Update emergency contact if provided
-    if (emergency_contact) {
-      await connection.execute(`
-        UPDATE staff 
-        SET emergency_contact = ?
-        WHERE staff_id = ?
-      `, [emergency_contact, staff_id]);
-    }
-
-    // Assign position if provided
-    if (position_id) {
-      await connection.execute(`
-        INSERT INTO staff_positions (staff_id, position_id, start_date, is_primary)
-        VALUES (?, ?, CURDATE(), TRUE)
-      `, [staff_id, position_id]);
-    }
-
-    await connection.commit();
-    console.log('Staff member created successfully');
-
-    // Send welcome email
-    let emailSent = false;
-    try {
-      if (emailTransporter && email) {
-        await sendWelcomeEmail(email, first_name, last_name, password, 'staff');
-        emailSent = true;
-      }
-    } catch (emailError) {
-      console.error('Failed to send welcome email:', emailError);
-    }
-
-    res.status(201).json({ 
-      message: emailSent 
-        ? 'Staff member created successfully! Login credentials have been sent to their email.'
-        : 'Staff member created successfully!',
-      staff: {
-        staff_id,
-        employee_id,
-        account_id,
-        name: `${first_name} ${last_name}`,
-        email
-      },
-      email_sent: emailSent,
-      credentials: !emailSent ? { email, password } : undefined
+    res.json({
+      ...students[0],
+      contacts
     });
 
   } catch (error) {
-    await connection.rollback();
-    console.error('Staff creation error:', error);
-
-    if (error.code === 'ER_DUP_ENTRY') {
-      res.status(409).json({ error: 'Email already exists' });
-    } else {
-      res.status(500).json({ 
-        error: 'Failed to create staff member',
-        details: process.env.NODE_ENV === 'development' ? error.message : undefined
-      });
-    }
-  } finally {
-    connection.release();
+    console.error('Student fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch student details' });
   }
 });
-
-// Helper function to send welcome emails
-async function sendWelcomeEmail(email, firstName, lastName, password, role) {
-  const mailOptions = {
-    from: `"${process.env.EMAIL_FROM_NAME || 'Trading Academy'}" <${process.env.EMAIL_USER}>`,
-    to: email,
-    subject: `Your Trading Academy ${role === 'staff' ? 'Staff' : 'Student'} Account Credentials`,
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h2 style="color: #2d4a3d;">Welcome to Trading Academy!</h2>
-        <p>Dear ${firstName} ${lastName},</p>
-        <p>Your ${role} account has been successfully created. Here are your login credentials:</p>
-        <div style="background-color: #f5f2e8; padding: 20px; border-radius: 5px; margin: 20px 0;">
-          <p><strong>Email:</strong> ${email}</p>
-          <p><strong>Password:</strong> <code style="background-color: #fff; padding: 2px 4px; border-radius: 3px;">${password}</code></p>
-          ${role === 'staff' ? '<p><strong>Portal:</strong> Staff Portal</p>' : ''}
-        </div>
-        <p><strong>Important:</strong> Please change your password after your first login for security purposes.</p>
-        <p>You can log in to your account using your email address and the password provided above.</p>
-        ${role === 'staff' ? '<p>As a staff member, you will have access to manage student records and course information.</p>' : ''}
-        <p>If you have any questions, please don't hesitate to contact our support team.</p>
-        <p>Best regards,<br>8Con Academy Team</p>
-      </div>
-    `
-  };
-
-  await emailTransporter.sendMail(mailOptions);
-}
-
-// app.get('/api/students/:studentId', authenticateToken, authorize(['admin', 'staff', 'student']), authorizeStudentAccess, async (req, res) => {
-//   try {
-//     const { studentId } = req.params;
-
-//     const [students] = await pool.execute(`
-//       SELECT s.student_id, s.graduation_status, s.academic_standing, s.gpa, s.registration_date,
-//              p.person_id, p.first_name, p.middle_name, p.last_name, p.birth_date, p.birth_place, p.gender, p.email, p.education,
-//              tl.level_name as current_trading_level, tl.level_id,
-//              a.account_status
-//       FROM students s
-//       JOIN persons p ON s.person_id = p.person_id
-//       LEFT JOIN accounts a ON s.account_id = a.account_id
-//       LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
-//       LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
-//       WHERE s.student_id = ?
-//     `, [studentId]);
-
-//     if (students.length === 0) {
-//       return res.status(404).json({ error: 'Student not found' });
-//     }
-
-//     const [contacts] = await pool.execute(`
-//       SELECT contact_type, contact_value, is_primary
-//       FROM contact_info
-//       WHERE student_id = ?
-//     `, [studentId]);
-
-//     res.json({
-//       ...students[0],
-//       contacts
-//     });
-
-//   } catch (error) {
-//     console.error('Student fetch error:', error);
-//     res.status(500).json({ error: 'Failed to fetch student details' });
-//   }
-// });
-
-app.get(
-  "/api/students/:studentId",
-  authenticateToken,
-  authorize(["admin", "staff", "student"]),
-  authorizeStudentAccess,
-  async (req, res) => {
-    try {
-      const { studentId } = req.params;
-
-      // Use exact match, not LIKE, for getting a specific student
-      const [students] = await pool.execute(
-        `
-        SELECT s.student_id, s.account_id, s.graduation_status, s.academic_standing, s.registration_date,
-               p.person_id, p.first_name, p.middle_name, p.last_name, p.birth_date, p.birth_place, 
-               p.gender, p.email, p.education,
-               tl.level_name as current_trading_level, tl.level_id,
-               a.username, a.account_status
-        FROM students s
-        JOIN persons p ON s.person_id = p.person_id
-        LEFT JOIN accounts a ON s.account_id = a.account_id
-        LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
-        LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
-        WHERE s.student_id = ?
-        `,
-        [studentId] // Only one parameter needed for exact match
-      );
-
-      if (students.length === 0) {
-        return res.status(404).json({ error: "Student not found" });
-      }
-
-      const [contacts] = await pool.execute(
-        `
-        SELECT contact_type, contact_value, is_primary
-        FROM contact_info
-        WHERE student_id = ?
-        `,
-        [studentId]
-      );
-
-      res.json({
-        ...students[0],
-        contacts,
-      });
-    } catch (error) {
-      console.error("Student fetch error:", error);
-      res.status(500).json({ error: "Failed to fetch student details" });
-    }
-  }
-);
 
 // ============================================================================
 // DASHBOARD ROUTES (Updated for synced IDs)
@@ -2432,103 +1874,69 @@ app.get('/api/payments', authenticateToken, authorize(['admin', 'staff']), async
 });
 
 // POST /api/payments - Enhanced for payment creation/status updates
-app.post(
-  "/api/payments",
+app.post('/api/payments', [
   authenticateToken,
-  authorize(["admin", "staff"]),
-  upload.single("receipt"), // Assuming you're using multer for file uploads
-  async (req, res) => {
-    try {
-      const {
-        student_id,
-        account_id,
-        method_id,
-        payment_amount,
-        reference_number,
-        notes,
-      } = req.body;
+  authorize(['admin', 'staff']),
+  body('account_id').isInt(),
+  body('method_id').isInt(),
+  body('payment_amount').isFloat({ min: 0.01 }),
+  body('reference_number').optional().trim().isLength({ max: 50 })
+], validateInput, async (req, res) => {
+  const connection = await pool.getConnection();
+  
+  try {
+    await connection.beginTransaction();
+    
+    const { account_id, method_id, payment_amount, reference_number, notes } = req.body;
+    
+    // Get staff_id for processed_by
+    const [staffRows] = await connection.execute(
+      'SELECT staff_id FROM staff WHERE account_id = ?',
+      [req.user.accountId]
+    );
+    const staffId = staffRows[0]?.staff_id;
 
-      const receiptFile = req.file;
+    // Calculate processing fee
+    const [methodRows] = await connection.execute(
+      'SELECT processing_fee_percentage FROM payment_methods WHERE method_id = ?',
+      [method_id]
+    );
+    
+    const processingFeePercentage = methodRows[0]?.processing_fee_percentage || 0;
+    const processing_fee = (payment_amount * processingFeePercentage) / 100;
 
-      console.log("Payment submission data:", {
-        student_id,
-        account_id,
-        method_id,
-        payment_amount,
-        reference_number,
-        notes,
-        file: receiptFile ? receiptFile.filename : "No file",
-      });
+    // Insert payment record
+    const [paymentResult] = await connection.execute(`
+      INSERT INTO payments (
+        account_id, method_id, payment_amount, processing_fee, 
+        reference_number, payment_status, processed_by, notes, payment_date
+      ) VALUES (?, ?, ?, ?, ?, 'confirmed', ?, ?, NOW())
+    `, [account_id, method_id, payment_amount, processing_fee, reference_number || null, staffId, notes || null]);
 
-      // Validate required fields
-      if (
-        !student_id ||
-        !account_id ||
-        !method_id ||
-        !payment_amount ||
-        !receiptFile
-      ) {
-        return res.status(400).json({
-          error: "Missing required fields",
-          required: [
-            "student_id",
-            "account_id",
-            "method_id",
-            "payment_amount",
-            "receipt",
-          ],
-        });
-      }
+    // Update student account balance
+    await connection.execute(`
+      UPDATE student_accounts 
+      SET amount_paid = amount_paid + ?,
+          balance = total_due - (amount_paid + ?),
+          updated_at = NOW()
+      WHERE account_id = ?
+    `, [payment_amount, payment_amount, account_id]);
 
-      // Verify student and account exist
-      const [studentCheck] = await pool.execute(
-        "SELECT student_id, account_id FROM students WHERE student_id = ? AND account_id = ?",
-        [student_id, account_id]
-      );
+    await connection.commit();
+    
+    res.status(201).json({ 
+      message: 'Payment processed successfully',
+      payment_id: paymentResult.insertId 
+    });
 
-      if (studentCheck.length === 0) {
-        return res.status(400).json({ error: "Invalid student or account ID" });
-      }
-
-      // Insert payment record
-      const [result] = await pool.execute(
-        `
-        INSERT INTO payments (
-          student_id, 
-          account_id, 
-          method_id, 
-          payment_amount, 
-          reference_number, 
-          notes, 
-          receipt_filename,
-          payment_date,
-          status,
-          created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), 'pending', ?)
-      `,
-        [
-          student_id,
-          account_id,
-          method_id,
-          parseFloat(payment_amount),
-          reference_number || null,
-          notes || null,
-          receiptFile.filename,
-          req.user.user_id, // From authentication middleware
-        ]
-      );
-
-      res.json({
-        success: true,
-        payment_id: result.insertId,
-        message: "Payment submitted successfully",
-      });
-    } catch (error) {
-      console.error("Payment submission error:", error);
-      res.status(500).json({ error: "Failed to submit payment" });
-    }
+  } catch (error) {
+    await connection.rollback();
+    console.error('Payment creation error:', error);
+    res.status(500).json({ error: 'Failed to process payment' });
+  } finally {
+    connection.release();
   }
-);
+});
 
 // GET /api/payments/pending - Get pending payments
 app.get('/api/payments/pending', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
@@ -2746,266 +2154,6 @@ app.get('/api/students/:studentId/documents', authenticateToken, authorize(['adm
     res.status(500).json({ error: 'Failed to fetch student documents' });
   }
 });
-
-// FIXED: Enhanced student search endpoint with better error handling and database query
-app.get(
-  "/api/students/search",
-  authenticateToken,
-  authorize(["admin", "staff"]), // Only admin/staff can search students
-  async (req, res) => {
-    try {
-      const { q } = req.query; // search query parameter
-
-      console.log('Student search request:', { query: q, user: req.user.role });
-
-      // Return empty array for short queries
-      if (!q || q.length < 2) {
-        console.log('Search query too short:', q);
-        return res.json([]);
-      }
-
-      const searchTerm = `%${q}%`;
-      console.log('Searching with term:', searchTerm);
-
-      // FIXED: Enhanced query with better error handling and proper joins
-      const [students] = await pool.execute(
-        `
-        SELECT 
-          s.student_id, 
-          s.account_id, 
-          s.graduation_status, 
-          s.academic_standing,
-          p.first_name, 
-          p.last_name, 
-          p.email,
-          p.person_id,
-          tl.level_name as current_trading_level,
-          CONCAT(p.first_name, ' ', p.last_name) as full_name
-        FROM students s
-        INNER JOIN persons p ON s.person_id = p.person_id
-        LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
-        LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
-        WHERE (
-          p.first_name LIKE ? OR 
-          p.last_name LIKE ? OR 
-          s.student_id LIKE ? OR
-          CONCAT(p.first_name, ' ', p.last_name) LIKE ?
-        )
-        AND s.graduation_status != 'expelled'
-        ORDER BY p.first_name ASC, p.last_name ASC
-        LIMIT 15
-        `,
-        [searchTerm, searchTerm, searchTerm, searchTerm] // Four parameters for the four LIKE clauses
-      );
-
-      console.log(`Found ${students.length} students matching search criteria`);
-
-      // FIXED: Enhanced response with more details
-      const enhancedResults = students.map(student => ({
-        student_id: student.student_id,
-        account_id: student.account_id,
-        person_id: student.person_id,
-        first_name: student.first_name,
-        last_name: student.last_name,
-        full_name: student.full_name,
-        email: student.email,
-        graduation_status: student.graduation_status,
-        academic_standing: student.academic_standing,
-        current_trading_level: student.current_trading_level || 'Not assigned'
-      }));
-
-      res.json(enhancedResults);
-
-    } catch (error) {
-      console.error("Student search error:", error);
-      console.error("Error stack:", error.stack);
-      
-      // FIXED: Better error response
-      let errorMessage = "Failed to search students";
-      let statusCode = 500;
-      
-      if (error.code === 'ER_NO_SUCH_TABLE') {
-        errorMessage = "Database table not found. Please check database setup.";
-      } else if (error.code === 'ER_BAD_FIELD_ERROR') {
-        errorMessage = "Database field error. Please check database schema.";
-      } else if (error.code === 'ECONNREFUSED') {
-        errorMessage = "Database connection refused. Please check database server.";
-        statusCode = 503;
-      } else if (error.code === 'ER_ACCESS_DENIED_ERROR') {
-        errorMessage = "Database access denied. Please check database credentials.";
-        statusCode = 503;
-      }
-      
-      res.status(statusCode).json({ 
-        error: errorMessage,
-        details: process.env.NODE_ENV === 'development' ? error.message : undefined
-      });
-    }
-  }
-);
-
-// ALTERNATIVE: Fallback search endpoint with simpler query if the above fails
-app.get(
-  "/api/students/search/simple",
-  authenticateToken,
-  authorize(["admin", "staff"]),
-  async (req, res) => {
-    try {
-      const { q } = req.query;
-
-      if (!q || q.length < 2) {
-        return res.json([]);
-      }
-
-      console.log('Using simple search fallback for:', q);
-
-      // Simpler query that should work even with sync issues
-      const searchTerm = `%${q}%`;
-      
-      const [students] = await pool.execute(
-        `
-        SELECT DISTINCT
-          s.student_id,
-          s.account_id,
-          p.first_name,
-          p.last_name,
-          p.email
-        FROM students s, persons p
-        WHERE s.person_id = p.person_id
-        AND (
-          p.first_name LIKE ? OR 
-          p.last_name LIKE ? OR 
-          s.student_id LIKE ?
-        )
-        ORDER BY p.first_name, p.last_name
-        LIMIT 10
-        `,
-        [searchTerm, searchTerm, searchTerm]
-      );
-
-      console.log(`Simple search found ${students.length} students`);
-
-      res.json(students.map(student => ({
-        student_id: student.student_id,
-        account_id: student.account_id,
-        first_name: student.first_name,
-        last_name: student.last_name,
-        email: student.email,
-        full_name: `${student.first_name} ${student.last_name}`
-      })));
-
-    } catch (error) {
-      console.error("Simple student search error:", error);
-      res.status(500).json({ error: "Search failed" });
-    }
-  }
-);
-
-// DIAGNOSTIC: Endpoint to check database relationships
-app.get(
-  "/api/debug/student-relationships",
-  authenticateToken,
-  authorize(["admin"]),
-  async (req, res) => {
-    try {
-      // Check students table
-      const [studentsCount] = await pool.execute('SELECT COUNT(*) as count FROM students');
-      
-      // Check persons table
-      const [personsCount] = await pool.execute('SELECT COUNT(*) as count FROM persons');
-      
-      // Check relationship integrity
-      const [orphanedStudents] = await pool.execute(`
-        SELECT s.student_id, s.person_id, s.account_id
-        FROM students s
-        LEFT JOIN persons p ON s.person_id = p.person_id
-        WHERE p.person_id IS NULL
-        LIMIT 10
-      `);
-      
-      // Check ID mismatches
-      const [idMismatches] = await pool.execute(`
-        SELECT s.student_id, s.person_id, s.account_id, p.person_id as actual_person_id
-        FROM students s
-        JOIN persons p ON s.person_id = p.person_id
-        WHERE s.person_id != s.account_id
-        LIMIT 10
-      `);
-
-      // Sample working students
-      const [sampleStudents] = await pool.execute(`
-        SELECT s.student_id, s.person_id, s.account_id, p.first_name, p.last_name, p.email
-        FROM students s
-        JOIN persons p ON s.person_id = p.person_id
-        LIMIT 5
-      `);
-
-      res.json({
-        summary: {
-          total_students: studentsCount[0].count,
-          total_persons: personsCount[0].count,
-          orphaned_students: orphanedStudents.length,
-          id_mismatches: idMismatches.length
-        },
-        issues: {
-          orphaned_students: orphanedStudents,
-          id_mismatches: idMismatches
-        },
-        sample_working_students: sampleStudents
-      });
-
-    } catch (error) {
-      console.error("Database relationship check error:", error);
-      res.status(500).json({ 
-        error: "Failed to check database relationships",
-        details: error.message 
-      });
-    }
-  }
-);
-
-// DIAGNOSTIC: Test search functionality
-app.get(
-  "/api/debug/test-search",
-  authenticateToken,
-  authorize(["admin"]),
-  async (req, res) => {
-    try {
-      // Test basic student query
-      const [basicTest] = await pool.execute(`
-        SELECT s.student_id, p.first_name, p.last_name 
-        FROM students s
-        JOIN persons p ON s.person_id = p.person_id
-        LIMIT 3
-      `);
-
-      // Test search with a simple term
-      const [searchTest] = await pool.execute(`
-        SELECT s.student_id, p.first_name, p.last_name, p.email
-        FROM students s
-        JOIN persons p ON s.person_id = p.person_id
-        WHERE p.first_name LIKE '%a%'
-        LIMIT 5
-      `);
-
-      res.json({
-        basic_query_works: basicTest.length > 0,
-        basic_results: basicTest,
-        search_query_works: searchTest.length > 0,
-        search_results: searchTest,
-        timestamp: new Date().toISOString()
-      });
-
-    } catch (error) {
-      console.error("Search test error:", error);
-      res.status(500).json({ 
-        error: "Search test failed",
-        details: error.message,
-        code: error.code
-      });
-    }
-  }
-);
 
 // ============================================================================
 // COMPETENCY AND PROGRESS ROUTES (Fixed)
@@ -3228,436 +2376,6 @@ app.get('/api/courses', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch courses' });
   }
 });
-app.post('/api/courses', [
-  authenticateToken,
-  authorize(['admin']),
-  body('course_code').trim().isLength({ min: 1, max: 20 }),
-  body('course_name').trim().isLength({ min: 1, max: 100 }),
-  body('course_description').optional().trim(),
-  body('duration_weeks').isInt({ min: 1 }),
-  body('credits').isFloat({ min: 0 })
-], validateInput, async (req, res) => {
-  const connection = await pool.getConnection();
-  
-  try {
-    await connection.beginTransaction();
-    
-    const {
-      course_code,
-      course_name,
-      course_description,
-      duration_weeks,
-      credits,
-      competencies = [],
-      pricing = {}
-    } = req.body;
-
-    // Check if course code already exists
-    const [existingCourse] = await connection.execute(
-      'SELECT course_id FROM courses WHERE course_code = ?',
-      [course_code]
-    );
-
-    if (existingCourse.length > 0) {
-      await connection.rollback();
-      return res.status(409).json({ error: 'Course code already exists' });
-    }
-
-    // Insert course
-    const [courseResult] = await connection.execute(`
-      INSERT INTO courses (
-        course_code, course_name, course_description,
-        duration_weeks, credits, is_active
-      ) VALUES (?, ?, ?, ?, ?, TRUE)
-    `, [
-      course_code,
-      course_name,
-      course_description || null,
-      duration_weeks,
-      credits
-    ]);
-
-    const courseId = courseResult.insertId;
-
-    // Link competencies if provided
-    if (competencies.length > 0) {
-      const competencyValues = competencies.map((compId, index) => 
-        [courseId, compId, true, index + 1, null]
-      );
-
-      const competencyPlaceholders = competencies.map(() => '(?, ?, ?, ?, ?)').join(', ');
-      
-      await connection.execute(`
-        INSERT INTO course_competencies (
-          course_id, competency_id, is_required, order_sequence, estimated_hours
-        ) VALUES ${competencyPlaceholders}
-      `, competencyValues.flat());
-    }
-
-    // Create default course offering
-    const batchIdentifier = `${course_code}-${new Date().getFullYear()}-01`;
-    const startDate = new Date();
-    const endDate = new Date();
-    endDate.setDate(endDate.getDate() + (duration_weeks * 7));
-
-    const [offeringResult] = await connection.execute(`
-      INSERT INTO course_offerings (
-        course_id, batch_identifier, start_date, end_date,
-        max_enrollees, current_enrollees, status, location
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      courseId,
-      batchIdentifier,
-      startDate,
-      endDate,
-      30, // default max enrollees
-      0,
-      'planned',
-      'Online' // default location
-    ]);
-
-    const offeringId = offeringResult.insertId;
-
-    // Insert pricing if provided
-    const pricingTypes = ['regular', 'early_bird', 'group', 'scholarship', 'special'];
-    
-    for (const type of pricingTypes) {
-      if (pricing[type] && parseFloat(pricing[type]) > 0) {
-        let expiryDate = null;
-        
-        // Set expiry date for early bird pricing (30 days before start)
-        if (type === 'early_bird') {
-          expiryDate = new Date(startDate);
-          expiryDate.setDate(expiryDate.getDate() - 30);
-        }
-
-        await connection.execute(`
-          INSERT INTO course_pricing (
-            offering_id, pricing_type, amount, currency,
-            effective_date, expiry_date, is_active
-          ) VALUES (?, ?, ?, 'PHP', NOW(), ?, TRUE)
-        `, [
-          offeringId,
-          type,
-          parseFloat(pricing[type]),
-          expiryDate
-        ]);
-      }
-    }
-
-    await connection.commit();
-
-    // Fetch the created course with full details
-    const [newCourse] = await connection.execute(`
-      SELECT c.*, COUNT(DISTINCT co.offering_id) as total_offerings
-      FROM courses c
-      LEFT JOIN course_offerings co ON c.course_id = co.course_id
-      WHERE c.course_id = ?
-      GROUP BY c.course_id
-    `, [courseId]);
-
-    res.status(201).json({
-      message: 'Course created successfully',
-      course: newCourse[0]
-    });
-
-  } catch (error) {
-    await connection.rollback();
-    console.error('Course creation error:', error);
-    res.status(500).json({ 
-      error: 'Failed to create course',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  } finally {
-    connection.release();
-  }
-});
-
-// Backend: Fixed PUT /api/courses/:courseId endpoint
-app.put('/api/courses/:courseId', [
-  authenticateToken,
-  authorize(['admin']),
-  body('course_code').optional().trim().isLength({ min: 1, max: 20 }),
-  body('course_name').optional().trim().isLength({ min: 1, max: 100 }),
-  body('course_description').optional().trim(),
-  body('duration_weeks').optional().isInt({ min: 1 }),
-  body('credits').optional().isFloat({ min: 0 }),
-  body('pricing').optional().isObject(),
-  body('competencies').optional().isArray()
-], validateInput, async (req, res) => {
-  const connection = await pool.getConnection();
-
-  try {
-    await connection.beginTransaction();
-
-    const { courseId } = req.params;
-    const {
-      course_code,
-      course_name,
-      course_description,
-      duration_weeks,
-      credits,
-      competencies,
-      pricing,
-      is_active
-    } = req.body;
-
-    console.log('Update request for course ID:', courseId);
-    console.log('Request body:', req.body);
-
-    if (!courseId || isNaN(parseInt(courseId))) {
-      await connection.rollback();
-      return res.status(400).json({ error: 'Invalid course ID' });
-    }
-
-    const [existingCourse] = await connection.execute(
-      'SELECT course_id FROM courses WHERE course_id = ?',
-      [courseId]
-    );
-
-    if (existingCourse.length === 0) {
-      await connection.rollback();
-      return res.status(404).json({ error: 'Course not found' });
-    }
-
-    if (course_code) {
-      const [duplicateCode] = await connection.execute(
-        'SELECT course_id FROM courses WHERE course_code = ? AND course_id != ?',
-        [course_code, courseId]
-      );
-
-      if (duplicateCode.length > 0) {
-        await connection.rollback();
-        return res.status(409).json({ error: 'Course code already exists' });
-      }
-    }
-
-    const updateFields = [];
-    const updateValues = [];
-
-    if (course_code !== undefined) {
-      updateFields.push('course_code = ?');
-      updateValues.push(course_code);
-    }
-    if (course_name !== undefined) {
-      updateFields.push('course_name = ?');
-      updateValues.push(course_name);
-    }
-    if (course_description !== undefined) {
-      updateFields.push('course_description = ?');
-      updateValues.push(course_description);
-    }
-    if (duration_weeks !== undefined) {
-      updateFields.push('duration_weeks = ?');
-      updateValues.push(duration_weeks);
-    }
-    if (credits !== undefined) {
-      updateFields.push('credits = ?');
-      updateValues.push(credits);
-    }
-    if (is_active !== undefined) {
-      updateFields.push('is_active = ?');
-      updateValues.push(is_active);
-    }
-
-    if (updateFields.length > 0) {
-      updateFields.push('updated_at = CURRENT_TIMESTAMP');
-      updateValues.push(courseId);
-
-      await connection.execute(`
-        UPDATE courses 
-        SET ${updateFields.join(', ')}
-        WHERE course_id = ?
-      `, updateValues);
-    }
-
-    // Get offering_id linked to the course
-    const [offeringRows] = await connection.execute(
-      'SELECT offering_id FROM course_offerings WHERE course_id = ? LIMIT 1',
-      [courseId]
-    );
-
-    if (offeringRows.length === 0) {
-      await connection.rollback();
-      return res.status(400).json({ error: 'No course offering found for this course ID' });
-    }
-
-    const offeringId = offeringRows[0].offering_id;
-
-    // Update pricing if provided
-    if (pricing && typeof pricing === 'object') {
-      await connection.execute(
-        'DELETE FROM course_pricing WHERE offering_id = ?',
-        [offeringId]
-      );
-
-      const pricingEntries = Object.entries(pricing).filter(([_, value]) => value && parseFloat(value) > 0);
-
-      if (pricingEntries.length > 0) {
-        const pricingValues = pricingEntries.map(([type, price]) => [
-          offeringId,
-          type,
-          parseFloat(price),
-          'PHP',
-          new Date(),
-          null,
-          1,
-          true
-        ]);
-
-        const pricingPlaceholders = pricingValues.map(() => '(?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
-
-        await connection.execute(`
-          INSERT INTO course_pricing (
-            offering_id, pricing_type, amount, currency, effective_date,
-            expiry_date, minimum_quantity, is_active
-          ) VALUES ${pricingPlaceholders}
-        `, pricingValues.flat());
-      }
-    }
-
-    // Update competencies if provided
-    if (competencies && Array.isArray(competencies)) {
-      await connection.execute(
-        'DELETE FROM course_competencies WHERE course_id = ?',
-        [courseId]
-      );
-
-      if (competencies.length > 0) {
-        const competencyValues = competencies.map((compId, index) =>
-          [courseId, compId, true, index + 1, null]
-        );
-
-        const competencyPlaceholders = competencies.map(() => '(?, ?, ?, ?, ?)').join(', ');
-
-        await connection.execute(`
-          INSERT INTO course_competencies (
-            course_id, competency_id, is_required, order_sequence, estimated_hours
-          ) VALUES ${competencyPlaceholders}
-        `, competencyValues.flat());
-      }
-    }
-
-    await connection.commit();
-
-    // Fetch updated course with all related data
-    const [updatedCourse] = await connection.execute(`
-      SELECT c.*, 
-             COUNT(DISTINCT cc.competency_id) as total_competencies,
-             GROUP_CONCAT(DISTINCT CONCAT(cp.pricing_type, ':', cp.amount) SEPARATOR '|') as pricing_data
-      FROM courses c
-      LEFT JOIN course_competencies cc ON c.course_id = cc.course_id
-      LEFT JOIN course_offerings co ON c.course_id = co.course_id
-      LEFT JOIN course_pricing cp ON co.offering_id = cp.offering_id AND cp.is_active = true
-      WHERE c.course_id = ?
-      GROUP BY c.course_id
-    `, [courseId]);
-
-    const courseData = updatedCourse[0];
-    if (courseData.pricing_data) {
-      const pricingObj = {};
-      courseData.pricing_data.split('|').forEach(item => {
-        const [type, price] = item.split(':');
-        pricingObj[type] = parseFloat(price);
-      });
-      courseData.pricing = pricingObj;
-    } else {
-      courseData.pricing = {};
-    }
-    delete courseData.pricing_data;
-
-    res.json({
-      message: 'Course updated successfully',
-      course: courseData
-    });
-
-  } catch (error) {
-    await connection.rollback();
-    console.error('Course update error:', error);
-    console.error('Error stack:', error.stack);
-
-    res.status(500).json({
-      error: 'Failed to update course',
-      message: error.message,
-      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  } finally {
-    connection.release();
-  }
-});
-
-// GET /api/courses/:courseId/competencies - Get competencies for a specific course
-app.get('/api/courses/:courseId/competencies', authenticateToken, async (req, res) => {
-  try {
-    const { courseId } = req.params;
-
-    const [competencies] = await pool.execute(`
-      SELECT c.competency_id, c.competency_code, c.competency_name, 
-             c.competency_description, ct.type_name as competency_type,
-             cc.is_required, cc.order_sequence, cc.estimated_hours
-      FROM course_competencies cc
-      JOIN competencies c ON cc.competency_id = c.competency_id
-      JOIN competency_types ct ON c.competency_type_id = ct.competency_type_id
-      WHERE cc.course_id = ?
-      ORDER BY cc.order_sequence, ct.type_name, c.competency_name
-    `, [courseId]);
-
-    res.json(competencies);
-  } catch (error) {
-    console.error('Course competencies fetch error:', error);
-    res.status(500).json({ error: 'Failed to fetch course competencies' });
-  }
-});
-
-// GET /api/courses/:courseId/students - Get enrolled students for a course
-app.get('/api/courses/:courseId/students', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
-  try {
-    const { courseId } = req.params;
-    const { offering_id, competency_id } = req.query;
-
-    let query = `
-      SELECT DISTINCT s.student_id, p.first_name, p.last_name, p.email,
-             se.enrollment_status, se.completion_percentage, se.attendance_percentage,
-             co.batch_identifier, co.offering_id
-      FROM student_enrollments se
-      JOIN students s ON se.student_id = s.student_id
-      JOIN persons p ON s.person_id = p.person_id
-      JOIN course_offerings co ON se.offering_id = co.offering_id
-      WHERE co.course_id = ?
-    `;
-    const params = [courseId];
-
-    if (offering_id) {
-      query += ' AND co.offering_id = ?';
-      params.push(offering_id);
-    }
-
-    query += ' ORDER BY p.last_name, p.first_name';
-
-    const [students] = await pool.execute(query, params);
-
-    // If competency_id is provided, fetch progress for that competency
-    if (competency_id && students.length > 0) {
-      for (let student of students) {
-        const [progress] = await pool.execute(`
-          SELECT sp.score, sp.max_score, sp.percentage_score, sp.passed, sp.attempt_number
-          FROM student_progress sp
-          JOIN student_enrollments se ON sp.enrollment_id = se.enrollment_id
-          WHERE se.student_id = ? AND se.offering_id = ? AND sp.competency_id = ?
-          ORDER BY sp.attempt_date DESC
-          LIMIT 1
-        `, [student.student_id, student.offering_id, competency_id]);
-
-        student.competency_progress = progress[0] || null;
-      }
-    }
-
-    res.json(students);
-  } catch (error) {
-    console.error('Course students fetch error:', error);
-    res.status(500).json({ error: 'Failed to fetch course students' });
-  }
-});
 
 app.get('/api/course-offerings', authenticateToken, async (req, res) => {
   try {
@@ -3878,302 +2596,6 @@ app.get('/api/competencies', authenticateToken, async (req, res) => {
   }
 });
 
-app.post('/api/competencies', [
-  authenticateToken,
-  authorize(['admin']),
-  body('competency_code').trim().isLength({ min: 1, max: 20 }),
-  body('competency_name').trim().isLength({ min: 1, max: 100 }),
-  body('competency_description').optional().trim(),
-  body('competency_type_id').isInt({ min: 1 }),
-  body('weight').optional().isFloat({ min: 0 }),
-  body('passing_score').optional().isFloat({ min: 0, max: 100 })
-], validateInput, async (req, res) => {
-  const connection = await pool.getConnection();
-  
-  try {
-    const {
-      competency_code,
-      competency_name,
-      competency_description,
-      competency_type_id,
-      weight = 1.00,
-      passing_score
-    } = req.body;
-
-    // Check if competency code already exists
-    const [existingCompetency] = await connection.execute(
-      'SELECT competency_id FROM competencies WHERE competency_code = ?',
-      [competency_code]
-    );
-
-    if (existingCompetency.length > 0) {
-      return res.status(409).json({ error: 'Competency code already exists' });
-    }
-
-    // Get passing score from competency type if not provided
-    let finalPassingScore = passing_score;
-    if (!finalPassingScore) {
-      const [typeData] = await connection.execute(
-        'SELECT passing_score FROM competency_types WHERE competency_type_id = ?',
-        [competency_type_id]
-      );
-      finalPassingScore = typeData[0]?.passing_score || 70.00;
-    }
-
-    // Insert competency
-    const [result] = await connection.execute(`
-      INSERT INTO competencies (
-        competency_type_id, competency_code, competency_name,
-        competency_description, weight, is_active
-      ) VALUES (?, ?, ?, ?, ?, TRUE)
-    `, [
-      competency_type_id,
-      competency_code,
-      competency_name,
-      competency_description || null,
-      weight
-    ]);
-
-    // Fetch the created competency with type info
-    const [newCompetency] = await connection.execute(`
-      SELECT c.*, ct.type_name as competency_type, ct.passing_score
-      FROM competencies c
-      JOIN competency_types ct ON c.competency_type_id = ct.competency_type_id
-      WHERE c.competency_id = ?
-    `, [result.insertId]);
-
-    res.status(201).json({
-      message: 'Competency created successfully',
-      competency: newCompetency[0]
-    });
-
-  } catch (error) {
-    console.error('Competency creation error:', error);
-    res.status(500).json({ 
-      error: 'Failed to create competency',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  } finally {
-    connection.release();
-  }
-});
-
-// PUT /api/competencies/:competencyId - Update competency
-app.put('/api/competencies/:competencyId', [
-  authenticateToken,
-  authorize(['admin']),
-  body('competency_code').optional().trim().isLength({ min: 1, max: 20 }),
-  body('competency_name').optional().trim().isLength({ min: 1, max: 100 }),
-  body('competency_description').optional().trim(),
-  body('competency_type_id').optional().isInt({ min: 1 }),
-  body('weight').optional().isFloat({ min: 0 })
-], validateInput, async (req, res) => {
-  const connection = await pool.getConnection();
-  
-  try {
-    const { competencyId } = req.params;
-    const {
-      competency_code,
-      competency_name,
-      competency_description,
-      competency_type_id,
-      weight
-    } = req.body;
-
-    // Check if competency exists
-    const [existing] = await connection.execute(
-      'SELECT competency_id FROM competencies WHERE competency_id = ?',
-      [competencyId]
-    );
-
-    if (existing.length === 0) {
-      return res.status(404).json({ error: 'Competency not found' });
-    }
-
-    // If updating code, check for duplicates
-    if (competency_code) {
-      const [duplicateCode] = await connection.execute(
-        'SELECT competency_id FROM competencies WHERE competency_code = ? AND competency_id != ?',
-        [competency_code, competencyId]
-      );
-
-      if (duplicateCode.length > 0) {
-        return res.status(409).json({ error: 'Competency code already exists' });
-      }
-    }
-
-    // Build update query
-    const updateFields = [];
-    const updateValues = [];
-
-    if (competency_code !== undefined) {
-      updateFields.push('competency_code = ?');
-      updateValues.push(competency_code);
-    }
-    if (competency_name !== undefined) {
-      updateFields.push('competency_name = ?');
-      updateValues.push(competency_name);
-    }
-    if (competency_description !== undefined) {
-      updateFields.push('competency_description = ?');
-      updateValues.push(competency_description);
-    }
-    if (competency_type_id !== undefined) {
-      updateFields.push('competency_type_id = ?');
-      updateValues.push(competency_type_id);
-    }
-    if (weight !== undefined) {
-      updateFields.push('weight = ?');
-      updateValues.push(weight);
-    }
-
-    if (updateFields.length > 0) {
-      updateValues.push(competencyId);
-      
-      await connection.execute(`
-        UPDATE competencies 
-        SET ${updateFields.join(', ')}
-        WHERE competency_id = ?
-      `, updateValues);
-    }
-
-    // Fetch updated competency
-    const [updatedCompetency] = await connection.execute(`
-      SELECT c.*, ct.type_name as competency_type, ct.passing_score
-      FROM competencies c
-      JOIN competency_types ct ON c.competency_type_id = ct.competency_type_id
-      WHERE c.competency_id = ?
-    `, [competencyId]);
-
-    res.json({
-      message: 'Competency updated successfully',
-      competency: updatedCompetency[0]
-    });
-
-  } catch (error) {
-    console.error('Competency update error:', error);
-    res.status(500).json({ 
-      error: 'Failed to update competency',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  } finally {
-    connection.release();
-  }
-});
-
-// DELETE /api/competencies/:competencyId - Delete competency
-app.delete('/api/competencies/:competencyId', [
-  authenticateToken,
-  authorize(['admin'])
-], async (req, res) => {
-  const connection = await pool.getConnection();
-  
-  try {
-    await connection.beginTransaction();
-    
-    const { competencyId } = req.params;
-
-    // Check if competency is in use
-    const [usageCheck] = await connection.execute(`
-      SELECT COUNT(*) as count 
-      FROM course_competencies 
-      WHERE competency_id = ?
-    `, [competencyId]);
-
-    if (usageCheck[0].count > 0) {
-      await connection.rollback();
-      return res.status(400).json({ 
-        error: 'Cannot delete competency that is assigned to courses' 
-      });
-    }
-
-    // Check for student progress
-    const [progressCheck] = await connection.execute(`
-      SELECT COUNT(*) as count 
-      FROM student_progress 
-      WHERE competency_id = ?
-    `, [competencyId]);
-
-    if (progressCheck[0].count > 0) {
-      await connection.rollback();
-      return res.status(400).json({ 
-        error: 'Cannot delete competency that has student progress records' 
-      });
-    }
-
-    // Soft delete by setting is_active to false
-    await connection.execute(
-      'UPDATE competencies SET is_active = FALSE WHERE competency_id = ?',
-      [competencyId]
-    );
-
-    await connection.commit();
-    
-    res.json({ message: 'Competency deleted successfully' });
-
-  } catch (error) {
-    await connection.rollback();
-    console.error('Competency deletion error:', error);
-    res.status(500).json({ 
-      error: 'Failed to delete competency',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  } finally {
-    connection.release();
-  }
-});
-
-// Enhanced endpoint to get students with competency progress
-app.get('/api/courses/:courseId/students', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
-  try {
-    const { courseId } = req.params;
-    const { offering_id, competency_id } = req.query;
-
-    let query = `
-      SELECT DISTINCT s.student_id, p.first_name, p.last_name, p.email,
-             se.enrollment_status, se.completion_percentage, se.attendance_percentage,
-             co.batch_identifier, co.offering_id
-      FROM student_enrollments se
-      JOIN students s ON se.student_id = s.student_id
-      JOIN persons p ON s.person_id = p.person_id
-      JOIN course_offerings co ON se.offering_id = co.offering_id
-      WHERE co.course_id = ?
-    `;
-    const params = [courseId];
-
-    if (offering_id) {
-      query += ' AND co.offering_id = ?';
-      params.push(offering_id);
-    }
-
-    query += ' ORDER BY p.last_name, p.first_name';
-
-    const [students] = await pool.execute(query, params);
-
-    // If competency_id is provided, fetch progress for that competency
-    if (competency_id && students.length > 0) {
-      for (let student of students) {
-        const [progress] = await pool.execute(`
-          SELECT sp.score, sp.max_score, sp.percentage_score, sp.passed, 
-                 sp.attempt_number, sp.competency_id
-          FROM student_progress sp
-          JOIN student_enrollments se ON sp.enrollment_id = se.enrollment_id
-          WHERE se.student_id = ? AND se.offering_id = ? AND sp.competency_id = ?
-          ORDER BY sp.attempt_date DESC
-          LIMIT 1
-        `, [student.student_id, student.offering_id, competency_id]);
-
-        student.competency_progress = progress[0] || null;
-      }
-    }
-
-    res.json(students);
-  } catch (error) {
-    console.error('Course students fetch error:', error);
-    res.status(500).json({ error: 'Failed to fetch course students' });
-  }
-});
-
 // ============================================================================
 // USER PROFILE ROUTES (Fixed)
 // ============================================================================
@@ -4181,7 +2603,7 @@ app.get('/api/courses/:courseId/students', authenticateToken, authorize(['admin'
 app.get('/api/profile', authenticateToken, async (req, res) => {
   try {
     const [userProfile] = await pool.execute(`
-      SELECT a.account_id, a.account_status,
+      SELECT a.account_id, a.username, a.account_status,
              p.first_name, p.middle_name, p.last_name, p.birth_date, p.birth_place, p.gender,
              r.role_name, r.permissions
       FROM accounts a
@@ -4608,265 +3030,6 @@ app.get('/api/trading-levels', authenticateToken, async (req, res) => {
   }
 });
 
-// Enhanced payment upload with receipt
-app.post(
-  "/api/payments/upload-with-receipt",
-  [
-    authenticateToken,
-    authorize(["admin", "staff"]),
-    upload.single("receipt"),
-    body("account_id").isInt(),
-    body("student_id").isString(),
-    body("method_id").isInt(),
-    body("payment_amount").isFloat({ min: 0.01 }),
-    body("reference_number").optional().trim().isLength({ max: 50 }),
-    body("notes").optional().trim().isString(),
-  ],
-  validateInput,
-  async (req, res) => {
-    const connection = await pool.getConnection();
-
-    try {
-      await connection.beginTransaction();
-
-      const {
-        account_id,
-        student_id,
-        method_id,
-        payment_amount,
-        reference_number,
-        notes,
-      } = req.body;
-      const receiptPath = req.file ? req.file.path.replace(/\\/g, "/") : null;
-
-      // Check if account_id exists
-      const [accountRows] = await connection.execute(
-        "SELECT account_id FROM student_accounts WHERE account_id = ?",
-        [account_id]
-      );
-
-      if (accountRows.length === 0) {
-        // Insert new student_accounts row — you need to decide default values!
-        await connection.execute(
-          `INSERT INTO student_accounts 
-           (account_id, student_id, offering_id, total_due, amount_paid, balance, scheme_id, account_status, due_date, created_at, updated_at) 
-           VALUES (?, ?, '1', ?, ?, ?, ?, ?, CURRENT_DATE, NOW(), NOW())`,
-          [
-            account_id, // Use given account_id
-            student_id, // student_id (you need to supply or leave null)
-            payment_amount, // total_due = initial payment amount
-            0, // amount_paid = 0 before this payment
-            payment_amount, // balance = total_due - 0
-            null, // scheme_id
-            "active", // account_status
-          ]
-        );
-      }
-
-      // Get staff_id
-      const [staffRows] = await connection.execute(
-        "SELECT staff_id FROM staff WHERE account_id = ?",
-        [req.user.accountId]
-      );
-      const staffId = staffRows[0]?.staff_id || null;
-
-      // Get processing fee %
-      const [methodRows] = await connection.execute(
-        "SELECT processing_fee_percentage FROM payment_methods WHERE method_id = ?",
-        [method_id]
-      );
-
-      const processingFeePercentage =
-        methodRows[0]?.processing_fee_percentage || 0;
-      const processing_fee = (payment_amount * processingFeePercentage) / 100;
-
-      // Insert payment
-      const [paymentResult] = await connection.execute(
-        `
-        INSERT INTO payments (
-          account_id, method_id, payment_amount, processing_fee,
-          reference_number, payment_status, processed_by, notes,
-          payment_date, receipt_path
-        ) VALUES (?, ?, ?, ?, ?, 'confirmed', ?, ?, NOW(), ?)
-        `,
-        [
-          account_id,
-          method_id,
-          payment_amount,
-          processing_fee,
-          reference_number || null,
-          staffId,
-          notes || null,
-          receiptPath,
-        ]
-      );
-
-      // Insert payment
-      await connection.execute(
-        `
-  INSERT INTO payments (
-    account_id, method_id, payment_amount, processing_fee, 
-    reference_number, payment_status, processed_by, notes, 
-    payment_date, receipt_path
-  ) VALUES (?, ?, ?, ?, ?, 'confirmed', ?, ?, NOW(), ?)
-`,
-        [
-          account_id !== undefined ? account_id : null,
-          method_id !== undefined ? method_id : null,
-          payment_amount !== undefined ? payment_amount : null,
-          processing_fee !== undefined ? processing_fee : null,
-          reference_number || null,
-          staffId !== undefined ? staffId : null,
-          notes || null,
-          receiptPath || null,
-        ]
-      );
-
-      // Commit first transaction
-      await connection.commit();
-
-      // Start a new one
-      await connection.beginTransaction();
-
-      // Update student_accounts
-      //       await connection.execute(
-      //         `
-      //   UPDATE student_accounts
-      //   SET amount_paid = amount_paid + ?,
-      //       balance = total_due - (amount_paid + ?),
-      //       last_payment_date = CURRENT_DATE,
-      //       updated_at = NOW()
-      //   WHERE account_id = ?
-      // `,
-      //         [payment_amount, payment_amount, account_id]
-      //       );
-
-      await connection.commit();
-
-      res.status(201).json({
-        message: "Payment processed successfully",
-        payment_id: paymentResult.insertId,
-        receipt_uploaded: !!req.file,
-      });
-    } catch (error) {
-      await connection.rollback();
-      console.error("Payment creation error:", error);
-
-      if (req.file) {
-        try {
-          fs.unlinkSync(req.file.path);
-        } catch (fsError) {
-          console.error("Failed to clean up uploaded file:", fsError);
-        }
-      }
-
-      res.status(500).json({ error: "Failed to process payment" });
-    } finally {
-      connection.release();
-    }
-  }
-);
-
-
-
-
-
-
-// GET /api/payment-methods/active - Get active payment methods
-app.get("/api/payment-methods/active", authenticateToken, async (req, res) => {
-  try {
-    const [methods] = await pool.execute(`
-      SELECT method_id, method_name, method_type, processing_fee_percentage, method_description
-      FROM payment_methods
-      WHERE is_active = TRUE
-      ORDER BY method_name
-    `);
-    res.json(methods);
-  } catch (error) {
-    console.error("Active payment methods fetch error:", error);
-    res.status(500).json({ error: "Failed to fetch active payment methods" });
-  }
-});
-
-
-
-
-app.get(
-  "/api/students/:studentId/account-balance",
-  authenticateToken,
-  authorize(["admin", "staff", "student"]),
-  authorizeStudentAccess,
-  async (req, res) => {
-    try {
-      const { studentId } = req.params;
-
-      const [balanceInfo] = await pool.execute(
-        `
-      SELECT 
-        sa.account_id,
-        sa.total_due,
-        sa.amount_paid,
-        sa.balance,
-        sa.due_date,
-        c.course_name,
-        co.batch_identifier,
-        COUNT(p.payment_id) as payment_count,
-        MAX(p.payment_date) as last_payment_date
-      FROM student_accounts sa
-      JOIN course_offerings co ON sa.offering_id = co.offering_id
-      JOIN courses c ON co.course_id = c.course_id
-      LEFT JOIN payments p ON sa.account_id = p.account_id
-      WHERE sa.student_id = ?
-      GROUP BY sa.account_id
-      ORDER BY sa.created_at DESC
-    `,
-        [studentId]
-      );
-
-      res.json(balanceInfo);
-    } catch (error) {
-      console.error("Student account balance fetch error:", error);
-      res
-        .status(500)
-        .json({ error: "Failed to fetch student account balance" });
-    }
-  }
-);
-
-app.get(
-  "/api/students/:studentId/payments",
-  authenticateToken,
-  authorize(["admin", "staff", "student"]),
-  authorizeStudentAccess,
-  async (req, res) => {
-    try {
-      const { studentId } = req.params;
-
-      const [payments] = await pool.execute(
-        `
-      SELECT p.payment_id, p.payment_amount, p.processing_fee, p.payment_date, p.payment_status,
-             p.reference_number, pm.method_name,
-             sa.total_due, sa.balance,
-             c.course_name, co.batch_identifier
-      FROM payments p
-      JOIN payment_methods pm ON p.method_id = pm.method_id
-      JOIN student_accounts sa ON p.account_id = sa.account_id
-      JOIN course_offerings co ON sa.offering_id = co.offering_id
-      JOIN courses c ON co.course_id = c.course_id
-      WHERE sa.student_id = ?
-      ORDER BY p.payment_date DESC
-    `,
-        [studentId]
-      );
-
-      res.json(payments);
-    } catch (error) {
-      console.error("Student payments fetch error:", error);
-      res.status(500).json({ error: "Failed to fetch student payments" });
-    }
-  }
-);
-
 app.get('/api/payment-methods', authenticateToken, async (req, res) => {
   try {
     const [methods] = await pool.execute(`
@@ -4921,7 +3084,7 @@ app.get('/api/competencies', authenticateToken, async (req, res) => {
 app.get('/api/profile', authenticateToken, async (req, res) => {
   try {
     const [userProfile] = await pool.execute(`
-      SELECT a.account_id, a.account_status,
+      SELECT a.account_id, a.username, a.account_status,
              p.first_name, p.middle_name, p.last_name, p.birth_date, p.birth_place, p.gender,
              r.role_name, r.permissions
       FROM accounts a
@@ -5023,7 +3186,7 @@ app.put('/api/profile', [
 app.get('/api/admin/accounts', authenticateToken, authorize(['admin']), async (req, res) => {
   try {
     const [accounts] = await pool.execute(`
-      SELECT a.account_id, a.account_status, a.last_login,
+      SELECT a.account_id, a.username, a.account_status, a.last_login,
              p.first_name, p.last_name, r.role_name,
              COALESCE(s.student_id, st.staff_id) as user_identifier
       FROM accounts a
@@ -5033,7 +3196,7 @@ app.get('/api/admin/accounts', authenticateToken, authorize(['admin']), async (r
       LEFT JOIN students s ON a.account_id = s.account_id
       LEFT JOIN persons p ON a.account_id = p.person_id
       WHERE ar.is_active = TRUE
-      ORDER BY a.
+      ORDER BY a.username
     `);
 
     res.json(accounts);
@@ -5073,7 +3236,7 @@ app.post('/api/admin/staff', [
   body('birth_place').trim().isLength({ min: 1, max: 100 }).escape(),
   body('email').isEmail().normalizeEmail(),
   body('education').trim().isLength({ min: 1, max: 100 }).escape(),
-  body('').trim().isLength({ min: 3, max: 50 }).escape(),
+  body('username').trim().isLength({ min: 3, max: 50 }).escape(),
   body('password').isLength({ min: 6 }),
   body('role').isIn(['staff', 'admin'])
 ], validateInput, async (req, res) => {
@@ -5082,7 +3245,7 @@ app.post('/api/admin/staff', [
   try {
     const { 
       first_name, middle_name, last_name, birth_date, birth_place, gender,
-      email, education, phone,password, role, employee_id
+      email, education, phone, username, password, role, employee_id
     } = req.body;
 
     // Use stored procedure for synced creation
@@ -5092,7 +3255,7 @@ app.post('/api/admin/staff', [
     const [result] = await connection.execute(`
       CALL sp_register_user_with_synced_ids(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, @account_id, @result)
     `, [
-      hashedPassword, first_name, middle_name, last_name, 
+      username, hashedPassword, first_name, middle_name, last_name, 
       birth_date, birth_place, gender || 'Other', email, education, 
       phone, null, role
     ]);
@@ -5122,7 +3285,7 @@ app.post('/api/admin/staff', [
     console.error('Staff creation error:', error);
     
     if (error.code === 'ER_DUP_ENTRY') {
-      res.status(409).json({ error: ' already exists' });
+      res.status(409).json({ error: 'Username already exists' });
     } else {
       res.status(500).json({ error: 'Failed to create staff account' });
     }
@@ -5148,6 +3311,7 @@ app.get('/api/admin/staff', authenticateToken, authorize(['admin']), async (req,
         p.email,
         p.education,
         a.account_id,
+        a.username,
         a.account_status,
         a.last_login,
         r.role_name,
@@ -5173,7 +3337,7 @@ app.get('/api/admin/staff', authenticateToken, authorize(['admin']), async (req,
       GROUP BY s.staff_id, s.employee_id, s.hire_date, p.person_id, 
                p.first_name, p.middle_name, p.last_name, p.birth_date, 
                p.birth_place, p.gender, p.email, p.education, 
-               a.account_id, a.account_status, a.last_login, r.role_name
+               a.account_id, a.username, a.account_status, a.last_login, r.role_name
       ORDER BY p.last_name, p.first_name
     `);
 
@@ -5193,6 +3357,7 @@ app.get('/api/admin/staff', authenticateToken, authorize(['admin']), async (req,
       email: staffMember.email,
       education: staffMember.education,
       account_id: staffMember.account_id,
+      username: staffMember.username,
       account_status: staffMember.account_status,
       last_login: staffMember.last_login,
       role_name: staffMember.role_name, // This is what the component expects
@@ -5209,335 +3374,6 @@ app.get('/api/admin/staff', authenticateToken, authorize(['admin']), async (req,
       success: false,
       error: 'Failed to fetch staff data' 
     });
-  }
-});
-
-app.get('/api/admin/verify-relationships', [
-  authenticateToken,
-  authorize(['admin'])
-], async (req, res) => {
-  const connection = await pool.getConnection();
-  
-  try {
-    const issues = [];
-    const repairs = [];
-
-    // Check for students without trading levels
-    const [studentsWithoutLevels] = await connection.execute(`
-      SELECT s.student_id, p.first_name, p.last_name
-      FROM students s
-      JOIN persons p ON s.person_id = p.person_id
-      LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
-      WHERE stl.student_id IS NULL
-    `);
-
-    if (studentsWithoutLevels.length > 0) {
-      issues.push({
-        type: 'missing_trading_level',
-        count: studentsWithoutLevels.length,
-        details: studentsWithoutLevels
-      });
-
-      // Fix missing trading levels
-      for (const student of studentsWithoutLevels) {
-        await connection.execute(`
-          INSERT INTO student_trading_levels (student_id, level_id, is_current)
-          VALUES (?, 1, TRUE)
-        `, [student.student_id]);
-        
-        repairs.push({
-          type: 'trading_level_added',
-          student_id: student.student_id,
-          level_id: 1
-        });
-      }
-    }
-
-    // Check for students without learning preferences
-    const [studentsWithoutPreferences] = await connection.execute(`
-      SELECT s.student_id, p.first_name, p.last_name
-      FROM students s
-      JOIN persons p ON s.person_id = p.person_id
-      LEFT JOIN learning_preferences lp ON s.student_id = lp.student_id
-      WHERE lp.preference_id IS NULL
-    `);
-
-    if (studentsWithoutPreferences.length > 0) {
-      issues.push({
-        type: 'missing_learning_preferences',
-        count: studentsWithoutPreferences.length,
-        details: studentsWithoutPreferences
-      });
-
-      // Fix missing learning preferences
-      for (const student of studentsWithoutPreferences) {
-        await connection.execute(`
-          INSERT INTO learning_preferences (student_id, learning_style, delivery_preference, preferred_schedule)
-          VALUES (?, 'mixed', 'hybrid', 'flexible')
-        `, [student.student_id]);
-        
-        repairs.push({
-          type: 'learning_preferences_added',
-          student_id: student.student_id
-        });
-      }
-    }
-
-    // Check for students without contact info
-    const [studentsWithoutContact] = await connection.execute(`
-      SELECT s.student_id, p.first_name, p.last_name, p.email
-      FROM students s
-      JOIN persons p ON s.person_id = p.person_id
-      LEFT JOIN contact_info ci ON s.student_id = ci.student_id AND ci.contact_type = 'email'
-      WHERE ci.contact_id IS NULL
-    `);
-
-    if (studentsWithoutContact.length > 0) {
-      issues.push({
-        type: 'missing_contact_info',
-        count: studentsWithoutContact.length,
-        details: studentsWithoutContact
-      });
-
-      // Fix missing contact info
-      for (const student of studentsWithoutContact) {
-        await connection.execute(`
-          INSERT INTO contact_info (person_id, student_id, contact_type, contact_value, is_primary)
-          VALUES (?, ?, 'email', ?, TRUE)
-        `, [student.person_id, student.student_id, student.email]);
-        
-        repairs.push({
-          type: 'contact_info_added',
-          student_id: student.student_id,
-          contact_type: 'email'
-        });
-      }
-    }
-
-    // Check for students without background records
-    const [studentsWithoutBackground] = await connection.execute(`
-      SELECT s.student_id, p.first_name, p.last_name
-      FROM students s
-      JOIN persons p ON s.person_id = p.person_id
-      LEFT JOIN student_backgrounds sb ON s.student_id = sb.student_id
-      WHERE sb.background_id IS NULL
-    `);
-
-    if (studentsWithoutBackground.length > 0) {
-      issues.push({
-        type: 'missing_background',
-        count: studentsWithoutBackground.length,
-        details: studentsWithoutBackground
-      });
-
-      // Fix missing backgrounds
-      for (const student of studentsWithoutBackground) {
-        await connection.execute(`
-          INSERT INTO student_backgrounds (student_id, education_level, work_experience_years)
-          VALUES (?, 'college', 0)
-        `, [student.student_id]);
-        
-        repairs.push({
-          type: 'background_added',
-          student_id: student.student_id
-        });
-      }
-    }
-
-    // Check for accounts without roles
-    const [accountsWithoutRoles] = await connection.execute(`
-      SELECT a.account_id, p.first_name, p.last_name
-      FROM accounts a
-      JOIN persons p ON a.account_id = p.person_id
-      LEFT JOIN account_roles ar ON a.account_id = ar.account_id
-      WHERE ar.account_id IS NULL
-    `);
-
-    if (accountsWithoutRoles.length > 0) {
-      issues.push({
-        type: 'missing_role_assignment',
-        count: accountsWithoutRoles.length,
-        details: accountsWithoutRoles
-      });
-    }
-
-    res.json({
-      summary: {
-        total_issues: issues.reduce((sum, issue) => sum + issue.count, 0),
-        total_repairs: repairs.length,
-        issues_found: issues.length > 0,
-        repairs_made: repairs.length > 0
-      },
-      issues,
-      repairs
-    });
-
-  } catch (error) {
-    console.error('Relationship verification error:', error);
-    res.status(500).json({ error: 'Failed to verify relationships' });
-  } finally {
-    connection.release();
-  }
-});
-
-// Endpoint to check a specific user's relationships
-app.get('/api/admin/check-user-relationships/:accountId', [
-  authenticateToken,
-  authorize(['admin'])
-], async (req, res) => {
-  const { accountId } = req.params;
-  
-  try {
-    const relationships = {};
-
-    // Check account
-    const [account] = await pool.execute(
-      'SELECT * FROM accounts WHERE account_id = ?',
-      [accountId]
-    );
-    relationships.account = account[0] || null;
-
-    // Check person
-    const [person] = await pool.execute(
-      'SELECT * FROM persons WHERE person_id = ?',
-      [accountId]
-    );
-    relationships.person = person[0] || null;
-
-    // Check role
-    const [role] = await pool.execute(`
-      SELECT ar.*, r.role_name 
-      FROM account_roles ar
-      JOIN roles r ON ar.role_id = r.role_id
-      WHERE ar.account_id = ?
-    `, [accountId]);
-    relationships.role = role[0] || null;
-
-    // If student, check student-specific tables
-    if (relationships.role?.role_name === 'student') {
-      const [student] = await pool.execute(
-        'SELECT * FROM students WHERE account_id = ?',
-        [accountId]
-      );
-      relationships.student = student[0] || null;
-
-      if (relationships.student) {
-        const studentId = relationships.student.student_id;
-
-        // Trading level
-        const [tradingLevel] = await pool.execute(`
-          SELECT stl.*, tl.level_name 
-          FROM student_trading_levels stl
-          JOIN trading_levels tl ON stl.level_id = tl.level_id
-          WHERE stl.student_id = ? AND stl.is_current = TRUE
-        `, [studentId]);
-        relationships.trading_level = tradingLevel[0] || null;
-
-        // Learning preferences
-        const [preferences] = await pool.execute(
-          'SELECT * FROM learning_preferences WHERE student_id = ?',
-          [studentId]
-        );
-        relationships.learning_preferences = preferences[0] || null;
-
-        // Contact info
-        const [contacts] = await pool.execute(
-          'SELECT * FROM contact_info WHERE student_id = ?',
-          [studentId]
-        );
-        relationships.contacts = contacts;
-
-        // Background
-        const [background] = await pool.execute(
-          'SELECT * FROM student_backgrounds WHERE student_id = ?',
-          [studentId]
-        );
-        relationships.background = background[0] || null;
-
-        // Goals
-        const [goals] = await pool.execute(
-          'SELECT * FROM student_goals WHERE student_id = ? AND status = "active"',
-          [studentId]
-        );
-        relationships.goals = goals;
-
-        // Documents
-        const [documents] = await pool.execute(`
-          SELECT sd.*, dt.type_name 
-          FROM student_documents sd
-          JOIN document_types dt ON sd.document_type_id = dt.document_type_id
-          WHERE sd.student_id = ? AND sd.is_current = TRUE
-        `, [studentId]);
-        relationships.documents = documents;
-
-        // Enrollments
-        const [enrollments] = await pool.execute(
-          'SELECT * FROM student_enrollments WHERE student_id = ?',
-          [studentId]
-        );
-        relationships.enrollments = enrollments;
-      }
-    }
-
-    // If staff, check staff-specific tables
-    if (relationships.role?.role_name === 'staff') {
-      const [staff] = await pool.execute(
-        'SELECT * FROM staff WHERE account_id = ?',
-        [accountId]
-      );
-      relationships.staff = staff[0] || null;
-
-      if (relationships.staff) {
-        // Staff positions
-        const [positions] = await pool.execute(`
-          SELECT sp.*, p.position_title 
-          FROM staff_positions sp
-          JOIN positions p ON sp.position_id = p.position_id
-          WHERE sp.staff_id = ?
-        `, [relationships.staff.staff_id]);
-        relationships.positions = positions;
-
-        // Contact info (using employee_id)
-        const [contacts] = await pool.execute(
-          'SELECT * FROM contact_info WHERE student_id = ?',
-          [relationships.staff.employee_id]
-        );
-        relationships.contacts = contacts;
-      }
-    }
-
-    // Activity logs
-    const [activities] = await pool.execute(
-      'SELECT * FROM activity_logs WHERE account_id = ? ORDER BY created_at DESC LIMIT 10',
-      [accountId]
-    );
-    relationships.recent_activities = activities;
-
-    res.json({
-      account_id: accountId,
-      relationships,
-      missing: {
-        account: !relationships.account,
-        person: !relationships.person,
-        role: !relationships.role,
-        student_specific: relationships.role?.role_name === 'student' ? {
-          student_record: !relationships.student,
-          trading_level: !relationships.trading_level,
-          learning_preferences: !relationships.learning_preferences,
-          email_contact: !relationships.contacts?.find(c => c.contact_type === 'email'),
-          background: !relationships.background
-        } : null,
-        staff_specific: relationships.role?.role_name === 'staff' ? {
-          staff_record: !relationships.staff,
-          positions: relationships.positions?.length === 0,
-          email_contact: !relationships.contacts?.find(c => c.contact_type === 'email')
-        } : null
-      }
-    });
-
-  } catch (error) {
-    console.error('User relationship check error:', error);
-    res.status(500).json({ error: 'Failed to check user relationships' });
   }
 });
 
@@ -5843,7 +3679,7 @@ app.post('/api/register', [
   body('gender').isIn(['Male', 'Female', 'Other']),
   body('education').trim().isLength({ min: 1, max: 100 }),
   body('tradingLevel').trim().isLength({ min: 1, max: 50 }),
-  body('').trim().isLength({ min: 3, max: 15 }),
+  body('username').trim().isLength({ min: 3, max: 15 }),
   body('password').isLength({ min: 6 })
 ], validateInput, async (req, res) => {
   const connection = await pool.getConnection();
@@ -5851,7 +3687,7 @@ app.post('/api/register', [
   try {
     const {
       firstName, lastName, email, phoneNumber, dob, address, city, province,
-      gender, education, tradingLevel, device, learningStyle,password
+      gender, education, tradingLevel, device, learningStyle, username, password
     } = req.body;
 
     // Hash password
@@ -5862,7 +3698,7 @@ app.post('/api/register', [
     const [result] = await connection.execute(`
       CALL sp_register_user_with_synced_ids(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, @account_id, @result)
     `, [
-      hashedPassword, firstName, null, lastName, 
+      username, hashedPassword, firstName, null, lastName, 
       dob, city, gender, email, education, 
       phoneNumber, fullAddress, 'student'
     ]);
@@ -5925,7 +3761,7 @@ app.post('/api/register', [
     console.error('Registration error:', error);
     
     if (error.code === 'ER_DUP_ENTRY') {
-      res.status(409).json({ error: ' or email already exists' });
+      res.status(409).json({ error: 'Username or email already exists' });
     } else {
       res.status(500).json({ error: 'Failed to register student' });
     }
@@ -5934,70 +3770,6 @@ app.post('/api/register', [
   }
 });
 
-// GET /api/documents - Fetch all documents with filters
-app.get('/api/documents', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
-  try {
-    const { verification_status, student_search } = req.query;
-    
-    let query = `
-      SELECT 
-        sd.document_id,
-        sd.original_filename,
-        sd.stored_filename,
-        sd.file_path,
-        sd.upload_date,
-        sd.verification_status,
-        sd.verified_date,
-        sd.verification_notes,
-        sd.is_current,
-        dt.type_name as document_type,
-        dt.is_required,
-        dt.category,
-        s.student_id,
-        p.first_name,
-        p.last_name,
-        p.email,
-        staff_p.first_name as verified_by_first_name,
-        staff_p.last_name as verified_by_last_name
-      FROM student_documents sd
-      JOIN document_types dt ON sd.document_type_id = dt.document_type_id
-      JOIN students s ON sd.student_id = s.student_id
-      JOIN persons p ON s.person_id = p.person_id
-      LEFT JOIN staff st ON sd.verified_by = st.staff_id
-      LEFT JOIN persons staff_p ON st.person_id = staff_p.person_id
-      WHERE sd.is_current = TRUE
-    `;
-    
-    const params = [];
-    
-    // Filter by verification status
-    if (verification_status && verification_status !== 'all') {
-      query += ' AND sd.verification_status = ?';
-      params.push(verification_status);
-    }
-    
-    // Search by student name or ID
-    if (student_search) {
-      query += ' AND (p.first_name LIKE ? OR p.last_name LIKE ? OR s.student_id LIKE ?)';
-      const searchParam = `%${student_search}%`;
-      params.push(searchParam, searchParam, searchParam);
-    }
-    
-    query += ' ORDER BY sd.upload_date DESC';
-    
-    console.log('Executing documents query:', query);
-    console.log('With parameters:', params);
-    
-    const [documents] = await pool.execute(query, params);
-    
-    console.log(`Found ${documents.length} documents`);
-    res.json(documents);
-    
-  } catch (error) {
-    console.error('Documents fetch error:', error);
-    res.status(500).json({ error: 'Failed to fetch documents' });
-  }
-});
 
 app.put('/api/documents/:documentId/verify', [
   authenticateToken,
@@ -6236,7 +4008,7 @@ async function startServer() {
     console.log(`🔒 Security: Authentication and authorization enabled`);
     console.log(`🆔 ID Sync: account_id and person_id synchronized`);
     console.log(`📁 File uploads: ${path.resolve('uploads')}`);
-    console.log(`👤 Default admin: email=admin@gmail.com, password=admin123`);
+    console.log(`👤 Default admin: username=admin, password=admin123`);
     console.log('===============================================');
   });
 }
