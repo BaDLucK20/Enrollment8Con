@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Jun 17, 2025 at 05:56 AM
+-- Generation Time: Jun 22, 2025 at 07:56 AM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -162,81 +162,78 @@ CREATE DEFINER=`root`@`localhost` PROCEDURE `sp_process_payment` (IN `p_account_
     END IF;
 END$$
 
-CREATE DEFINER=`root`@`localhost` PROCEDURE `sp_register_user_with_synced_ids` (IN `p_username` VARCHAR(15), IN `p_password_hash` VARCHAR(255), IN `p_first_name` VARCHAR(50), IN `p_middle_name` VARCHAR(50), IN `p_last_name` VARCHAR(50), IN `p_birth_date` DATE, IN `p_birth_place` VARCHAR(100), IN `p_gender` ENUM('Male','Female','Other'), IN `p_email` VARCHAR(100), IN `p_education` VARCHAR(100), IN `p_phone_no` VARCHAR(15), IN `p_address` TEXT, IN `p_role_name` VARCHAR(50), OUT `p_account_id` INT, OUT `p_result` VARCHAR(100))   BEGIN
-    DECLARE v_role_id INT;
-    DECLARE v_person_id INT;
-    DECLARE v_student_id VARCHAR(20);
-    DECLARE EXIT HANDLER FOR SQLEXCEPTION
-    BEGIN
-        ROLLBACK;
-        SET p_result = 'ERROR: Registration failed';
-        SET p_account_id = NULL;
-    END;
+CREATE DEFINER=`root`@`localhost` PROCEDURE `sp_register_user_with_synced_ids` (IN `p_password_hash` VARCHAR(255), IN `p_first_name` VARCHAR(50), IN `p_middle_name` VARCHAR(50), IN `p_last_name` VARCHAR(50), IN `p_birth_date` DATE, IN `p_birth_place` VARCHAR(100), IN `p_gender` ENUM('Male','Female','Other'), IN `p_email` VARCHAR(100), IN `p_education` VARCHAR(100), IN `p_phone_no` VARCHAR(15), IN `p_address` TEXT, IN `p_role_name` VARCHAR(50), OUT `p_account_id` INT, OUT `p_result` VARCHAR(100))   BEGIN
+          DECLARE v_role_id INT;
+          DECLARE v_student_id VARCHAR(20);
+          DECLARE EXIT HANDLER FOR SQLEXCEPTION
+          BEGIN
+            ROLLBACK;
+            SET p_result = 'ERROR: Registration failed';
+            SET p_account_id = NULL;
+          END;
 
-    START TRANSACTION;
+          START TRANSACTION;
 
-    -- Create account first
-    INSERT INTO accounts (username, password_hash, token, account_status)
-    VALUES (p_username, p_password_hash, '', 'active');
-    
-    SET p_account_id = LAST_INSERT_ID();
+          -- Create account first
+          INSERT INTO accounts (password_hash, token, account_status)
+          VALUES ( p_password_hash, '', 'active');
+          
+          SET p_account_id = LAST_INSERT_ID();
 
-    -- Create person with matching ID
-    INSERT INTO persons (person_id, first_name, middle_name, last_name, birth_date, birth_place, gender, email, education)
-    VALUES (p_account_id, p_first_name, p_middle_name, p_last_name, p_birth_date, p_birth_place, p_gender, p_email, p_education);
+          -- Create person with matching ID
+          INSERT INTO persons (person_id, first_name, middle_name, last_name, birth_date, birth_place, gender, email, education)
+          VALUES (p_account_id, p_first_name, p_middle_name, p_last_name, p_birth_date, p_birth_place, p_gender, p_email, p_education);
 
-    -- Get role_id
-    SELECT role_id INTO v_role_id FROM roles WHERE role_name = p_role_name;
-    
-    IF v_role_id IS NULL THEN
-        SET p_result = 'ERROR: Invalid role specified';
-        ROLLBACK;
-    ELSE
-        -- Assign role
-        INSERT INTO account_roles (account_id, role_id) VALUES (p_account_id, v_role_id);
-        
-        -- If student role, create student record
-        IF p_role_name = 'student' THEN
-            SET v_student_id = CONCAT('S', UNIX_TIMESTAMP(NOW()) * 1000, '_', p_account_id);
+          -- Get role_id
+          SELECT role_id INTO v_role_id FROM roles WHERE role_name = p_role_name;
+          
+          IF v_role_id IS NULL THEN
+            SET p_result = 'ERROR: Invalid role specified';
+            ROLLBACK;
+          ELSE
+            -- Assign role
+            INSERT INTO account_roles (account_id, role_id) VALUES (p_account_id, v_role_id);
             
-            INSERT INTO students (student_id, person_id, account_id)
-            VALUES (v_student_id, p_account_id, p_account_id);
-            
-            -- Add contact information
-            IF p_phone_no IS NOT NULL THEN
+            -- If student role, create student record
+            IF p_role_name = 'student' THEN
+              SET v_student_id = CONCAT('S', UNIX_TIMESTAMP(NOW()) * 1000, '_', p_account_id);
+              
+              INSERT INTO students (student_id, person_id, account_id)
+              VALUES (v_student_id, p_account_id, p_account_id);
+              
+              -- Add contact information
+              IF p_phone_no IS NOT NULL THEN
                 INSERT INTO contact_info (person_id, student_id, contact_type, contact_value, is_primary)
                 VALUES (p_account_id, v_student_id, 'phone', p_phone_no, 1);
-            END IF;
-            
-            IF p_address IS NOT NULL THEN
+              END IF;
+              
+              IF p_address IS NOT NULL THEN
                 INSERT INTO contact_info (person_id, student_id, contact_type, contact_value, is_primary)
                 VALUES (p_account_id, v_student_id, 'address', p_address, 1);
+              END IF;
+              
+              INSERT INTO contact_info (person_id, student_id, contact_type, contact_value, is_primary)
+              VALUES (p_account_id, v_student_id, 'email', p_email, 1);
+              
+              -- Set default trading level (Beginner = level_id 1)
+              INSERT INTO student_trading_levels (student_id, level_id, is_current)
+              VALUES (v_student_id, 1, 1);
+              
+              -- Set default learning preferences
+              INSERT INTO learning_preferences (student_id, delivery_preference)
+              VALUES (v_student_id, 'hybrid');
             END IF;
             
-            IF p_email IS NOT NULL THEN
-                INSERT INTO contact_info (person_id, student_id, contact_type, contact_value, is_primary)
-                VALUES (p_account_id, v_student_id, 'email', p_email, 1);
+            -- If staff role, create staff record
+            IF p_role_name = 'staff' THEN
+              INSERT INTO staff (person_id, account_id, employee_id, hire_date, employment_status)
+              VALUES (p_account_id, p_account_id, CONCAT('EMP', UNIX_TIMESTAMP(NOW()) * 1000), CURDATE(), 'active');
             END IF;
             
-            -- Set default trading level (Beginner = level_id 1)
-            INSERT INTO student_trading_levels (student_id, level_id, is_current)
-            VALUES (v_student_id, 1, 1);
-            
-            -- Set default learning preferences
-            INSERT INTO learning_preferences (student_id, delivery_preference)
-            VALUES (v_student_id, 'hybrid');
-        END IF;
-        
-        -- If staff role, create staff record
-        IF p_role_name = 'staff' THEN
-            INSERT INTO staff (person_id, account_id, employee_id, hire_date, employment_status)
-            VALUES (p_account_id, p_account_id, CONCAT('EMP', UNIX_TIMESTAMP(NOW()) * 1000), CURDATE(), 'active');
-        END IF;
-        
-        SET p_result = 'SUCCESS: User registered successfully';
-        COMMIT;
-    END IF;
-END$$
+            SET p_result = 'SUCCESS: User registered successfully';
+            COMMIT;
+          END IF;
+        END$$
 
 DELIMITER ;
 
@@ -248,7 +245,6 @@ DELIMITER ;
 
 CREATE TABLE `accounts` (
   `account_id` int(11) NOT NULL,
-  `username` varchar(15) NOT NULL,
   `password_hash` varchar(255) NOT NULL,
   `token` varchar(255) NOT NULL,
   `account_status` enum('active','inactive','suspended') DEFAULT 'active',
@@ -256,18 +252,87 @@ CREATE TABLE `accounts` (
   `failed_login_attempts` int(11) DEFAULT 0,
   `locked_until` timestamp NULL DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `reset_token` varchar(64) DEFAULT NULL,
+  `reset_token_expiry` datetime DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
 -- Dumping data for table `accounts`
 --
 
-INSERT INTO `accounts` (`account_id`, `username`, `password_hash`, `token`, `account_status`, `last_login`, `failed_login_attempts`, `locked_until`, `created_at`, `updated_at`) VALUES
-(8, 'janesmith85', '$2a$12$W8YsEd6wAAfxevFI.GwcweULIZHV5trLIKzAL2N.q8WWt8/bsPylW', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjgsInVzZXJuYW1lIjoiamFuZXNtaXRoODUiLCJyb2xlIjoic3RhZmYiLCJpYXQiOjE3NDk2OTUyMTEsImV4cCI6MTc0OTc4MTYxMX0.json_S-oZ7wkV8HLjKhAxHNeQIEtdZo6mcJlhfHjNtE', 'active', '2025-06-12 04:37:32', 0, NULL, '2025-06-12 02:26:51', '2025-06-12 04:37:32'),
-(9, 'janesmith20', '$2a$12$6tuEYRIpBwsBE66.1afYCuewfEfU9GVkDoeiO1uPirLQ9B1qdtksu', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjksInVzZXJuYW1lIjoiamFuZXNtaXRoMjAiLCJyb2xlIjoic3RhZmYiLCJpYXQiOjE3NDk3ODY0MTcsImV4cCI6MTc0OTg3MjgxN30.JBJnniKh4rD9IuvnLhHL2zYYx2Ic895nbAr1TbXNYkk', 'active', '2025-06-13 03:46:57', 0, NULL, '2025-06-12 04:40:18', '2025-06-13 03:46:57'),
-(10, 'janesmith21', '$2b$12$oQI.A8XG5pPZtDzyhTQ0J.DSEeNzs7g8qYuG9UP6/ryrb9GLJsf1u', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEwLCJ1c2VybmFtZSI6ImphbmVzbWl0aDIxIiwicm9sZSI6InN0YWZmIiwiaWF0IjoxNzQ5Nzg3MTgxLCJleHAiOjE3NDk4NzM1ODF9.TcZujI-oI3CSWBaTrDsnHEpXY6uBLZXmGoNtqBS_nl8', 'active', NULL, 0, NULL, '2025-06-13 03:59:40', '2025-06-13 03:59:41'),
-(13, 'johndoe123', '$2b$12$WKbua14t/EIfUOhWgG3vA.nEZfZCyC0RONabHe/0ecJFFqMKwbT7O', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEzLCJ1c2VybmFtZSI6ImpvaG5kb2UxMjMiLCJyb2xlIjoic3R1ZGVudCIsImlhdCI6MTc1MDEzMjQzOCwiZXhwIjoxNzUwMjE4ODM4fQ.VtQea8KITM11m9Mj78ndD7x7g-bP0RRtTSV0yYW2WAU', 'active', '2025-06-17 03:53:58', 0, NULL, '2025-06-13 04:50:42', '2025-06-17 03:53:58');
+INSERT INTO `accounts` (`account_id`, `password_hash`, `token`, `account_status`, `last_login`, `failed_login_attempts`, `locked_until`, `created_at`, `updated_at`, `reset_token`, `reset_token_expiry`) VALUES
+(10, '$2b$12$oQI.A8XG5pPZtDzyhTQ0J.DSEeNzs7g8qYuG9UP6/ryrb9GLJsf1u', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEwLCJ1c2VybmFtZSI6ImphbmVzbWl0aDIxIiwicm9sZSI6InN0YWZmIiwiaWF0IjoxNzQ5Nzg3MTgxLCJleHAiOjE3NDk4NzM1ODF9.TcZujI-oI3CSWBaTrDsnHEpXY6uBLZXmGoNtqBS_nl8', 'active', NULL, 0, NULL, '2025-06-13 03:59:40', '2025-06-13 03:59:41', NULL, NULL),
+(13, '$2b$12$WKbua14t/EIfUOhWgG3vA.nEZfZCyC0RONabHe/0ecJFFqMKwbT7O', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEzLCJ1c2VybmFtZSI6ImpvaG5kb2UxMjMiLCJyb2xlIjoic3R1ZGVudCIsImlhdCI6MTc1MDEzMjQzOCwiZXhwIjoxNzUwMjE4ODM4fQ.VtQea8KITM11m9Mj78ndD7x7g-bP0RRtTSV0yYW2WAU', 'active', '2025-06-17 03:53:58', 0, NULL, '2025-06-13 04:50:42', '2025-06-17 03:53:58', NULL, NULL),
+(16, '$2a$10$/F70GT9SOORjVQ.4AAAlVenOR6L/I0RA.Yb58wVYInT2dEShsZUp6', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjE2LCJ1c2VybmFtZSI6ImFkbWluIiwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwMjE2NzUwLCJleHAiOjE3NTAyNDU1NTB9.u3qxvNw84XBsEoEqnkXbm966kQ__Dj2KiU1ot7QWxA8', 'active', '2025-06-18 03:19:10', 1, NULL, '2025-06-17 10:09:13', '2025-06-22 03:58:15', NULL, NULL),
+(39, 'dmin<$2a$10$2Au7F.6TM/C5EjosMG7v3egACwDJhEDrImQs/sMyFuq97CJ.1iGpK\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjM5LCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTAyNDAxNzQsImV4cCI6MTc1MTUzNjE3NH0.EPaECrVKsrJ6f6d40dFZIbWqmekcCIf5yu4-NZCcMTg', 'active', NULL, 1, NULL, '2025-06-18 09:49:34', '2025-06-18 14:06:06', NULL, NULL),
+(40, 'dmin<$2a$10$J9bCwQS275Aroa0McptniOQc0Yf2yRp/zULh2ddn.ngAXzRPCtnv2\0\'\',', '', 'active', '2025-06-18 09:52:24', 0, NULL, '2025-06-18 09:52:24', '2025-06-18 09:56:45', NULL, NULL),
+(41, 'dmin<$2a$10$NIZ4IjzmxVW/WSCf1UrFy.kJ3lxffgOIxATb8Jorn683t8YlE2BvG\0\'\',', '', 'active', '2025-06-18 09:56:48', 0, NULL, '2025-06-18 09:56:48', '2025-06-18 09:58:02', NULL, NULL),
+(42, 'dmin<$2a$10$SByKB4anMwqN0OBUHEj31eJHwIce1gI4t/qxOK0agugTfQ9FqHxh.\0ers', '', 'active', '2025-06-18 09:58:03', 0, NULL, '2025-06-18 09:58:03', '2025-06-18 10:50:23', NULL, NULL),
+(43, '$2a$12$tdom3.AwPWMPBSe82BnbX.ERE0eUYted7tWJAu40aoWH5rTZIcFje', '', 'active', NULL, 0, NULL, '2025-06-18 10:29:05', '2025-06-18 10:29:05', NULL, NULL),
+(44, 'dmin<$2a$10$nIXa5gFcterlGdCcPSsdlun4C2UB/wgib/XkQ5W1Qc1ZnlxbVss7S\0\'\',', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjQ0LCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTAyNDM4MjcsImV4cCI6MTc1MDI3MjYyN30.f6LGZF-eBAeGJ-yuYhbEwKVV3w3EfSPONY6JQRp8tHw', 'active', '2025-06-18 10:50:27', 0, NULL, '2025-06-18 10:50:27', '2025-06-18 10:50:27', NULL, NULL),
+(45, 'dmin<$2a$10$idV/IeavE.ADuidz4a3mG.1J.UFcV7r0vsrTX/7SufHgwVa.94uHa\0\'\',', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjQ1LCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTAyNTUxNDMsImV4cCI6MTc1MDI4Mzk0M30.ZVyhjf5CqHwWueikwyOmw1u1vHEAdK6F3KfQUk3vULs', 'active', NULL, 0, NULL, '2025-06-18 13:59:03', '2025-06-18 13:59:03', NULL, NULL),
+(46, 'dmin<$2a$10$TTmTXBsJzhAWwEPt5oWfT.ev3T2OL11d61FG/nkA2P.F5zhgXlPki\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjQ2LCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTAyNTUxNDUsImV4cCI6MTc1MDI4Mzk0NX0.wcmbwO9DdPG92A-L2pm_mjck1Bde-y9mFaTCfBGMMoE', 'active', NULL, 0, NULL, '2025-06-18 13:59:05', '2025-06-18 13:59:05', NULL, NULL),
+(47, 'dmin<$2a$10$VQnPiYl4nAUKBy1pCgX0LeYmXLotmBMbkKDFecqHCVcYtL4ayazBC\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjQ3LCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTAyNTUxNjAsImV4cCI6MTc1MDI4Mzk2MH0.N7Lrm0_kDaX5usk31ajzlbwIZTcihaGTD4f49SajzIA', 'active', NULL, 0, NULL, '2025-06-18 13:59:20', '2025-06-18 13:59:20', NULL, NULL),
+(48, 'dmin<$2a$10$dMHlUUS6eGnvgeaDOufQce8kvvTeMSeTshQ1RqKpkntspw8L7u6ye\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjQ4LCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTAyNTU0NTIsImV4cCI6MTc1MDI4NDI1Mn0.MMxp0zIEqJXXoCurZaYNVQgIDh0QqmQ82oHnQB8KbWI', 'active', NULL, 0, NULL, '2025-06-18 14:04:12', '2025-06-18 14:04:12', NULL, NULL),
+(49, 'dmin<$2a$10$6Qh79kIBGvLLijNcNP0pjeNSM29TZdl.2IF3p7o0ewe4yBjd1dhDm\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjQ5LCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTAyNTU2ODMsImV4cCI6MTc1MDI4NDQ4M30.GnrDConenEX0V_0cWulB5SpZ4BQn_7ugUs0bdiJf5A4', 'active', NULL, 0, NULL, '2025-06-18 14:08:03', '2025-06-18 14:08:03', NULL, NULL),
+(50, 'dmin<$2a$10$ahsY19btoYPHocwK/H3DoOSQ7u46xBlYa40jRBlf765vlZwwUIYaa\0\'\',', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjUwLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTAyNTU2OTksImV4cCI6MTc1MDI4NDQ5OX0.ap8Jg394bS6GlavklgMYaYm6BJSHiJlALW4ziW9XeTo', 'active', '2025-06-18 14:08:19', 0, NULL, '2025-06-18 14:08:19', '2025-06-18 14:08:19', NULL, NULL),
+(51, 'dmin<$2a$10$Gxu1nKsqOdg65dMsrSMPyuAXjiFmvAcNPbjBpV/exIncnduwiqWVq\0\'\',', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjUxLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTAzMDEyMjAsImV4cCI6MTc1MDMzMDAyMH0.Z3W1_GiHcEU_BkwifNcBjAoeHVUWDNY_h99AHgxfF6E', 'active', '2025-06-19 02:47:00', 0, NULL, '2025-06-19 02:47:00', '2025-06-19 02:47:00', NULL, NULL),
+(52, '$2a$12$OtUJuJ8t6Q3tjX72qcYi3eJVjJRlfC1pdNJaa2/voKvItFRYbqMey', '', 'active', NULL, 0, NULL, '2025-06-19 03:17:25', '2025-06-19 03:17:25', NULL, NULL),
+(53, '$2a$12$UyxBl24ssULjxcI0HUr5q.7OzbCLLEXWFWQvnM9rWQX2TvICmYwk2', '', 'active', NULL, 0, NULL, '2025-06-19 07:45:41', '2025-06-19 07:45:41', NULL, NULL),
+(54, '$2a$12$nvgEXiB2dIvWWXVBTYA8se/zpGcm4Fp9ek2gzIkpkHI8NUl0rH/0S', '', 'active', NULL, 0, NULL, '2025-06-19 10:11:52', '2025-06-19 10:11:52', NULL, NULL),
+(58, 'dmin<$2a$10$RshJWnCmmEjKIlgGK/StOeKkBFzTvr8eCI1Gujlg1i0T0UolFCYJm\0\'\',', '', 'active', '2025-06-19 11:25:33', 0, NULL, '2025-06-19 11:25:33', '2025-06-19 11:33:58', NULL, NULL),
+(59, 'dmin<$2a$10$0sicBwCDgFtRZYh95o/9Pev/.1BhyngjC53j5ilKmO2T93PAaY84O\0\'\',', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjU5LCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTAzMzI4MzksImV4cCI6MTc1MDM2MTYzOX0.0tFvkuz7YVq1KbPPAcqce4gSjIcew8b2PiqrmWoD4YA', 'active', '2025-06-19 11:33:59', 0, NULL, '2025-06-19 11:33:59', '2025-06-19 11:33:59', NULL, NULL),
+(60, '$2a$10$v6PM8/QntleyNJ52rc4z2uoKWWcaUVwXxbbSliE0TCqM7wjpiXk3W', '', 'active', NULL, 0, NULL, '2025-06-19 11:42:16', '2025-06-19 11:42:16', NULL, NULL),
+(61, 'dmin<$2a$10$ESIYMypHmk/M8YFPLV28xOJ6LMNJX3dhjL5ohBHpxcRgrj2M2ygGy\0\'\',', '', 'active', '2025-06-19 14:41:40', 0, NULL, '2025-06-19 14:41:39', '2025-06-19 14:45:06', NULL, NULL),
+(62, 'dmin<$2a$10$O8mug9aKZJ3waggAq7TvG.CE5.puu4s/663YU5b4sSbGdVgeahBpK\0\'\',', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjYyLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTA0Nzc5MjksImV4cCI6MTc1MDUwNjcyOX0.2W8GcA8uVrMqf8FBID9Xc8PeEI-lFaiwLbcACKnM9CI', 'active', '2025-06-21 03:52:10', 0, NULL, '2025-06-21 03:52:09', '2025-06-21 03:52:10', NULL, NULL),
+(63, 'dmin<$2a$10$nhqOmaSRdun6hzB5uphmZ.oGWzgfB3HOYRfmz7f1V0.ssVvrbdDf6\0\'\',', '', 'active', '2025-06-21 07:45:07', 0, NULL, '2025-06-21 07:45:06', '2025-06-21 08:26:51', NULL, NULL),
+(64, 'dmin<$2a$10$Gyn7LDvDYQjhnznMCOS9Oefhk5P.ixK.zezjhZvfD9MZYrFrXcZmm\0\'\',', '', 'active', '2025-06-21 08:28:25', 0, NULL, '2025-06-21 08:28:25', '2025-06-21 08:39:32', NULL, NULL),
+(69, 'dmin<$2a$10$CCwaq5AwG2cT180Aww2sLebKwiFUcJ/JKHCOLPKJR4Hl.s08lGSNO\0\'\',', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjY5LCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTA0OTUxNzQsImV4cCI6MTc1MDUyMzk3NH0.AQKUhIj21k3BtnYyUNlmo2nfuCOng3rMkdwgIqYOH2E', 'active', '2025-06-21 08:39:34', 0, NULL, '2025-06-21 08:39:34', '2025-06-21 08:39:34', NULL, NULL),
+(85, '$2a$10$wowLsMtuyvoQs2M3Z2tVRuhUgdnjS6wcNUQKSsQqbnc0qrXf.wG5K', '', 'active', NULL, 0, NULL, '2025-06-21 09:06:04', '2025-06-21 09:06:04', NULL, NULL),
+(88, '$2a$10$28LwhcNOFfZEwSY5WmpRFeevxhrKYTs3DfntLbuVR8puvjPyrsPzy', '', 'active', NULL, 0, NULL, '2025-06-21 09:10:42', '2025-06-21 09:10:42', NULL, NULL),
+(89, 'dmin<$2a$10$L/ATbjjvaOK/P2XWmxaS2e.zFEUiTUlKw/0qqB6pS/a2/MLvAgs2q\0\'\',', '', 'active', '2025-06-22 03:25:38', 0, NULL, '2025-06-22 03:25:38', '2025-06-22 03:52:13', NULL, NULL),
+(90, 'dmin<$2a$10$qHavUF7ik1QYwUeOIUNiF.vcnzy8kX597IiNtyaQYe8LQV3wQbnda\0\'\',', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjkwLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTA1NjQ3MDksImV4cCI6MTc1MDU5MzUwOX0.0WbWab6j-gNPcU3JqmMBGtucZPs1-vZt8hLaD_eH5ko', 'active', '2025-06-22 03:58:29', 0, NULL, '2025-06-22 03:58:29', '2025-06-22 03:58:29', NULL, NULL),
+(91, 'dmin<$2a$10$qQgDu1DXUyLAWEsN4FbqrO7iFeog0MKNiX1HTAPSYG5DFdRFyUZGO\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjkxLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTA1NjQ3MTIsImV4cCI6MTc1MDU5MzUxMn0.NJwTy5f6g4rMcXFPuALk-sAEUvD-0oJc7-uQjzae_gI', 'active', '2025-06-22 03:58:32', 0, NULL, '2025-06-22 03:58:32', '2025-06-22 03:58:32', NULL, NULL),
+(92, 'dmin<$2a$10$3/Wfl7jk.gdTjpEh0M7kDunKbXscaCOlPstaMsrUHO6EbXtOBfkhC\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjkyLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTA1NjQ3MTMsImV4cCI6MTc1MDU5MzUxM30.NoypQtZy3MlkeFulfRSVOm9R4lSfDjG0SNBMvT9UwOU', 'active', '2025-06-22 03:58:33', 0, NULL, '2025-06-22 03:58:33', '2025-06-22 03:58:33', NULL, NULL),
+(93, 'dmin<$2a$10$mLenbRyV485XZHTswsPCO.op8P9QCyzBDUkTWv27Rgy2u6BBZF.iK\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjkzLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTA1NjQ3MTMsImV4cCI6MTc1MDU5MzUxM30.y2OtVQX5NrExRiOIA5hR-GYOUIydGPsLNtE83DaDOAc', 'active', '2025-06-22 03:58:33', 0, NULL, '2025-06-22 03:58:33', '2025-06-22 03:58:33', NULL, NULL),
+(94, 'dmin<$2a$10$H9zGWW9EFpUIK0K3Z91poOsGray7y6U7iN4ZcezOWAOZV/vNzGemW\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjk0LCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTA1NjQ3MTMsImV4cCI6MTc1MDU5MzUxM30.G1OIisE4vK_zR8wgnOBJbP1R2LAfRN_gTJf12gsN-Kg', 'active', '2025-06-22 03:58:33', 0, NULL, '2025-06-22 03:58:33', '2025-06-22 03:58:33', NULL, NULL),
+(95, 'dmin<$2a$10$8TsQHRePIw9zuxzZR5fxWORMn4HvXwUDfUkbk9pwVChzCA9eXwMWa\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjk1LCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTA1NjQ3MTQsImV4cCI6MTc1MDU5MzUxNH0.zYh94pxJZtmMRUT07r7URQi4kCRBT_JCXmA306Fri0Y', 'active', '2025-06-22 03:58:34', 0, NULL, '2025-06-22 03:58:34', '2025-06-22 03:58:34', NULL, NULL),
+(96, 'dmin<$2a$10$V7wL1r.C3H6LVzQTHBhW6e7bR8RPnKrHjyyGajFlyyh.OGJ1bGTr6\0\'\',', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjk2LCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTA1NjQ3MjMsImV4cCI6MTc1MDU5MzUyM30.SbMS-LBurcgwmr5pYHSzq9M0eNZmgcDrI4TIfNUyhUM', 'active', '2025-06-22 03:58:43', 0, NULL, '2025-06-22 03:58:43', '2025-06-22 03:58:43', NULL, NULL),
+(97, 'dmin<$2a$10$gHgo3eCQ69jiXDuYENLO4OOFu9jlVHDhBZ85..fv5yE5CQoUX5QZq\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjk3LCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTA1NjQ3MzAsImV4cCI6MTc1MDU5MzUzMH0.0rTv3z4V0BvqNyDosEKODOvJ7sWUURHeXHUAeLoTBJM', 'active', '2025-06-22 03:58:50', 0, NULL, '2025-06-22 03:58:50', '2025-06-22 03:58:50', NULL, NULL),
+(98, 'dmin<$2a$10$y3E8ODOQPD/6mJDBue/S7uxAp7Lt4ZhPePYyd0/Pek8rDpemmei2K\0ers', '', 'active', '2025-06-22 03:58:52', 0, NULL, '2025-06-22 03:58:52', '2025-06-22 04:00:29', NULL, NULL),
+(99, 'dmin<$2a$10$Yq1Zk3qvLpNn8G4BjoXare3M64jD3MfV6kulLuR8.SZxQ4Vf91MOi\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjk5LCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTA1NjQ5MzUsImV4cCI6MTc1MDU5MzczNX0.44clTvdZYLSXITA7EGs8mCs9YYU5rMDr6Bbq9jlw5xY', 'active', '2025-06-22 04:02:15', 0, NULL, '2025-06-22 04:02:15', '2025-06-22 04:02:15', NULL, NULL),
+(100, 'dmin<$2a$10$96fk8MbqrPJUc6QVIJvSaO1hdtiTiX90XC2/2pu9/7TrP1BfA74E6\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEwMCwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY0OTM4LCJleHAiOjE3NTA1OTM3Mzh9.cBrAm2DF4Qfjqc9fpq1kUmRSwIOzfQf9i5TZ1axZO-8', 'active', '2025-06-22 04:02:18', 0, NULL, '2025-06-22 04:02:18', '2025-06-22 04:02:18', NULL, NULL),
+(101, 'dmin<$2a$10$chukkENO18ise9CSZEAW/.PN5Za7IAvUCTuzOJZn5kjLfNKniolZS\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEwMSwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY0OTY2LCJleHAiOjE3NTA1OTM3NjZ9.ucUjDeBDwEni6LyTkc2eCJ73jw0QmSGd1m_ASUpae4w', 'active', '2025-06-22 04:02:46', 0, NULL, '2025-06-22 04:02:46', '2025-06-22 04:02:46', NULL, NULL),
+(102, 'dmin<$2a$10$YF48swvh3PoKfZywge498upa.j/.q9vnSj2aKnLEUVeInkQ3JfQrK\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEwMiwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY0OTY2LCJleHAiOjE3NTA1OTM3NjZ9.iTqYGgzDp5Zy1GuekiApRPHrYwMy0IB86c4FvtSTr5s', 'active', '2025-06-22 04:02:46', 0, NULL, '2025-06-22 04:02:46', '2025-06-22 04:02:46', NULL, NULL),
+(103, 'dmin<$2a$10$rTjDaE2YWLo.0jvMm6k9jeRkFLCn0FnV4.kS0R5YNswQh0A3bS8wm\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEwMywicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY0OTY3LCJleHAiOjE3NTA1OTM3Njd9.1vye0hj9KR4b49ixECtE_-SaGKcKKk-Puy98FyWAymc', 'active', '2025-06-22 04:02:47', 0, NULL, '2025-06-22 04:02:47', '2025-06-22 04:02:47', NULL, NULL),
+(104, 'dmin<$2a$10$389hGud3s0JCT25.efpJwuk6IixgD0gz/oh.ilRZXwHhFl5fC/FOe\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEwNCwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY0OTc0LCJleHAiOjE3NTA1OTM3NzR9.Xly_5_KYbO3va6IY1wZF7pxsZVb9PAhvNMgkEjChA8w', 'active', '2025-06-22 04:02:54', 0, NULL, '2025-06-22 04:02:54', '2025-06-22 04:02:54', NULL, NULL),
+(105, 'dmin<$2a$10$8F.Yl./2.Dw9Y.2qGP9GOemEpuUH.267W.UgmkAewQJu6AkGQDKsy\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEwNSwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY0OTg1LCJleHAiOjE3NTA1OTM3ODV9.fGRjnXab2GvhkVJo4ezPtkh1AJq8gtAh0LoLyQdfB0M', 'active', '2025-06-22 04:03:05', 0, NULL, '2025-06-22 04:03:05', '2025-06-22 04:03:05', NULL, NULL),
+(106, 'dmin<$2a$10$gXHnsnko8Ulqxvajf8FpYOglQtjMj0JHEobEmFFsaJ1iPYjzZuePO\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEwNiwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY0OTg2LCJleHAiOjE3NTA1OTM3ODZ9.lyEXalvtEvWAJzlVfOC37VK0oy-jCcCwBZVj1lD8sc8', 'active', '2025-06-22 04:03:06', 0, NULL, '2025-06-22 04:03:06', '2025-06-22 04:03:06', NULL, NULL),
+(107, 'dmin<$2a$10$o89UY50PbvdbgWiQvkmvKe92FetRRMad5PGmREPlPOPiEclq1tRnS\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEwNywicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY0OTg3LCJleHAiOjE3NTA1OTM3ODd9.cIahpsqH6lk4esX89DS3xIwErevRrLNqrYh33IEr1as', 'active', '2025-06-22 04:03:07', 0, NULL, '2025-06-22 04:03:07', '2025-06-22 04:03:07', NULL, NULL),
+(108, 'dmin<$2a$10$n.El4S2Hs9SmXfu3GrC.3OR1XrQv2Rx1YvUdTjezwbywuo6DK9G6q\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEwOCwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY1MDEwLCJleHAiOjE3NTA1OTM4MTB9.e9kv4bZtRKsw_fwWmS7c-V3pY9oBbDTutU9RZOuc8l0', 'active', '2025-06-22 04:03:30', 0, NULL, '2025-06-22 04:03:30', '2025-06-22 04:03:30', NULL, NULL),
+(109, 'dmin<$2a$10$MuJm8nLmn72PMpeDM1WgaOnxUUrn0XX4XPR0MHsT3jWUWHEotnDVi\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEwOSwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY1MDgyLCJleHAiOjE3NTA1OTM4ODJ9.cuA6hVH-Qti8-nWoCi13cVGbSubrHfyZtUlp25M0htc', 'active', '2025-06-22 04:04:42', 0, NULL, '2025-06-22 04:04:42', '2025-06-22 04:04:42', NULL, NULL),
+(110, 'dmin<$2a$10$IbU12L4CD1ie6SBr5yBqvObrnFmzgqDtrOvknwT3OUFsVu2jQ9I7K\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjExMCwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY1MzY2LCJleHAiOjE3NTA1OTQxNjZ9.f8FV0HOZceJqo-eE2A2NkAhfUNA1YX9AWy2jgoB4roY', 'active', '2025-06-22 04:09:26', 0, NULL, '2025-06-22 04:09:26', '2025-06-22 04:09:26', NULL, NULL),
+(111, 'dmin<$2a$10$cK7OCmQX0UJC07zRkKWhaOT5xqppwuhopW0kD5QsYlt8MZKYTV26W\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjExMSwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY1Mzc0LCJleHAiOjE3NTA1OTQxNzR9.j5CufoEuT9YVPXrE3x1XNoZAVojCrH6mwu04A-kOkvg', 'active', '2025-06-22 04:09:35', 0, NULL, '2025-06-22 04:09:34', '2025-06-22 04:09:35', NULL, NULL),
+(112, 'dmin<$2a$10$8yf1rj7XW1EMKeO9vFGpJOIA/kjwXb7O0v14ui.69f6WAvNZTYQ7.\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjExMiwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY1MzgxLCJleHAiOjE3NTA1OTQxODF9.JdbCYvl6ASfG1BfP9riW2wyrFs4HrqvkyBqZQ2lreok', 'active', '2025-06-22 04:09:41', 0, NULL, '2025-06-22 04:09:41', '2025-06-22 04:09:41', NULL, NULL),
+(113, 'dmin<$2a$10$x6CljPVha6FRjKmKp3STVeUmoZU/riCMh8i79XM.QNNLCAMM9yDvi\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjExMywicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY1NDE3LCJleHAiOjE3NTA1OTQyMTd9.HD4QA8tOZS3GX2NY6aFQjZR63aPf8WKLf1XY9HKtZEY', 'active', '2025-06-22 04:10:17', 0, NULL, '2025-06-22 04:10:17', '2025-06-22 04:10:17', NULL, NULL),
+(114, 'dmin<$2a$10$4N1ktsgN2vyMANERt6au8esehwfTcC3kqazlac87EksvM7Ygms/Wa\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjExNCwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY1NDE3LCJleHAiOjE3NTA1OTQyMTd9.M2GP6LKM92vv-jxrbgyKk-7e7H5KXrWBVaVMSLWeCzU', 'active', '2025-06-22 04:10:17', 0, NULL, '2025-06-22 04:10:17', '2025-06-22 04:10:17', NULL, NULL),
+(115, 'dmin<$2a$10$8i0PastNdXAgVx.r835l/.A/p.8Tcu5COVSSDAU3O1pflQCTNnWqy\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjExNSwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY1NDE4LCJleHAiOjE3NTA1OTQyMTh9.UKdni0yHkvLSyq5OuD-_hbABTBih8hXHNbQeDXsanfM', 'active', '2025-06-22 04:10:18', 0, NULL, '2025-06-22 04:10:18', '2025-06-22 04:10:18', NULL, NULL),
+(116, 'dmin<$2a$10$uJfpcAsW6lLrCvQYhTH/zOng.Zf3tOWF7qxK2TrJoleBPedtI8DlC\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjExNiwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY1NDE4LCJleHAiOjE3NTA1OTQyMTh9.4L-4QwoESbf0FfWErSJiMDZw-mJAybkeSdcek9OA3Uc', 'active', '2025-06-22 04:10:18', 0, NULL, '2025-06-22 04:10:18', '2025-06-22 04:10:18', NULL, NULL),
+(117, 'dmin<$2a$10$O6hT8NForS0Op9K4wPfqXeIeqWq1XY8BoFnfstBeay5q95nvR4wGG\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjExNywicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY1NDE4LCJleHAiOjE3NTA1OTQyMTh9.hSM9_84Q_1X0JbdfrIeRREvwu5svV9rXhY-PmEYZ9eE', 'active', '2025-06-22 04:10:18', 0, NULL, '2025-06-22 04:10:18', '2025-06-22 04:10:18', NULL, NULL),
+(118, 'dmin<$2a$10$2LvYTDltQaLxsmbN3bRyA.IadrTe3vXHXsQ4FrqpXpJDJ1IKinzdy\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjExOCwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY1NDQ1LCJleHAiOjE3NTA1OTQyNDV9.B9udnsk-0qvqJVVKtCwjPbGActtxpkxriFIeiShggqA', 'active', '2025-06-22 04:10:45', 0, NULL, '2025-06-22 04:10:45', '2025-06-22 04:10:45', NULL, NULL),
+(119, 'dmin<$2a$10$TDgHl8CKtHR2d72aSaLMNu.FCt4T8BAd5.9QhKDzYIHiifK0SSrvC\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjExOSwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY3NDcwLCJleHAiOjE3NTA1OTYyNzB9.fKa0oC6RcKE6TCkWfyLywTSA8kQbjd3VAysAQ2Ai0RE', 'active', '2025-06-22 04:44:30', 0, NULL, '2025-06-22 04:44:30', '2025-06-22 04:44:30', NULL, NULL),
+(120, 'dmin<$2a$10$yNqC4LpE/qhVdYyHZPIoFeWDKKFPSmntw8UM3maotJtbpsFXu/ybe\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEyMCwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY3NDcxLCJleHAiOjE3NTA1OTYyNzF9.1EBl9_eU0ROCSjXI2vO2MIJFiQlTpoTbpWEPDa7zTJg', 'active', '2025-06-22 04:44:31', 0, NULL, '2025-06-22 04:44:31', '2025-06-22 04:44:31', NULL, NULL),
+(121, 'dmin<$2a$10$fUrUtlMW1Ljr8m.LakR59uZ8xT05Zd9idvMTlWHHvG9MU5nV2P9I6\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEyMSwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY3NTAyLCJleHAiOjE3NTA1OTYzMDJ9.jrXy3_jInFV54DY4Wp95MbRbl7bL2lnJfRb0BWvaVg4', 'active', '2025-06-22 04:45:02', 0, NULL, '2025-06-22 04:45:02', '2025-06-22 04:45:02', NULL, NULL),
+(122, 'dmin<$2a$10$jeLTwcXQXNNoVhHsd2gXIO4v9t6Wse9UcmZVmA9gZsLoQ9K/8N6l2\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEyMiwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY4MTQwLCJleHAiOjE3NTA1OTY5NDB9.2jcBFM6gfBSG9P3VSdpyIisuAaswWGvFXAugYMdBW10', 'active', '2025-06-22 04:55:40', 0, NULL, '2025-06-22 04:55:40', '2025-06-22 04:55:40', NULL, NULL),
+(123, 'dmin<$2a$10$/ac5D3iQaQ6kEok8PKnGmux.r4eSZST5OlmmykNKuGKa5uv9QNa9O\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEyMywicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY4MTQyLCJleHAiOjE3NTA1OTY5NDJ9.e_fX90dy626xxtkT8QhiBjV2WVa1jZJNRM9R-n4B5rI', 'active', '2025-06-22 04:55:42', 0, NULL, '2025-06-22 04:55:42', '2025-06-22 04:55:42', NULL, NULL),
+(124, 'dmin<$2a$10$a.LsZfZ8ntyfOYFQedlefu.sM5M7tsB0f7KC/uwdFCMJ7kU2yP9BW\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEyNCwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY4MjE4LCJleHAiOjE3NTA1OTcwMTh9.Ph2Qf1opYBgza9kvAy0qQJUXDN6uQn-TYaTboHPKACc', 'active', '2025-06-22 04:56:58', 0, NULL, '2025-06-22 04:56:58', '2025-06-22 04:56:58', NULL, NULL),
+(125, 'dmin<$2a$10$0tz69wBNsvEjIex7E0DGreDNXbXO2UlsUqkx.uumdFQPDsLDLy0Sy\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEyNSwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY4MzA4LCJleHAiOjE3NTA1OTcxMDh9.s8lWDYIKQZk_zLTFa_p-WRguSE7GV99e9xyCqvlFdgg', 'active', '2025-06-22 04:58:28', 0, NULL, '2025-06-22 04:58:28', '2025-06-22 04:58:28', NULL, NULL),
+(126, 'dmin<$2a$10$gXtadimLf06yatC6zkR.4.LAUCcwZmCGJCHxtzLgjJHn0cwDZggDy\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEyNiwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY4MzA5LCJleHAiOjE3NTA1OTcxMDl9.Vn1sdeNXlfuhBYjiYegT8Sd3NJQxmFYxGi08z0eilfs', 'active', '2025-06-22 04:58:29', 0, NULL, '2025-06-22 04:58:29', '2025-06-22 04:58:29', NULL, NULL),
+(127, 'dmin<$2a$10$0HmPum5LL27hfk4wy/vXMuGHb/YVu72XpydTTiLNuCNveNUuGb8qG\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEyNywicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY4MzE2LCJleHAiOjE3NTA1OTcxMTZ9.3DFBUHSRbv-r9Amts0Qg_9eWvKrxtIgNdj8TJxjFm_8', 'active', '2025-06-22 04:58:36', 0, NULL, '2025-06-22 04:58:36', '2025-06-22 04:58:36', NULL, NULL),
+(128, 'dmin<$2a$10$9aLliLSESwfuzXxxTy8oD.VM3/G5bcdeAPbIrNXZfuyvOmvfIHnZ.\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEyOCwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY4Mzg5LCJleHAiOjE3NTA1OTcxODl9.VplcDIfKUL3S4SYgDjXH0euIAI-Q8-uaATRMfs_gp7U', 'active', '2025-06-22 04:59:49', 0, NULL, '2025-06-22 04:59:49', '2025-06-22 04:59:49', NULL, NULL),
+(129, 'dmin<$2a$10$2wDLKbz4a4mJkTWicTjiie/DM73WdRl1AmmXpLwoVs30pEAE2MobO\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEyOSwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY4NjA5LCJleHAiOjE3NTA1OTc0MDl9.DwMRfX-ruSUBZ2laVi77L3me5yvcGKAN8ZFNVTjGKlE', 'active', '2025-06-22 05:03:29', 0, NULL, '2025-06-22 05:03:29', '2025-06-22 05:03:29', NULL, NULL),
+(130, 'dmin<$2a$10$0QxGtTN5L5LVXB6PotB5L.eV14LV7c6uYRiK/xTEvfdNxELheAEmC\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEzMCwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY4OTA0LCJleHAiOjE3NTA1OTc3MDR9.XGcZG1sa_PNX12y8AFU61934KFNbeUlviJCXGyma11A', 'active', '2025-06-22 05:08:24', 0, NULL, '2025-06-22 05:08:24', '2025-06-22 05:08:24', NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -289,10 +354,77 @@ CREATE TABLE `account_roles` (
 --
 
 INSERT INTO `account_roles` (`account_id`, `role_id`, `assigned_date`, `assigned_by`, `is_active`, `expiry_date`) VALUES
-(8, 2, '2025-06-12 02:26:51', NULL, 1, NULL),
-(9, 2, '2025-06-12 04:40:18', NULL, 1, NULL),
 (10, 2, '2025-06-13 03:59:40', NULL, 1, NULL),
-(13, 3, '2025-06-13 04:50:42', NULL, 1, NULL);
+(13, 3, '2025-06-13 04:50:42', NULL, 1, NULL),
+(16, 1, '2025-06-17 10:09:13', NULL, 1, NULL),
+(39, 1, '2025-06-18 09:49:34', NULL, 1, NULL),
+(40, 1, '2025-06-18 09:52:24', NULL, 1, NULL),
+(41, 1, '2025-06-18 09:56:48', NULL, 1, NULL),
+(42, 1, '2025-06-18 09:58:03', NULL, 1, NULL),
+(43, 3, '2025-06-18 10:29:05', NULL, 1, NULL),
+(44, 1, '2025-06-18 10:50:27', NULL, 1, NULL),
+(45, 1, '2025-06-18 13:59:03', NULL, 1, NULL),
+(46, 1, '2025-06-18 13:59:05', NULL, 1, NULL),
+(47, 1, '2025-06-18 13:59:20', NULL, 1, NULL),
+(48, 1, '2025-06-18 14:04:12', NULL, 1, NULL),
+(49, 1, '2025-06-18 14:08:03', NULL, 1, NULL),
+(50, 1, '2025-06-18 14:08:19', NULL, 1, NULL),
+(51, 1, '2025-06-19 02:47:00', NULL, 1, NULL),
+(52, 3, '2025-06-19 03:17:25', NULL, 1, NULL),
+(53, 3, '2025-06-19 07:45:41', NULL, 1, NULL),
+(54, 3, '2025-06-19 10:11:53', NULL, 1, NULL),
+(58, 1, '2025-06-19 11:25:33', NULL, 1, NULL),
+(59, 1, '2025-06-19 11:33:59', NULL, 1, NULL),
+(60, 3, '2025-06-19 11:42:16', NULL, 1, NULL),
+(61, 1, '2025-06-19 14:41:39', NULL, 1, NULL),
+(62, 1, '2025-06-21 03:52:09', NULL, 1, NULL),
+(63, 1, '2025-06-21 07:45:06', NULL, 1, NULL),
+(64, 1, '2025-06-21 08:28:25', NULL, 1, NULL),
+(69, 1, '2025-06-21 08:39:34', NULL, 1, NULL),
+(85, 3, '2025-06-21 09:06:04', NULL, 1, NULL),
+(88, 3, '2025-06-21 09:10:42', NULL, 1, NULL),
+(89, 1, '2025-06-22 03:25:38', NULL, 1, NULL),
+(90, 1, '2025-06-22 03:58:29', NULL, 1, NULL),
+(91, 1, '2025-06-22 03:58:32', NULL, 1, NULL),
+(92, 1, '2025-06-22 03:58:33', NULL, 1, NULL),
+(93, 1, '2025-06-22 03:58:33', NULL, 1, NULL),
+(94, 1, '2025-06-22 03:58:33', NULL, 1, NULL),
+(95, 1, '2025-06-22 03:58:34', NULL, 1, NULL),
+(96, 1, '2025-06-22 03:58:43', NULL, 1, NULL),
+(97, 1, '2025-06-22 03:58:50', NULL, 1, NULL),
+(98, 1, '2025-06-22 03:58:52', NULL, 1, NULL),
+(99, 1, '2025-06-22 04:02:15', NULL, 1, NULL),
+(100, 1, '2025-06-22 04:02:18', NULL, 1, NULL),
+(101, 1, '2025-06-22 04:02:46', NULL, 1, NULL),
+(102, 1, '2025-06-22 04:02:46', NULL, 1, NULL),
+(103, 1, '2025-06-22 04:02:47', NULL, 1, NULL),
+(104, 1, '2025-06-22 04:02:54', NULL, 1, NULL),
+(105, 1, '2025-06-22 04:03:05', NULL, 1, NULL),
+(106, 1, '2025-06-22 04:03:06', NULL, 1, NULL),
+(107, 1, '2025-06-22 04:03:07', NULL, 1, NULL),
+(108, 1, '2025-06-22 04:03:30', NULL, 1, NULL),
+(109, 1, '2025-06-22 04:04:42', NULL, 1, NULL),
+(110, 1, '2025-06-22 04:09:26', NULL, 1, NULL),
+(111, 1, '2025-06-22 04:09:34', NULL, 1, NULL),
+(112, 1, '2025-06-22 04:09:41', NULL, 1, NULL),
+(113, 1, '2025-06-22 04:10:17', NULL, 1, NULL),
+(114, 1, '2025-06-22 04:10:17', NULL, 1, NULL),
+(115, 1, '2025-06-22 04:10:18', NULL, 1, NULL),
+(116, 1, '2025-06-22 04:10:18', NULL, 1, NULL),
+(117, 1, '2025-06-22 04:10:18', NULL, 1, NULL),
+(118, 1, '2025-06-22 04:10:45', NULL, 1, NULL),
+(119, 1, '2025-06-22 04:44:30', NULL, 1, NULL),
+(120, 1, '2025-06-22 04:44:31', NULL, 1, NULL),
+(121, 1, '2025-06-22 04:45:02', NULL, 1, NULL),
+(122, 1, '2025-06-22 04:55:40', NULL, 1, NULL),
+(123, 1, '2025-06-22 04:55:42', NULL, 1, NULL),
+(124, 1, '2025-06-22 04:56:58', NULL, 1, NULL),
+(125, 1, '2025-06-22 04:58:28', NULL, 1, NULL),
+(126, 1, '2025-06-22 04:58:29', NULL, 1, NULL),
+(127, 1, '2025-06-22 04:58:36', NULL, 1, NULL),
+(128, 1, '2025-06-22 04:59:49', NULL, 1, NULL),
+(129, 1, '2025-06-22 05:03:29', NULL, 1, NULL),
+(130, 1, '2025-06-22 05:08:24', NULL, 1, NULL);
 
 -- --------------------------------------------------------
 
@@ -341,7 +473,11 @@ INSERT INTO `activity_logs` (`id`, `account_id`, `action`, `description`, `ip_ad
 (3, 13, 'profile_updated', 'User profile was updated', NULL, NULL, NULL, '2025-06-16 08:28:50'),
 (4, 13, 'profile_updated', 'User profile was updated', NULL, NULL, NULL, '2025-06-16 08:28:58'),
 (5, 13, 'profile_updated', 'User profile was updated', NULL, NULL, NULL, '2025-06-16 08:41:06'),
-(6, 13, 'profile_updated', 'User profile was updated', NULL, NULL, NULL, '2025-06-16 09:01:43');
+(6, 13, 'profile_updated', 'User profile was updated', NULL, NULL, NULL, '2025-06-16 09:01:43'),
+(7, 52, 'account_created', 'New student account created', NULL, NULL, '{\"role\": \"student\", \"email\": \"albertbgonzaga8con@gmail.com\", \"created_by\": \"system\"}', '2025-06-19 03:17:25'),
+(8, 53, 'account_created', 'New student account created', NULL, NULL, '{\"role\": \"student\", \"email\": \"buenaventurapatrickian@gmail.com\", \"created_by\": \"system\"}', '2025-06-19 07:45:41'),
+(9, 54, 'account_created', 'New student account created', NULL, NULL, '{\"role\": \"student\", \"email\": \"navalesmarkrennier8con@gmail.com\", \"created_by\": \"system\"}', '2025-06-19 10:11:53'),
+(10, 60, 'account_created', 'New student account created', NULL, NULL, '{\"role\": \"student\", \"email\": \"crajeextremeyt@gmail.com\", \"created_by\": \"system\"}', '2025-06-19 11:42:16');
 
 -- --------------------------------------------------------
 
@@ -370,7 +506,20 @@ CREATE TABLE `audit_log` (
 INSERT INTO `audit_log` (`log_id`, `table_name`, `operation_type`, `primary_key_value`, `old_values`, `new_values`, `changed_by`, `ip_address`, `user_agent`, `session_id`, `timestamp`) VALUES
 (1, 'students', 'INSERT', 'S1749790242780_13', NULL, '{\"student_id\": \"S1749790242780_13\", \"person_id\": 13, \"account_id\": 15, \"graduation_status\": \"enrolled\"}', 15, NULL, NULL, NULL, '2025-06-13 04:50:42'),
 (2, 'students', 'UPDATE', 'S1749790242780_13', '{\"graduation_status\": \"enrolled\", \"gpa\": null, \"academic_standing\": \"good\"}', '{\"graduation_status\": \"enrolled\", \"gpa\": null, \"academic_standing\": \"good\"}', 13, NULL, NULL, NULL, '2025-06-16 07:35:21'),
-(3, 'students', 'UPDATE', 'S1749790242780_13', '{\"graduation_status\": \"enrolled\", \"gpa\": null, \"academic_standing\": \"good\"}', '{\"graduation_status\": \"enrolled\", \"gpa\": null, \"academic_standing\": \"good\"}', 13, NULL, NULL, NULL, '2025-06-16 07:36:12');
+(3, 'students', 'UPDATE', 'S1749790242780_13', '{\"graduation_status\": \"enrolled\", \"gpa\": null, \"academic_standing\": \"good\"}', '{\"graduation_status\": \"enrolled\", \"gpa\": null, \"academic_standing\": \"good\"}', 13, NULL, NULL, NULL, '2025-06-16 07:36:12'),
+(4, 'students', 'INSERT', 'S1750170945832', NULL, '{\"student_id\": \"S1750170945832\", \"person_id\": 16, \"account_id\": 17, \"graduation_status\": \"enrolled\"}', 17, NULL, NULL, NULL, '2025-06-17 14:35:45'),
+(5, 'students', 'INSERT', 'S1750171298927', NULL, '{\"student_id\": \"S1750171298927\", \"person_id\": 17, \"account_id\": 18, \"graduation_status\": \"enrolled\"}', 18, NULL, NULL, NULL, '2025-06-17 14:41:38'),
+(6, 'students', 'UPDATE', 'S1749790242780_13', '{\"graduation_status\": \"enrolled\", \"gpa\": null, \"academic_standing\": \"good\"}', '{\"graduation_status\": \"enrolled\", \"gpa\": null, \"academic_standing\": \"good\"}', 13, NULL, NULL, NULL, '2025-06-18 03:18:47'),
+(7, 'students', 'UPDATE', 'S1750171298927', '{\"graduation_status\": \"enrolled\", \"gpa\": null, \"academic_standing\": \"good\"}', '{\"graduation_status\": \"enrolled\", \"gpa\": null, \"academic_standing\": \"good\"}', 18, NULL, NULL, NULL, '2025-06-18 03:18:47'),
+(8, 'students', 'INSERT', 'S1750217014000_19', NULL, '{\"student_id\": \"S1750217014000_19\", \"person_id\": 19, \"account_id\": 19, \"graduation_status\": \"enrolled\"}', 19, NULL, NULL, NULL, '2025-06-18 03:23:34'),
+(9, 'students', 'INSERT', 'S1750217164000_20', NULL, '{\"student_id\": \"S1750217164000_20\", \"person_id\": 20, \"account_id\": 20, \"graduation_status\": \"enrolled\"}', 20, NULL, NULL, NULL, '2025-06-18 03:26:04'),
+(10, 'students', 'INSERT', 'S1750242545000_43', NULL, '{\"student_id\": \"S1750242545000_43\", \"person_id\": 43, \"account_id\": 43, \"graduation_status\": \"enrolled\"}', 43, NULL, NULL, NULL, '2025-06-18 10:29:05'),
+(11, 'students', 'INSERT', 'S1750303045000_52', NULL, '{\"student_id\": \"S1750303045000_52\", \"person_id\": 52, \"account_id\": 52, \"graduation_status\": \"enrolled\"}', 52, NULL, NULL, NULL, '2025-06-19 03:17:25'),
+(12, 'students', 'INSERT', '8Con1750319141000_53', NULL, '{\"student_id\": \"8Con1750319141000_53\", \"person_id\": 53, \"account_id\": 53, \"graduation_status\": \"enrolled\"}', 53, NULL, NULL, NULL, '2025-06-19 07:45:41'),
+(13, 'students', 'INSERT', '8Con-1750327913000_5', NULL, '{\"student_id\": \"8Con-1750327913000_5\", \"person_id\": 54, \"account_id\": 54, \"graduation_status\": \"enrolled\"}', 54, NULL, NULL, NULL, '2025-06-19 10:11:53'),
+(22, 'students', 'INSERT', '8Con-1750333336000_6', NULL, '{\"student_id\": \"8Con-1750333336000_6\", \"person_id\": 60, \"account_id\": 60, \"graduation_status\": \"enrolled\"}', 60, NULL, NULL, NULL, '2025-06-19 11:42:16'),
+(23, 'students', 'INSERT', 'S1750496764000_85', NULL, '{\"student_id\": \"S1750496764000_85\", \"person_id\": 85, \"account_id\": 85, \"graduation_status\": \"enrolled\"}', 85, NULL, NULL, NULL, '2025-06-21 09:06:04'),
+(24, 'students', 'INSERT', 'S1750497042000_88', NULL, '{\"student_id\": \"S1750497042000_88\", \"person_id\": 88, \"account_id\": 88, \"graduation_status\": \"enrolled\"}', 88, NULL, NULL, NULL, '2025-06-21 09:10:42');
 
 -- --------------------------------------------------------
 
@@ -400,8 +549,8 @@ INSERT INTO `competencies` (`competency_id`, `competency_type_id`, `competency_c
 (2, 1, 'BASIC002', 'Market Analysis', 'Introduction to technical and fundamental analysis', NULL, NULL, 1.00, NULL, 1),
 (3, 2, 'COMM001', 'Risk Management', 'Understanding and implementing risk management strategies', NULL, NULL, 1.00, NULL, 1),
 (4, 2, 'COMM002', 'Portfolio Construction', 'Building and managing investment portfolios', NULL, NULL, 1.00, NULL, 1),
-(5, 3, 'CORE001', 'Advanced Strategies', 'Complex trading strategies and execution', NULL, NULL, 1.00, NULL, 1),
-(6, 3, 'CORE002', 'Quantitative Analysis', 'Statistical and mathematical analysis methods', NULL, NULL, 1.00, NULL, 1);
+(5, 3, 'CORE001', 'Advanced Strategies', 'Complex trading strategies and execution', NULL, NULL, 1.00, NULL, 0),
+(6, 3, 'CORE002', 'Quantitative Analysis', 'Statistical and mathematical analysis methods', NULL, NULL, 1.00, NULL, 0);
 
 -- --------------------------------------------------------
 
@@ -468,7 +617,34 @@ CREATE TABLE `contact_info` (
 INSERT INTO `contact_info` (`contact_id`, `person_id`, `student_id`, `contact_type`, `contact_value`, `is_primary`, `is_verified`, `created_at`, `updated_at`) VALUES
 (1, 13, 'S1749790242780_13', 'phone', '09234567890', 1, 0, '2025-06-13 04:50:42', '2025-06-16 09:01:43'),
 (2, 13, 'S1749790242780_13', 'address', '123 Main Street, New York, NY', 1, 0, '2025-06-13 04:50:42', '2025-06-16 09:01:43'),
-(3, 13, 'S1749790242780_13', 'email', 'johndoe@gmail.com', 1, 0, '2025-06-13 04:50:42', '2025-06-16 09:01:43');
+(3, 13, 'S1749790242780_13', 'email', 'johndoe@gmail.com', 1, 0, '2025-06-13 04:50:42', '2025-06-16 09:01:43'),
+(10, 16, 'S1750170945832', 'phone', '09704918693', 1, 0, '2025-06-17 14:35:45', '2025-06-17 14:35:45'),
+(11, 16, 'S1750170945832', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-17 14:35:45', '2025-06-17 14:35:45'),
+(12, 16, 'S1750170945832', 'email', 'gonzagaalbertbpdm@gmail.com', 1, 0, '2025-06-17 14:35:45', '2025-06-17 14:35:45'),
+(13, 18, 'S1750171298927', 'phone', '09207866094', 1, 0, '2025-06-17 14:41:38', '2025-06-18 03:18:47'),
+(14, 18, 'S1750171298927', 'address', 'esteban north', 1, 0, '2025-06-17 14:41:38', '2025-06-18 03:18:47'),
+(15, 18, 'S1750171298927', 'email', 'macabatajhamesandrew8con@gmail.com', 1, 0, '2025-06-17 14:41:38', '2025-06-18 03:18:47'),
+(22, 43, 'S1750242545000_43', 'phone', '09562500033', 1, 0, '2025-06-18 10:29:05', '2025-06-18 10:29:05'),
+(23, 43, 'S1750242545000_43', 'address', 'Megalodon, Marilao, Bulacan', 1, 0, '2025-06-18 10:29:05', '2025-06-18 10:29:05'),
+(24, 43, 'S1750242545000_43', 'email', 'starvadermaelstrom@gmail.com', 1, 0, '2025-06-18 10:29:05', '2025-06-18 10:29:05'),
+(25, 52, 'S1750303045000_52', 'phone', '09704918693', 1, 0, '2025-06-19 03:17:25', '2025-06-19 03:17:25'),
+(26, 52, 'S1750303045000_52', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-19 03:17:25', '2025-06-19 03:17:25'),
+(27, 52, 'S1750303045000_52', 'email', 'albertbgonzaga8con@gmail.com', 1, 0, '2025-06-19 03:17:25', '2025-06-19 03:17:25'),
+(28, 53, '8Con1750319141000_53', 'phone', '09776279849', 1, 0, '2025-06-19 07:45:41', '2025-06-19 07:45:41'),
+(29, 53, '8Con1750319141000_53', 'address', 'Blk 12 Lot 31 Urban Deca Homes, Magnolia St., Brgy. Abangan Norte, Marilao, Bulacan', 1, 0, '2025-06-19 07:45:41', '2025-06-19 07:45:41'),
+(30, 53, '8Con1750319141000_53', 'email', 'buenaventurapatrickian@gmail.com', 1, 0, '2025-06-19 07:45:41', '2025-06-19 07:45:41'),
+(31, 54, '8Con-1750327913000_5', 'phone', '0970671784', 1, 0, '2025-06-19 10:11:53', '2025-06-19 10:11:53'),
+(32, 54, '8Con-1750327913000_5', 'address', '173 Zinya St., Sta. Rosa 2, Marilao, Bulacan', 1, 0, '2025-06-19 10:11:53', '2025-06-19 10:11:53'),
+(33, 54, '8Con-1750327913000_5', 'email', 'navalesmarkrennier8con@gmail.com', 1, 0, '2025-06-19 10:11:53', '2025-06-19 10:11:53'),
+(34, 60, '8Con-1750333336000_60', 'phone', '09427184388', 1, 0, '2025-06-19 11:42:16', '2025-06-19 11:42:16'),
+(35, 60, '8Con-1750333336000_60', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-19 11:42:16', '2025-06-19 11:42:16'),
+(36, 60, '8Con-1750333336000_60', 'email', 'crajeextremeyt@gmail.com', 1, 0, '2025-06-19 11:42:16', '2025-06-19 11:42:16'),
+(37, 85, 'S1750496764000_85', 'phone', '09452548712', 1, 0, '2025-06-21 09:06:04', '2025-06-21 09:06:04'),
+(38, 85, 'S1750496764000_85', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-21 09:06:04', '2025-06-21 09:06:04'),
+(39, 85, 'S1750496764000_85', 'email', 'manzanojoshuaphilip8consss@gmail.com', 1, 0, '2025-06-21 09:06:04', '2025-06-21 09:06:04'),
+(40, 88, 'S1750497042000_88', 'phone', '09207866094', 1, 0, '2025-06-21 09:10:42', '2025-06-21 09:10:42'),
+(41, 88, 'S1750497042000_88', 'address', 'esteban north', 1, 0, '2025-06-21 09:10:42', '2025-06-21 09:10:42'),
+(42, 88, 'S1750497042000_88', 'email', 'macabatajhamesandrew8conss@gmail.com', 1, 0, '2025-06-21 09:10:42', '2025-06-21 09:10:42');
 
 -- --------------------------------------------------------
 
@@ -487,6 +663,14 @@ CREATE TABLE `courses` (
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `courses`
+--
+
+INSERT INTO `courses` (`course_id`, `course_code`, `course_name`, `course_description`, `duration_weeks`, `credits`, `is_active`, `created_at`, `updated_at`) VALUES
+(1, '1', 'Forex Trading Derivatives', 'Teaching basic, common, and core competencies for Forex', 12, 3.0, 1, '2025-06-19 04:53:39', '2025-06-19 08:28:11'),
+(2, '2', 'Business Analytics', 'Analyzing business', 12, 3.0, 1, '2025-06-19 07:21:56', '2025-06-21 07:45:52');
 
 -- --------------------------------------------------------
 
@@ -538,6 +722,13 @@ CREATE TABLE `course_offerings` (
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `course_offerings`
+--
+
+INSERT INTO `course_offerings` (`offering_id`, `course_id`, `batch_identifier`, `start_date`, `end_date`, `max_enrollees`, `current_enrollees`, `status`, `instructor_id`, `location`, `created_at`, `updated_at`) VALUES
+(1, 2, 'BA001-2025-01', '2025-06-21 09:10:42', '2025-09-11 07:21:56', 30, 3, 'active', NULL, 'Online', '2025-06-19 07:21:56', '2025-06-21 09:10:42');
 
 -- --------------------------------------------------------
 
@@ -734,7 +925,14 @@ CREATE TABLE `learning_preferences` (
 --
 
 INSERT INTO `learning_preferences` (`preference_id`, `student_id`, `learning_style`, `delivery_preference`, `device_type`, `internet_speed`, `preferred_schedule`, `study_hours_per_week`, `accessibility_needs`, `created_at`, `updated_at`) VALUES
-(1, 'S1749790242780_13', '', 'hybrid', 'Desktop,Mobile', NULL, 'flexible', NULL, NULL, '2025-06-13 04:50:42', '2025-06-16 08:28:58');
+(1, 'S1749790242780_13', '', 'hybrid', 'Desktop,Mobile', NULL, 'flexible', NULL, NULL, '2025-06-13 04:50:42', '2025-06-16 08:28:58'),
+(8, 'S1750242545000_43', 'mixed', 'hybrid', NULL, NULL, 'flexible', NULL, NULL, '2025-06-18 10:29:05', '2025-06-18 10:29:05'),
+(9, 'S1750303045000_52', 'mixed', 'hybrid', NULL, NULL, 'flexible', NULL, NULL, '2025-06-19 03:17:25', '2025-06-19 03:17:25'),
+(10, '8Con1750319141000_53', '', 'hybrid', 'Mobile Phone,Tablet,Laptop,Desktop', NULL, 'flexible', NULL, NULL, '2025-06-19 07:45:41', '2025-06-19 07:45:41'),
+(11, '8Con-1750327913000_5', '', 'hybrid', 'Laptop,Tablet,Desktop', NULL, 'flexible', NULL, NULL, '2025-06-19 10:11:53', '2025-06-19 10:11:53'),
+(12, '8Con-1750333336000_6', 'mixed', 'hybrid', NULL, NULL, 'flexible', NULL, NULL, '2025-06-19 11:42:16', '2025-06-19 11:42:16'),
+(13, 'S1750496764000_85', 'mixed', 'hybrid', 'Laptop', NULL, 'flexible', NULL, NULL, '2025-06-21 09:06:04', '2025-06-21 09:06:04'),
+(14, 'S1750497042000_88', '', 'hybrid', 'Mobile Phone', NULL, 'flexible', NULL, NULL, '2025-06-21 09:10:42', '2025-06-21 09:10:42');
 
 -- --------------------------------------------------------
 
@@ -902,10 +1100,28 @@ CREATE TABLE `persons` (
 --
 
 INSERT INTO `persons` (`person_id`, `first_name`, `middle_name`, `last_name`, `birth_date`, `birth_place`, `gender`, `email`, `education`, `created_at`, `updated_at`) VALUES
-(8, 'Jane', 'Elizabeth', 'Smith', '1985-05-20', 'San Francisco, CA', 'Female', 'jane.smith@example.com', 'Bachelor of Science in Library Science', '2025-06-12 02:26:51', '2025-06-12 02:26:51'),
-(9, 'Jane', 'Elizabeth', 'Smith', '1985-05-20', 'San Francisco, CA', 'Female', 'janes.smith@example.com', 'Bachelor of Science in Library Science', '2025-06-12 04:40:18', '2025-06-12 04:40:18'),
-(10, 'Janice', 'Elizabeth', 'Smith', '1985-05-20', 'San Francisco, CA', 'Female', 'janessmith@gmail.com', 'Bachelor of Science in Library Science', '2025-06-13 03:59:40', '2025-06-13 03:59:40'),
-(13, 'John', 'Michael Doja', 'Catering', '1990-05-04', 'Marilao Bulacan', 'Male', 'johndoe@gmail.com', 'Bachelor\'s Degree', '2025-06-13 04:50:42', '2025-06-16 09:01:43');
+(13, 'John', 'Michael Doja', 'Catering', '1990-05-04', 'Marilao Bulacan', 'Male', 'johndoe@gmail.com', 'Bachelor\'s Degree', '2025-06-13 04:50:42', '2025-06-16 09:01:43'),
+(16, 'Albert', 'Borromeo', 'Gonzaga', '2004-08-20', 'Masbate', 'Male', 'gonzagaalbertbpdm@gmail.com', 'College', '2025-06-17 14:35:45', '2025-06-17 14:35:45'),
+(18, 'Jhames Andrew', 'Reynoso', 'Macabata', '2002-06-25', 'Marilao', 'Male', 'macabatajhamesandrew8con@gmail.com', 'College', '2025-06-17 14:41:38', '2025-06-18 03:18:47'),
+(39, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-18 09:49:34', '2025-06-18 09:49:34'),
+(40, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-18 09:52:24', '2025-06-18 09:52:24'),
+(41, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-18 09:56:48', '2025-06-18 09:56:48'),
+(42, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-18 09:58:03', '2025-06-18 09:58:03'),
+(43, 'Vincent Benjamin', NULL, 'Bautista', '2004-05-07', 'Meycauayan, Bulacan', 'Male', 'starvadermaelstrom@gmail.com', 'College', '2025-06-18 10:29:05', '2025-06-18 10:29:05'),
+(44, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-18 10:50:27', '2025-06-18 10:50:27'),
+(45, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-18 13:59:03', '2025-06-18 13:59:03'),
+(46, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-18 13:59:05', '2025-06-18 13:59:05'),
+(47, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-18 13:59:20', '2025-06-18 13:59:20'),
+(48, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-18 14:04:12', '2025-06-18 14:04:12'),
+(49, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-18 14:08:03', '2025-06-18 14:08:03'),
+(50, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-18 14:08:19', '2025-06-18 14:08:19'),
+(51, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-19 02:47:00', '2025-06-19 02:47:00'),
+(52, 'Albert', 'Borromeo', 'Gonzaga', '2004-08-20', 'Masbate', 'Male', 'albertbgonzaga8con@gmail.com', 'College', '2025-06-19 03:17:25', '2025-06-19 03:17:25'),
+(53, 'Patrick Ian', 'Vargas', 'Buenaventura', '2000-02-13', 'Caloocan', 'Male', 'buenaventurapatrickian@gmail.com', 'College', '2025-06-19 07:45:41', '2025-06-19 07:45:41'),
+(54, 'Mark Rennier', 'Sucandito', 'Navales', '2004-05-02', 'Valenzuela', 'Male', 'navalesmarkrennier8con@gmail.com', 'College', '2025-06-19 10:11:52', '2025-06-19 10:11:52'),
+(60, 'CJ', 'Pinalba', 'Napoles', '2025-06-12', 'Masbate', 'Male', 'crajeextremeyt@gmail.com', 'College', '2025-06-19 11:42:16', '2025-06-19 11:42:16'),
+(85, 'Jajajass', 'sfsdfsefsef', 'sefsf', '2004-08-23', 'Meycauayan, Bulacan', 'Male', 'manzanojoshuaphilip8consss@gmail.com', 'College', '2025-06-21 09:06:04', '2025-06-21 09:06:04'),
+(88, 'Jhames Andrew', 'Reynoso', 'Macabata', '2025-06-13', 'Caloocan', 'Male', 'macabatajhamesandrew8conss@gmail.com', 'College', '2025-06-21 09:10:42', '2025-06-21 09:10:42');
 
 --
 -- Triggers `persons`
@@ -1168,15 +1384,6 @@ CREATE TABLE `staff` (
   `notes` text DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
---
--- Dumping data for table `staff`
---
-
-INSERT INTO `staff` (`staff_id`, `person_id`, `account_id`, `employee_id`, `hire_date`, `termination_date`, `employment_status`, `emergency_contact`, `notes`) VALUES
-(1, 8, 8, 'EMP1749695211711', '2025-06-12', NULL, 'active', NULL, NULL),
-(2, 9, 9, 'EMP1749703218926', '2025-06-12', NULL, 'active', NULL, NULL),
-(3, 10, 10, 'EMP1749787180992', '2025-06-13', NULL, 'active', NULL, NULL);
-
 -- --------------------------------------------------------
 
 --
@@ -1230,7 +1437,16 @@ CREATE TABLE `students` (
 --
 
 INSERT INTO `students` (`student_id`, `person_id`, `account_id`, `registration_date`, `graduation_status`, `graduation_date`, `gpa`, `academic_standing`, `notes`) VALUES
-('S1749790242780_13', 13, 13, '2025-06-13', 'enrolled', NULL, NULL, 'good', NULL);
+('8Con-1750327913000_5', 54, 54, '2025-06-19', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-1750333336000_6', 60, 60, '2025-06-19', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con1750319141000_53', 53, 53, '2025-06-19', 'enrolled', NULL, NULL, 'good', NULL),
+('S1749790242780_13', 13, 13, '2025-06-13', 'enrolled', NULL, NULL, 'good', NULL),
+('S1750170945832', 16, NULL, '2025-06-17', 'enrolled', NULL, NULL, 'good', NULL),
+('S1750171298927', 18, NULL, '2025-06-17', 'enrolled', NULL, NULL, 'good', NULL),
+('S1750242545000_43', 43, 43, '2025-06-18', 'enrolled', NULL, NULL, 'good', NULL),
+('S1750303045000_52', 52, 52, '2025-06-19', 'enrolled', NULL, NULL, 'good', NULL),
+('S1750496764000_85', 85, 85, '2025-06-21', 'enrolled', NULL, NULL, 'good', NULL),
+('S1750497042000_88', 88, 88, '2025-06-21', 'enrolled', NULL, NULL, 'good', NULL);
 
 --
 -- Triggers `students`
@@ -1289,6 +1505,15 @@ CREATE TABLE `student_accounts` (
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
+--
+-- Dumping data for table `student_accounts`
+--
+
+INSERT INTO `student_accounts` (`account_id`, `student_id`, `offering_id`, `total_due`, `amount_paid`, `scheme_id`, `account_status`, `due_date`, `last_payment_date`, `payment_reminder_count`, `notes`, `created_at`, `updated_at`) VALUES
+(4, '8Con-1750333336000_6', 1, 0.00, 0.00, NULL, 'paid', NULL, NULL, 0, NULL, '2025-06-19 11:42:16', '2025-06-19 11:42:16'),
+(5, 'S1750496764000_85', 1, 0.00, 0.00, NULL, 'paid', NULL, NULL, 0, NULL, '2025-06-21 09:06:04', '2025-06-21 09:06:04'),
+(6, 'S1750497042000_88', 1, 0.00, 0.00, NULL, 'paid', NULL, NULL, 0, NULL, '2025-06-21 09:10:42', '2025-06-21 09:10:42');
+
 -- --------------------------------------------------------
 
 --
@@ -1314,6 +1539,16 @@ CREATE TABLE `student_backgrounds` (
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `student_backgrounds`
+--
+
+INSERT INTO `student_backgrounds` (`background_id`, `student_id`, `education_level`, `highest_degree`, `institution`, `graduation_year`, `work_experience_years`, `current_occupation`, `industry`, `annual_income_range`, `financial_experience`, `prior_trading_experience`, `investment_portfolio_value`, `relevant_skills`, `certifications`, `created_at`, `updated_at`) VALUES
+(1, 'S1750303045000_52', 'college', NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2025-06-19 03:17:25', '2025-06-19 03:17:25'),
+(2, '8Con1750319141000_53', 'college', NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2025-06-19 07:45:41', '2025-06-19 07:45:41'),
+(3, '8Con-1750327913000_5', 'college', NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2025-06-19 10:11:53', '2025-06-19 10:11:53'),
+(4, '8Con-1750333336000_6', 'college', NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2025-06-19 11:42:16', '2025-06-19 11:42:16');
 
 -- --------------------------------------------------------
 
@@ -1344,6 +1579,14 @@ CREATE TABLE `student_documents` (
   `is_archived` tinyint(1) DEFAULT 0,
   `archived_date` timestamp NOT NULL DEFAULT '0000-00-00 00:00:00'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `student_documents`
+--
+
+INSERT INTO `student_documents` (`document_id`, `student_id`, `document_type_id`, `document_version`, `original_filename`, `stored_filename`, `file_path`, `file_size_bytes`, `mime_type`, `file_hash`, `upload_date`, `uploaded_by`, `verification_status`, `verified_by`, `verified_date`, `expiry_date`, `rejection_reason`, `verification_notes`, `is_current`, `is_archived`, `archived_date`) VALUES
+(1, 'S1750171298927', 3, 1, 'Picture1.png', 'document-1750216842457-383315071-Picture1.png', 'uploads\\documents\\document-1750216842457-383315071-Picture1.png', 50779, 'image/png', 'c4c11faaae55726f0e0b5f9effae11544aa844a6e0de620866e5444706cbc989', '2025-06-18 03:20:42', NULL, 'verified', NULL, '2025-06-18 03:20:42', NULL, NULL, NULL, 1, 0, '0000-00-00 00:00:00'),
+(2, 'S1749790242780_13', 2, 1, '8c663c10-8373-41c8-82fe-2e8415da3ae9.jpg', 'document-1750232031446-73121856-8c663c10-8373-41c8-82fe-2e8415da3ae9.jpg', 'uploads\\documents\\document-1750232031446-73121856-8c663c10-8373-41c8-82fe-2e8415da3ae9.jpg', 88120, 'image/jpeg', '226b5e6225c665585f5eb8efb7cf790b72361abe192ff047e5d060c38017f870', '2025-06-18 07:33:51', NULL, 'verified', NULL, '2025-06-18 07:33:51', NULL, NULL, NULL, 1, 0, '0000-00-00 00:00:00');
 
 -- --------------------------------------------------------
 
@@ -1432,6 +1675,16 @@ CREATE TABLE `student_goals` (
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `student_goals`
+--
+
+INSERT INTO `student_goals` (`goal_id`, `student_id`, `goal_type`, `goal_title`, `goal_description`, `target_date`, `target_amount`, `priority_level`, `status`, `progress_percentage`, `created_at`, `updated_at`) VALUES
+(1, 'S1750303045000_52', 'academic', 'Complete Trading Course', 'Successfully complete the trading course and obtain certification', NULL, NULL, 'high', 'active', 0.00, '2025-06-19 03:17:25', '2025-06-19 03:17:25'),
+(2, '8Con1750319141000_53', 'academic', 'Complete Trading Course', 'Successfully complete the trading course and obtain certification', NULL, NULL, 'high', 'active', 0.00, '2025-06-19 07:45:41', '2025-06-19 07:45:41'),
+(3, '8Con-1750327913000_5', 'academic', 'Complete Trading Course', 'Successfully complete the trading course and obtain certification', NULL, NULL, 'high', 'active', 0.00, '2025-06-19 10:11:53', '2025-06-19 10:11:53'),
+(4, '8Con-1750333336000_6', 'academic', 'Complete Trading Course', 'Successfully complete the trading course and obtain certification', NULL, NULL, 'high', 'active', 0.00, '2025-06-19 11:42:16', '2025-06-19 11:42:16');
 
 -- --------------------------------------------------------
 
@@ -1530,6 +1783,11 @@ CREATE TABLE `student_trading_levels` (
 --
 
 INSERT INTO `student_trading_levels` (`student_id`, `level_id`, `assigned_date`, `assigned_by`, `assessment_score`, `assessment_method`, `is_current`, `notes`) VALUES
+('8Con-1750327913000_5', 1, '2025-06-19 10:11:53', NULL, NULL, 'exam', 0, NULL),
+('8Con-1750327913000_5', 2, '2025-06-19 10:11:53', NULL, NULL, 'exam', 1, NULL),
+('8Con-1750333336000_6', 1, '2025-06-19 11:42:16', NULL, NULL, 'exam', 1, NULL),
+('8Con1750319141000_53', 1, '2025-06-19 07:45:41', NULL, NULL, 'exam', 0, NULL),
+('8Con1750319141000_53', 2, '2025-06-19 07:45:41', NULL, NULL, 'exam', 1, NULL),
 ('S1749790242780_13', 1, '2025-06-13 04:50:42', NULL, NULL, 'exam', 0, NULL),
 ('S1749790242780_13', 1, '2025-06-16 08:09:26', NULL, NULL, 'exam', 0, NULL),
 ('S1749790242780_13', 1, '2025-06-16 08:23:57', NULL, NULL, 'exam', 0, NULL),
@@ -1538,7 +1796,14 @@ INSERT INTO `student_trading_levels` (`student_id`, `level_id`, `assigned_date`,
 ('S1749790242780_13', 1, '2025-06-16 08:28:49', NULL, NULL, 'exam', 0, NULL),
 ('S1749790242780_13', 1, '2025-06-16 08:28:58', NULL, NULL, 'exam', 0, NULL),
 ('S1749790242780_13', 1, '2025-06-16 08:41:06', NULL, NULL, 'exam', 0, NULL),
-('S1749790242780_13', 1, '2025-06-16 09:01:43', NULL, NULL, 'exam', 1, NULL);
+('S1749790242780_13', 1, '2025-06-16 09:01:43', NULL, NULL, 'exam', 1, NULL),
+('S1750170945832', 2, '2025-06-17 14:35:45', NULL, NULL, 'exam', 1, NULL),
+('S1750171298927', 1, '2025-06-17 14:41:38', NULL, NULL, 'exam', 1, NULL),
+('S1750242545000_43', 2, '2025-06-18 10:29:05', NULL, NULL, 'exam', 1, NULL),
+('S1750303045000_52', 1, '2025-06-19 03:17:25', NULL, NULL, 'exam', 0, NULL),
+('S1750303045000_52', 2, '2025-06-19 03:17:25', NULL, NULL, 'exam', 1, NULL),
+('S1750496764000_85', 1, '2025-06-21 09:06:04', NULL, NULL, 'exam', 1, NULL),
+('S1750497042000_88', 4, '2025-06-21 09:10:42', NULL, NULL, 'exam', 1, NULL);
 
 -- --------------------------------------------------------
 
@@ -1621,9 +1886,10 @@ CREATE TABLE `trading_levels` (
 --
 
 INSERT INTO `trading_levels` (`level_id`, `level_name`, `level_description`, `minimum_score`, `prerequisite_level_id`, `estimated_duration_weeks`, `recommended_capital`, `risk_tolerance`) VALUES
-(1, 'Beginner', 'New to trading, learning basic concepts', 0.00, NULL, 8, 10000.00, 'medium'),
-(2, 'Intermediate', 'Has basic knowledge, developing strategies', 70.00, 1, 12, 50000.00, 'medium'),
-(3, 'Advanced', 'Experienced trader with proven track record', 85.00, 2, 16, 200000.00, 'medium');
+(1, 'No Experience ', 'New to trading', 0.00, NULL, 8, 10000.00, 'medium'),
+(2, 'Beginner', 'Has basic knowledge, developing strategies', 70.00, 1, 12, 20000.00, 'medium'),
+(3, 'Intermediate', 'Has an experienced in trading', 85.00, 2, 16, 80000.00, 'medium'),
+(4, 'Advanced', 'Experienced trader with proven track record', 18.00, 3, 100, 100000.00, 'medium');
 
 -- --------------------------------------------------------
 
@@ -1916,8 +2182,6 @@ CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW 
 --
 ALTER TABLE `accounts`
   ADD PRIMARY KEY (`account_id`),
-  ADD UNIQUE KEY `username` (`username`),
-  ADD KEY `idx_username` (`username`),
   ADD KEY `idx_status` (`account_status`);
 
 --
@@ -2422,19 +2686,19 @@ ALTER TABLE `trading_levels`
 -- AUTO_INCREMENT for table `accounts`
 --
 ALTER TABLE `accounts`
-  MODIFY `account_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=16;
+  MODIFY `account_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=131;
 
 --
 -- AUTO_INCREMENT for table `activity_logs`
 --
 ALTER TABLE `activity_logs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=11;
 
 --
 -- AUTO_INCREMENT for table `audit_log`
 --
 ALTER TABLE `audit_log`
-  MODIFY `log_id` bigint(20) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
+  MODIFY `log_id` bigint(20) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=25;
 
 --
 -- AUTO_INCREMENT for table `competencies`
@@ -2452,25 +2716,25 @@ ALTER TABLE `competency_types`
 -- AUTO_INCREMENT for table `contact_info`
 --
 ALTER TABLE `contact_info`
-  MODIFY `contact_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
+  MODIFY `contact_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=43;
 
 --
 -- AUTO_INCREMENT for table `courses`
 --
 ALTER TABLE `courses`
-  MODIFY `course_id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `course_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
 
 --
 -- AUTO_INCREMENT for table `course_offerings`
 --
 ALTER TABLE `course_offerings`
-  MODIFY `offering_id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `offering_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
 
 --
 -- AUTO_INCREMENT for table `course_pricing`
 --
 ALTER TABLE `course_pricing`
-  MODIFY `pricing_id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `pricing_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=19;
 
 --
 -- AUTO_INCREMENT for table `document_types`
@@ -2494,7 +2758,7 @@ ALTER TABLE `fee_types`
 -- AUTO_INCREMENT for table `learning_preferences`
 --
 ALTER TABLE `learning_preferences`
-  MODIFY `preference_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
+  MODIFY `preference_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=15;
 
 --
 -- AUTO_INCREMENT for table `password_reset_tokens`
@@ -2524,7 +2788,7 @@ ALTER TABLE `payment_schemes`
 -- AUTO_INCREMENT for table `persons`
 --
 ALTER TABLE `persons`
-  MODIFY `person_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=14;
+  MODIFY `person_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=89;
 
 --
 -- AUTO_INCREMENT for table `positions`
@@ -2566,19 +2830,19 @@ ALTER TABLE `staff`
 -- AUTO_INCREMENT for table `student_accounts`
 --
 ALTER TABLE `student_accounts`
-  MODIFY `account_id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `account_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
 
 --
 -- AUTO_INCREMENT for table `student_backgrounds`
 --
 ALTER TABLE `student_backgrounds`
-  MODIFY `background_id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `background_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
 
 --
 -- AUTO_INCREMENT for table `student_documents`
 --
 ALTER TABLE `student_documents`
-  MODIFY `document_id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `document_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
 
 --
 -- AUTO_INCREMENT for table `student_eligibility_assessments`
@@ -2602,7 +2866,7 @@ ALTER TABLE `student_fees`
 -- AUTO_INCREMENT for table `student_goals`
 --
 ALTER TABLE `student_goals`
-  MODIFY `goal_id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `goal_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
 
 --
 -- AUTO_INCREMENT for table `student_progress`
@@ -2614,7 +2878,7 @@ ALTER TABLE `student_progress`
 -- AUTO_INCREMENT for table `student_referrals`
 --
 ALTER TABLE `student_referrals`
-  MODIFY `referral_id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `referral_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
 
 --
 -- AUTO_INCREMENT for table `student_scholarships`
@@ -2632,7 +2896,7 @@ ALTER TABLE `system_configuration`
 -- AUTO_INCREMENT for table `trading_levels`
 --
 ALTER TABLE `trading_levels`
-  MODIFY `level_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
+  MODIFY `level_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
 
 --
 -- Constraints for dumped tables
