@@ -3726,7 +3726,19 @@ app.post('/api/students/register', [
     ]);
 
     console.log('💰 Created student account with balance:', balance);
-
+       await connection.execute(`
+      INSERT INTO student_enrollments(
+        student_id, offering_id, enrollment_date, enrollment_status,completion_date,
+        final_grade, completion_percentage, attendance_percentage
+      ) VALUES (?, ?, NOW(), 'enrolled', ?, ?, ?, ?)
+    `, [
+      student_id,
+      offering_id,
+      null,
+      null,
+      null,
+      null
+    ]);
     // Step 8: Add referral if provided
     if (referred_by) {
       try {
@@ -6949,104 +6961,335 @@ app.post('/api/auth/change-password', [
 // STUDENT REGISTRATION ENDPOINT (Public - Updated to use stored procedure)
 // ============================================================================
 
-app.post('/api/register', [
-  body('firstName').trim().isLength({ min: 1, max: 50 }).escape(),
-  body('lastName').trim().isLength({ min: 1, max: 50 }).escape(),
-  body('email').isEmail().normalizeEmail(),
-  body('phoneNumber').isMobilePhone(),
-  body('dob').isISO8601(),
-  body('address').trim().isLength({ min: 1, max: 500 }),
-  body('city').trim().isLength({ min: 1, max: 100 }),
-  body('province').trim().isLength({ min: 1, max: 100 }),
-  body('gender').isIn(['Male', 'Female', 'Other']),
-  body('education').trim().isLength({ min: 1, max: 100 }),
-  body('tradingLevel').trim().isLength({ min: 1, max: 50 }),
-  body('').trim().isLength({ min: 3, max: 15 }),
-  body('password').isLength({ min: 6 })
+app.post('/api/register', [ 
+  body('firstName').trim().isLength({ min: 1, max: 50 }).escape(), 
+  body('lastName').trim().isLength({ min: 1, max: 50 }).escape(), 
+  body('email').isEmail().normalizeEmail(), 
+  body('phoneNumber').isMobilePhone(), 
+  body('dob').isISO8601(), 
+  body('address').trim().isLength({ min: 1, max: 500 }), 
+  body('city').trim().isLength({ min: 1, max: 100 }), 
+  body('province').trim().isLength({ min: 1, max: 100 }), 
+  body('gender').isIn(['Male', 'Female', 'Other']), 
+  body('education').trim().isLength({ min: 1, max: 100 }), 
+  body('tradingLevel').trim().isLength({ min: 1, max: 50 }), 
+  body('courseOfferingId').optional().isInt(), // Optional parameter for specific course offering
+  body('password').isLength({ min: 6 }) 
+], validateInput, async (req, res) => { 
+  const connection = await pool.getConnection(); 
+   
+  try { 
+    await connection.beginTransaction();
+
+    const { 
+      firstName, lastName, email, phoneNumber, dob, address, city, province, 
+      gender, education, tradingLevel, device, learningStyle, password, courseOfferingId 
+    } = req.body; 
+ 
+    // Hash password 
+    const hashedPassword = await bcrypt.hash(password, 12); 
+    const fullAddress = `${address}, ${city}, ${province}`; 
+ 
+    // Use stored procedure for synced registration 
+    const [result] = await connection.execute(` 
+      CALL sp_register_user_with_synced_ids(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, @account_id, @result) 
+    `, [ 
+      hashedPassword, firstName, null, lastName,  
+      dob, city, gender, email, education,  
+      phoneNumber, fullAddress, 'student' 
+    ]); 
+     
+    const [output] = await connection.execute(`SELECT @account_id as account_id, @result as result`); 
+    const { account_id, result: procedureResult } = output[0]; 
+ 
+    if (!procedureResult.startsWith('SUCCESS')) { 
+      await connection.rollback();
+      return res.status(400).json({ error: procedureResult }); 
+    } 
+
+    // Get the student_id for the newly registered student
+    const [studentData] = await connection.execute(` 
+      SELECT student_id FROM students WHERE account_id = ? 
+    `, [account_id]); 
+     
+    if (studentData.length === 0) {
+      await connection.rollback();
+      return res.status(500).json({ error: 'Failed to retrieve student information' });
+    }
+
+    const student_id = studentData[0].student_id;
+ 
+    // Handle additional fields specific to students 
+    if (tradingLevel || device || learningStyle) { 
+      // Update trading level if provided 
+      if (tradingLevel) { 
+        const [levelRows] = await connection.execute(` 
+          SELECT level_id FROM trading_levels WHERE level_name = ? 
+        `, [tradingLevel]); 
+         
+        if (levelRows.length > 0) { 
+          const level_id = levelRows[0].level_id; 
+           
+          // Update the default level 
+          await connection.execute(` 
+            UPDATE student_trading_levels  
+            SET level_id = ?, assigned_date = CURRENT_TIMESTAMP 
+            WHERE student_id = ? AND is_current = 1 
+          `, [level_id, student_id]); 
+        } 
+      } 
+
+      // Update learning preferences if provided 
+      if (device || learningStyle) { 
+        const deviceArray = Array.isArray(device) ? device : (device ? [device] : []); 
+        const learningStyleArray = Array.isArray(learningStyle) ? learningStyle : (learningStyle ? [learningStyle] : []); 
+         
+        await connection.execute(` 
+          UPDATE learning_preferences  
+          SET device_type = ?, learning_style = ?, updated_at = CURRENT_TIMESTAMP 
+          WHERE student_id = ? 
+        `, [deviceArray.join(','), learningStyleArray.join(','), student_id]); 
+      } 
+    }
+
+    // AUTO-ENROLLMENT LOGIC
+    let offering_id;
+    
+    // Get offering_id - either from request parameter or get the latest active offering
+    if (courseOfferingId) {
+      // Verify the provided offering exists and is active
+      const [offeringCheck] = await connection.execute(`
+        SELECT offering_id FROM course_offerings 
+        WHERE offering_id = ? AND status IN ('planned', 'active')
+      `, [courseOfferingId]);
+      
+      if (offeringCheck.length === 0) {
+        await connection.rollback();
+        return res.status(400).json({ error: 'Invalid or inactive course offering' });
+      }
+      offering_id = courseOfferingId;
+    } else {
+      // Get the latest active course offering (you may want to modify this logic)
+      const [latestOffering] = await connection.execute(`
+        SELECT co.offering_id 
+        FROM course_offerings co 
+        WHERE co.status IN ('planned', 'active') 
+          AND co.current_enrollees < co.max_enrollees
+          AND co.start_date > NOW()
+        ORDER BY co.start_date ASC 
+        LIMIT 1
+      `);
+      
+      if (latestOffering.length === 0) {
+        await connection.rollback();
+        return res.status(400).json({ error: 'No available course offerings for enrollment' });
+      }
+      offering_id = latestOffering[0].offering_id;
+    }
+
+    // Get course offering details for calculations
+    const [offeringDetails] = await connection.execute(`
+      SELECT 
+        co.offering_id,
+        co.start_date,
+        co.end_date,
+        c.duration_weeks,
+        co.current_enrollees,
+        co.max_enrollees
+      FROM course_offerings co
+      INNER JOIN courses c ON co.course_id = c.course_id
+      WHERE co.offering_id = ?
+    `, [offering_id]);
+
+    const offering = offeringDetails[0];
+    
+    // Calculate completion date based on duration weeks from start date
+    const startDate = new Date(offering.start_date);
+    const completionDate = new Date(startDate);
+    completionDate.setDate(startDate.getDate() + (offering.duration_weeks * 7));
+
+    // Create enrollment record
+    const [enrollmentResult] = await connection.execute(`
+      INSERT INTO student_enrollments (
+        student_id, 
+        offering_id, 
+        enrollment_date, 
+        enrollment_status, 
+        completion_date, 
+        completion_percentage
+      ) VALUES (?, ?, CURRENT_TIMESTAMP, 'enrolled', ?, 0.00)
+    `, [student_id, offering_id, completionDate]);
+
+    // Update current enrollees count in course_offerings
+    await connection.execute(`
+      UPDATE course_offerings 
+      SET current_enrollees = current_enrollees + 1,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE offering_id = ?
+    `, [offering_id]);
+
+    // Create student account record for financial tracking
+    const [pricingData] = await connection.execute(`
+      SELECT amount FROM course_pricing 
+      WHERE offering_id = ? AND pricing_type = 'regular' AND is_active = 1
+      ORDER BY effective_date DESC 
+      LIMIT 1
+    `, [offering_id]);
+
+    const totalDue = pricingData.length > 0 ? pricingData[0].amount : 0;
+
+    await connection.execute(`
+      INSERT INTO student_accounts (
+        student_id,
+        offering_id,
+        total_due,
+        amount_paid,
+        balance,
+        account_status,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, 0.00, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `, [student_id, offering_id, totalDue, totalDue]);
+
+    await connection.commit();
+
+    res.status(201).json({  
+      message: 'Student successfully registered and enrolled.', 
+      account_id: account_id, 
+      student_id: student_id,
+      enrollment: {
+        offering_id: offering_id,
+        enrollment_status: 'enrolled',
+        completion_date: completionDate.toISOString().split('T')[0],
+        completion_percentage: 0.00,
+        duration_weeks: offering.duration_weeks,
+        total_due: totalDue
+      }
+    }); 
+ 
+  } catch (error) { 
+    await connection.rollback();
+    console.error('Registration error:', error); 
+     
+    if (error.code === 'ER_DUP_ENTRY') { 
+      res.status(409).json({ error: 'Username or email already exists' }); 
+    } else { 
+      res.status(500).json({ error: 'Failed to register student: ' + error.message }); 
+    } 
+  } finally { 
+    connection.release(); 
+  } 
+});
+
+// Additional endpoint to manually enroll a student
+app.post('/api/enroll-student', [
+  body('student_id').trim().isLength({ min: 1 }),
+  body('offering_id').isInt(),
 ], validateInput, async (req, res) => {
   const connection = await pool.getConnection();
   
   try {
-    const {
-      firstName, lastName, email, phoneNumber, dob, address, city, province,
-      gender, education, tradingLevel, device, learningStyle,password
-    } = req.body;
-
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 12);
-    const fullAddress = `${address}, ${city}, ${province}`;
-
-    // Use stored procedure for synced registration
-    const [result] = await connection.execute(`
-      CALL sp_register_user_with_synced_ids(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, @account_id, @result)
-    `, [
-      hashedPassword, firstName, null, lastName, 
-      dob, city, gender, email, education, 
-      phoneNumber, fullAddress, 'student'
-    ]);
+    await connection.beginTransaction();
     
-    const [output] = await connection.execute(`SELECT @account_id as account_id, @result as result`);
-    const { account_id, result: procedureResult } = output[0];
-
-    if (!procedureResult.startsWith('SUCCESS')) {
-      return res.status(400).json({ error: procedureResult });
+    const { student_id, offering_id } = req.body;
+    
+    // Check if student exists
+    const [studentCheck] = await connection.execute(`
+      SELECT student_id FROM students WHERE student_id = ?
+    `, [student_id]);
+    
+    if (studentCheck.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Student not found' });
     }
-
-    // Handle additional fields specific to students
-    if (tradingLevel || device || learningStyle) {
-      const [studentData] = await connection.execute(`
-        SELECT student_id FROM students WHERE account_id = ?
-      `, [account_id]);
-      
-      if (studentData.length > 0) {
-        const student_id = studentData[0].student_id;
-        
-        // Update trading level if provided
-        if (tradingLevel) {
-          const [levelRows] = await connection.execute(`
-            SELECT level_id FROM trading_levels WHERE level_name = ?
-          `, [tradingLevel]);
-          
-          if (levelRows.length > 0) {
-            const level_id = levelRows[0].level_id;
-            
-            // Update the default level
-            await connection.execute(`
-              UPDATE student_trading_levels 
-              SET level_id = ?, assigned_date = CURRENT_TIMESTAMP
-              WHERE student_id = ? AND is_current = 1
-            `, [level_id, student_id]);
-          }
-        }
-
-        // Update learning preferences if provided
-        if (device || learningStyle) {
-          const deviceArray = Array.isArray(device) ? device : (device ? [device] : []);
-          const learningStyleArray = Array.isArray(learningStyle) ? learningStyle : (learningStyle ? [learningStyle] : []);
-          
-          await connection.execute(`
-            UPDATE learning_preferences 
-            SET device_type = ?, learning_style = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE student_id = ?
-          `, [deviceArray.join(','), learningStyleArray.join(','), student_id]);
-        }
+    
+    // Check if already enrolled in this offering
+    const [existingEnrollment] = await connection.execute(`
+      SELECT enrollment_id FROM student_enrollments 
+      WHERE student_id = ? AND offering_id = ?
+    `, [student_id, offering_id]);
+    
+    if (existingEnrollment.length > 0) {
+      await connection.rollback();
+      return res.status(409).json({ error: 'Student already enrolled in this course offering' });
+    }
+    
+    // Get offering details
+    const [offeringDetails] = await connection.execute(`
+      SELECT 
+        co.offering_id,
+        co.start_date,
+        co.end_date,
+        c.duration_weeks,
+        co.current_enrollees,
+        co.max_enrollees,
+        co.status
+      FROM course_offerings co
+      INNER JOIN courses c ON co.course_id = c.course_id
+      WHERE co.offering_id = ?
+    `, [offering_id]);
+    
+    if (offeringDetails.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Course offering not found' });
+    }
+    
+    const offering = offeringDetails[0];
+    
+    // Check if offering is available
+    if (offering.status !== 'planned' && offering.status !== 'active') {
+      await connection.rollback();
+      return res.status(400).json({ error: 'Course offering is not available for enrollment' });
+    }
+    
+    if (offering.current_enrollees >= offering.max_enrollees) {
+      await connection.rollback();
+      return res.status(400).json({ error: 'Course offering is full' });
+    }
+    
+    // Calculate completion date
+    const startDate = new Date(offering.start_date);
+    const completionDate = new Date(startDate);
+    completionDate.setDate(startDate.getDate() + (offering.duration_weeks * 7));
+    
+    // Create enrollment
+    await connection.execute(`
+      INSERT INTO student_enrollments (
+        student_id, 
+        offering_id, 
+        enrollment_date, 
+        enrollment_status, 
+        completion_date, 
+        completion_percentage
+      ) VALUES (?, ?, CURRENT_TIMESTAMP, 'enrolled', ?, 0.00)
+    `, [student_id, offering_id, completionDate]);
+    
+    // Update enrollee count
+    await connection.execute(`
+      UPDATE course_offerings 
+      SET current_enrollees = current_enrollees + 1,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE offering_id = ?
+    `, [offering_id]);
+    
+    await connection.commit();
+    
+    res.status(201).json({
+      message: 'Student successfully enrolled',
+      enrollment: {
+        student_id,
+        offering_id,
+        enrollment_status: 'enrolled',
+        completion_date: completionDate.toISOString().split('T')[0],
+        completion_percentage: 0.00,
+        duration_weeks: offering.duration_weeks
       }
-    }
-
-    res.status(201).json({ 
-      message: 'Student successfully registered.',
-      account_id: account_id,
-      student_id: `S${Date.now()}_${account_id}`
     });
-
-  } catch (error) {
-    console.error('Registration error:', error);
     
-    if (error.code === 'ER_DUP_ENTRY') {
-      res.status(409).json({ error: ' or email already exists' });
-    } else {
-      res.status(500).json({ error: 'Failed to register student' });
-    }
+  } catch (error) {
+    await connection.rollback();
+    console.error('Enrollment error:', error);
+    res.status(500).json({ error: 'Failed to enroll student: ' + error.message });
   } finally {
     connection.release();
   }

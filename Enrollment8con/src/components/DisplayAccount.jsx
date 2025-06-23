@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 
 const DisplayAccount = () => {
   const [students, setStudents] = useState([]);
@@ -8,6 +8,16 @@ const DisplayAccount = () => {
   const [activeTab, setActiveTab] = useState('students');
   const [modalData, setModalData] = useState(null);
   const [modalType, setModalType] = useState(null); // 'student' or 'staff'
+  
+  // Filter states
+  const [filters, setFilters] = useState({
+    name: '',
+    course: '',
+    batch: '',
+    status: '',
+    role: ''
+  });
+  const [showFilters, setShowFilters] = useState(false);
 
   const colors = {
     darkGreen: '#2d4a3d',
@@ -125,6 +135,81 @@ const DisplayAccount = () => {
     }
   };
 
+  // Get unique values for filter dropdowns
+  const getUniqueValues = (data, field) => {
+    const values = data.map(item => item[field]).filter(Boolean);
+    return [...new Set(values)].sort();
+  };
+
+  const uniqueCourses = useMemo(() => {
+    const courses = students.flatMap(student => 
+      student.enrolled_courses ? student.enrolled_courses.split(',').map(c => c.trim()) : []
+    );
+    return [...new Set(courses)].filter(Boolean).sort();
+  }, [students]);
+
+  const uniqueBatches = useMemo(() => {
+    return getUniqueValues(students, 'batch_year');
+  }, [students]);
+
+  const uniqueStatuses = useMemo(() => {
+    return getUniqueValues(students, 'graduation_status');
+  }, [students]);
+
+  const uniqueRoles = useMemo(() => {
+    return getUniqueValues(staff, 'role_name');
+  }, [staff]);
+
+  // Filter logic
+  const filteredStudents = useMemo(() => {
+    return students.filter(student => {
+      const fullName = `${student.first_name || ''} ${student.last_name || ''}`.toLowerCase();
+      const matchesName = fullName.includes(filters.name.toLowerCase());
+      
+      const matchesCourse = !filters.course || 
+        (student.enrolled_courses && student.enrolled_courses.toLowerCase().includes(filters.course.toLowerCase()));
+      
+      const matchesBatch = !filters.batch || 
+        (student.batch_year && student.batch_year.toString() === filters.batch);
+      
+      const matchesStatus = !filters.status || 
+        (student.graduation_status && student.graduation_status.toLowerCase() === filters.status.toLowerCase());
+
+      return matchesName && matchesCourse && matchesBatch && matchesStatus;
+    });
+  }, [students, filters]);
+
+  const filteredStaff = useMemo(() => {
+    return staff.filter(member => {
+      const fullName = `${member.first_name || ''} ${member.last_name || ''}`.toLowerCase();
+      const matchesName = fullName.includes(filters.name.toLowerCase());
+      
+      const matchesRole = !filters.role || 
+        (member.role_name && member.role_name.toLowerCase() === filters.role.toLowerCase());
+
+      return matchesName && matchesRole;
+    });
+  }, [staff, filters]);
+
+  const handleFilterChange = (field, value) => {
+    setFilters(prev => ({
+      ...prev,
+      [field]: value
+    }));
+  };
+
+  const clearFilters = () => {
+    setFilters({
+      name: '',
+      course: '',
+      batch: '',
+      status: '',
+      role: ''
+    });
+  };
+
+  const hasActiveFilters = Object.values(filters).some(filter => filter !== '');
+
   const formatDate = (dateString) => {
     if (!dateString) return 'N/A';
     try {
@@ -235,6 +320,89 @@ const DisplayAccount = () => {
       color: colors.darkGreen,
       marginBottom: '30px',
       fontSize: '28px',
+    },
+    // Filter styles
+    filterContainer: {
+      backgroundColor: colors.cream,
+      border: `1px solid ${colors.lightGreen}`,
+      borderRadius: '8px',
+      padding: '20px',
+      marginBottom: '20px',
+      transition: 'all 0.3s ease',
+    },
+    filterHeader: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: '15px',
+    },
+    filterToggle: {
+      backgroundColor: colors.lightGreen,
+      color: 'white',
+      border: 'none',
+      padding: '8px 16px',
+      borderRadius: '5px',
+      cursor: 'pointer',
+      fontSize: '14px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      transition: 'background-color 0.2s ease',
+    },
+    filterGrid: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+      gap: '15px',
+      marginBottom: '15px',
+    },
+    filterGroup: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '5px',
+    },
+    filterLabel: {
+      fontSize: '14px',
+      fontWeight: 'bold',
+      color: colors.black,
+    },
+    filterInput: {
+      padding: '8px 12px',
+      border: `1px solid ${colors.lightGreen}`,
+      borderRadius: '4px',
+      fontSize: '14px',
+      transition: 'border-color 0.2s ease',
+    },
+    filterSelect: {
+      padding: '8px 12px',
+      border: `1px solid ${colors.lightGreen}`,
+      borderRadius: '4px',
+      fontSize: '14px',
+      backgroundColor: 'white',
+      cursor: 'pointer',
+      transition: 'border-color 0.2s ease',
+    },
+    filterActions: {
+      display: 'flex',
+      gap: '10px',
+      justifyContent: 'flex-end',
+    },
+    clearButton: {
+      backgroundColor: colors.coral,
+      color: 'white',
+      border: 'none',
+      padding: '8px 16px',
+      borderRadius: '5px',
+      cursor: 'pointer',
+      fontSize: '14px',
+      transition: 'background-color 0.2s ease',
+    },
+    activeFiltersIndicator: {
+      backgroundColor: colors.dustyRose,
+      color: 'white',
+      padding: '4px 8px',
+      borderRadius: '12px',
+      fontSize: '12px',
+      fontWeight: 'bold',
     },
     tabContainer: {
       display: 'flex',
@@ -517,6 +685,9 @@ const DisplayAccount = () => {
     );
   }
 
+  const currentData = activeTab === 'students' ? filteredStudents : filteredStaff;
+  const totalData = activeTab === 'students' ? students : staff;
+
   return (
     <div style={styles.container}>
       <h1 style={styles.heading}>
@@ -528,6 +699,115 @@ const DisplayAccount = () => {
         <div style={styles.warning}>{error}</div>
       )}
 
+      {/* Filter Section */}
+      <div style={styles.filterContainer}>
+        <div style={styles.filterHeader}>
+          <button
+            style={styles.filterToggle}
+            onClick={() => setShowFilters(!showFilters)}
+            onMouseOver={(e) => e.target.style.backgroundColor = colors.darkGreen}
+            onMouseOut={(e) => e.target.style.backgroundColor = colors.lightGreen}
+          >
+            {showFilters ? '▼' : '▶'} Filters
+            {hasActiveFilters && (
+              <span style={styles.activeFiltersIndicator}>
+                Active
+              </span>
+            )}
+          </button>
+        </div>
+        
+        {showFilters && (
+          <>
+            <div style={styles.filterGrid}>
+              <div style={styles.filterGroup}>
+                <label style={styles.filterLabel}>Name Search</label>
+                <input
+                  type="text"
+                  placeholder="Search by name..."
+                  value={filters.name}
+                  onChange={(e) => handleFilterChange('name', e.target.value)}
+                  style={styles.filterInput}
+                />
+              </div>
+              
+              {activeTab === 'students' && (
+                <>
+                  <div style={styles.filterGroup}>
+                    <label style={styles.filterLabel}>Course</label>
+                    <select
+                      value={filters.course}
+                      onChange={(e) => handleFilterChange('course', e.target.value)}
+                      style={styles.filterSelect}
+                    >
+                      <option value="">All Courses</option>
+                      {uniqueCourses.map(course => (
+                        <option key={course} value={course}>{course}</option>
+                      ))}
+                    </select>
+                  </div>
+                  
+                  <div style={styles.filterGroup}>
+                    <label style={styles.filterLabel}>Batch</label>
+                    <select
+                      value={filters.batch}
+                      onChange={(e) => handleFilterChange('batch', e.target.value)}
+                      style={styles.filterSelect}
+                    >
+                      <option value="">All Batches</option>
+                      {uniqueBatches.map(batch => (
+                        <option key={batch} value={batch}>{batch}</option>
+                      ))}
+                    </select>
+                  </div>
+                  
+                  <div style={styles.filterGroup}>
+                    <label style={styles.filterLabel}>Status</label>
+                    <select
+                      value={filters.status}
+                      onChange={(e) => handleFilterChange('status', e.target.value)}
+                      style={styles.filterSelect}
+                    >
+                      <option value="">All Statuses</option>
+                      {uniqueStatuses.map(status => (
+                        <option key={status} value={status}>{status}</option>
+                      ))}
+                    </select>
+                  </div>
+                </>
+              )}
+              
+              {activeTab === 'staff' && (
+                <div style={styles.filterGroup}>
+                  <label style={styles.filterLabel}>Role</label>
+                  <select
+                    value={filters.role}
+                    onChange={(e) => handleFilterChange('role', e.target.value)}
+                    style={styles.filterSelect}
+                  >
+                    <option value="">All Roles</option>
+                    {uniqueRoles.map(role => (
+                      <option key={role} value={role}>{role}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+            
+            <div style={styles.filterActions}>
+              <button
+                style={styles.clearButton}
+                onClick={clearFilters}
+                onMouseOver={(e) => e.target.style.backgroundColor = colors.red}
+                onMouseOut={(e) => e.target.style.backgroundColor = colors.coral}
+              >
+                Clear Filters
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
       <div style={styles.tabContainer}>
         <button
           style={{
@@ -536,7 +816,7 @@ const DisplayAccount = () => {
           }}
           onClick={() => setActiveTab('students')}
         >
-          Students ({students.length})
+          Students ({filteredStudents.length}/{students.length})
         </button>
         <button
           style={{
@@ -545,7 +825,7 @@ const DisplayAccount = () => {
           }}
           onClick={() => setActiveTab('staff')}
         >
-          Staff ({staff.length})
+          Staff ({filteredStaff.length}/{staff.length})
         </button>
       </div>
 
@@ -553,16 +833,24 @@ const DisplayAccount = () => {
         <div>
           <div style={styles.sectionTitle}>
             Students
-            <span style={styles.count}>{students.length}</span>
+            <span style={styles.count}>{filteredStudents.length}</span>
+            {filteredStudents.length !== students.length && (
+              <span style={{...styles.count, backgroundColor: colors.olive}}>
+                of {students.length}
+              </span>
+            )}
           </div>
           
-          {students.length === 0 ? (
+          {filteredStudents.length === 0 ? (
             <div style={styles.emptyState}>
-              No students data available. This could be due to access restrictions or empty database.
+              {students.length === 0 
+                ? "No students data available. This could be due to access restrictions or empty database."
+                : "No students match the current filter criteria."
+              }
             </div>
           ) : (
             <div style={styles.accountsGrid}>
-              {students.map((student, index) => {
+              {filteredStudents.map((student, index) => {
                 const cardId = student.student_id || `student-${index}`;
                 
                 return (
@@ -591,6 +879,13 @@ const DisplayAccount = () => {
                         <span style={styles.infoLabel}>Status:</span>
                         <span style={getStatusBadge(student.graduation_status)}>
                           {student.graduation_status || 'N/A'}
+                        </span>
+                      </div>
+
+                      <div style={styles.infoRow}>
+                        <span style={styles.infoLabel}>Enrolled Courses:</span>
+                        <span style={styles.infoValue}>
+                          {student.enrolled_courses || 'No active enrollments'}
                         </span>
                       </div>
                       

@@ -1031,9 +1031,7 @@ const Courses = () => {
                   <th style={styles.th}>Email</th>
                   <th style={styles.th}>Batch</th>
                   <th style={styles.th}>Status</th>
-                  <th style={styles.th}>Completion</th>
                   <th style={styles.th}>Attendance</th>
-                  <th style={styles.th}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -1058,36 +1056,11 @@ const Courses = () => {
                         {student.enrollment_status || 'enrolled'}
                       </span>
                     </td>
-                    <td style={styles.td}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <div style={{ ...styles.progressBar, width: '80px' }}>
-                          <div
-                            style={{
-                              ...styles.progressFill,
-                              width: `${student.completion_percentage || 0}%`,
-                            }}
-                          />
-                        </div>
-                        <span style={{ fontSize: '12px', fontWeight: '500' }}>
-                          {(student.completion_percentage || 0).toFixed(1)}%
-                        </span>
-                      </div>
-                    </td>
+                    
                     <td style={styles.td}>
                       {student.attendance_percentage 
                         ? `${student.attendance_percentage.toFixed(1)}%` 
                         : 'N/A'}
-                    </td>
-                    <td style={styles.td}>
-                      <button
-                        style={{ ...styles.button, ...styles.secondaryButton, padding: '6px 12px', fontSize: '12px' }}
-                        onClick={() => window.location.href = `/students/${student.student_id}`}
-                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = colors.gray[50]}
-                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                      >
-                        <EyeIcon size={14} />
-                        View
-                      </button>
                     </td>
                   </tr>
                 ))}

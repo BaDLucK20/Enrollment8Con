@@ -9,6 +9,7 @@ import DisplayAccount from './DisplayAccount'
 import AddDocument from './AddDocument'
 import PendingDocument from './PendingDocument'
 import Courses from './Courses'
+import ReferralTracking from './ReferralTracking'
 
 import { useNavigate } from 'react-router-dom'
 import UploadPayments from './UploadPayment'
@@ -210,7 +211,7 @@ function UniversalDashboard() {
     //   ]
     // },
     { 
-      id: 'referral', 
+      id: 'referral-tracking', 
       label: 'Referral', 
       icon: Users, 
       color: colors.olive,
@@ -735,6 +736,40 @@ function UniversalDashboard() {
 
       case 'UploadPayments':
         return <UploadPayments/>
+
+      case "referral-tracking":
+        return <ReferralTracking />;
+
+      // case "referral-links":
+      //   return (
+      //     <div style={styles.sectionContent}>
+      //       <h2 style={styles.sectionTitle}>Referral Links</h2>
+      //       <p style={styles.sectionDescription}>
+      //         Manage and generate referral links for students and staff members.
+      //       </p>
+      //     </div>
+      //   );
+
+      // case "referral-status":
+      //   return (
+      //     <div style={styles.sectionContent}>
+      //       <h2 style={styles.sectionTitle}>Referral Status</h2>
+      //       <p style={styles.sectionDescription}>
+      //         Monitor the status of all referral applications and their
+      //         progress.
+      //       </p>
+      //     </div>
+      //   );
+
+      // case "referral-rewards":
+      //   return (
+      //     <div style={styles.sectionContent}>
+      //       <h2 style={styles.sectionTitle}>Referral Rewards</h2>
+      //       <p style={styles.sectionDescription}>
+      //         Track and manage referral rewards and incentive programs.
+      //       </p>
+      //     </div>
+      //   );
 
       case 'payment-tracker':
         return <PaymentHistory />

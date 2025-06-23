@@ -460,6 +460,8 @@ const handleSubmit = async () => {
     console.log('Submitting student registration data:', submitData);
     
     const token = localStorage.getItem('token');
+    
+    // Step 1: Register the student
     const response = await fetch('http://localhost:3000/api/students/register', {
       method: 'POST',
       headers: {
@@ -485,6 +487,43 @@ const handleSubmit = async () => {
     const result = await response.json();
     console.log('Student registered successfully:', result);
     
+    // Step 2: Create enrollment record if student registration was successful
+    if (result.student_id && result.course_offering && result.course_offering.offering_id) {
+      try {
+        const enrollmentData = {
+          student_id: result.student_id,
+          offering_id: result.course_offering.offering_id,
+          enrollment_status: 'enrolled'
+        };
+        
+        console.log('Creating enrollment record:', enrollmentData);
+        
+        const enrollmentResponse = await fetch('http://localhost:3000/api/student-enrollments', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(enrollmentData)
+        });
+        
+        if (!enrollmentResponse.ok) {
+          const enrollmentError = await enrollmentResponse.json();
+          console.warn('Failed to create enrollment record:', enrollmentError);
+          
+          // Don't fail the entire process if enrollment creation fails
+          // The student is already registered, just log the warning
+          console.log('Student registered but enrollment record creation failed');
+        } else {
+          const enrollmentResult = await enrollmentResponse.json();
+          console.log('Enrollment record created successfully:', enrollmentResult);
+        }
+      } catch (enrollmentErr) {
+        console.warn('Error creating enrollment record:', enrollmentErr);
+        // Continue with success message even if enrollment creation fails
+      }
+    }
+    
     // Provide user feedback based on API response
     if (result.email_sent) {
       setSuccess(`Student registered successfully for ${result.course_offering.course_name}! 
@@ -492,7 +531,8 @@ Login credentials have been sent to their email address.
 Student ID: ${result.student_id}
 Account ID: ${result.account_id}
 Batch: ${result.course_offering.batch_identifier}
-Offering ID: ${result.course_offering.offering_id}`);
+Offering ID: ${result.course_offering.offering_id}
+Enrollment Status: Active`);
     } else {
       setSuccess(`Student registered successfully for ${result.course_offering.course_name}!
 Login Credentials:
@@ -502,6 +542,7 @@ Student ID: ${result.student_id}
 Account ID: ${result.account_id}
 Batch: ${result.course_offering.batch_identifier}
 Offering ID: ${result.course_offering.offering_id}
+Enrollment Status: Active
 ${result.email_error ? `Email Error: ${result.email_error}` : 'Email service may be unavailable.'} 
 Please provide these credentials to the student manually.`);
       
@@ -514,6 +555,7 @@ Please provide these credentials to the student manually.`);
       console.log('Course:', result.course_offering.course_name);
       console.log('Batch:', result.course_offering.batch_identifier);
       console.log('Offering ID:', result.course_offering.offering_id);
+      console.log('Enrollment Status: Active');
       console.log('================================');
     }
     
