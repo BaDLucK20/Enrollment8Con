@@ -10,6 +10,7 @@ import DisplayAccount from './components/DisplayAccount'
 import AddDocument from './components/AddDocument'
 import UploadPayments from './components/UploadPayment'
 import PendingDocument from './components/PendingDocument'
+import ReferralTracking from './components/ReferralTracking'
 import Courses from './components/Courses'
 // import Logout from './components/Logout'
 
@@ -28,6 +29,7 @@ function App() {
       <Route path="/PendingDocument" element={<PendingDocument/>} />
       <Route path="/UploadPayment" element={<UploadPayments/>} />
       <Route path="/Courses" element={<Courses/>} />
+      <Route path="/ReferralTracking" element={<ReferralTracking/>} />
       <Route path="/Dashboard" element={<UniversalDashboard />} />
 
     </Routes>

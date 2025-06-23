@@ -582,8 +582,8 @@ app.post('/api/auth', [
     // Admin auto-setup and login
     if (email === 'admin@gmail.com' && password === 'admin123') {
       const [existingAdmin] = await pool.execute(
-        'SELECT * FROM persons WHERE email = ?',
-        ['admin']
+        'SELECT a.account_id FROM accounts a LEFT JOIN persons p ON a.account_id = p.person_id WHERE p.email = ?',
+        ['admin@gmail.com']
       );
 
       let adminId;
