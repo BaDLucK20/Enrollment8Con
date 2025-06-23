@@ -3610,7 +3610,7 @@ node-releases@^2.0.19:
 
 nodemailer@^7.0.3:
   version "7.0.3"
-  resolved "https://registry.yarnpkg.com/nodemailer/-/nodemailer-7.0.3.tgz#c098ce79ac60c7c111a86949eed2f99bd00cdac3"
+  resolved "https://registry.npmjs.org/nodemailer/-/nodemailer-7.0.3.tgz"
   integrity sha512-Ajq6Sz1x7cIK3pN6KesGTah+1gnwMnx5gKl3piQlQQE/PwyJ4Mbc8is2psWYxK3RJTVeqsDaCv8ZzXLCDHMTZw==
 
 nodemon@^3.0.2:

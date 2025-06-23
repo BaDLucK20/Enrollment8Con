@@ -23,6 +23,7 @@ const StudentForm = () => {
 
   const [tradingLevels, setTradingLevels] = useState([]);
   const [courses, setCourses] = useState([]);
+  const [availableCourses, setAvailableCourses] = useState([]);
   const [dataLoading, setDataLoading] = useState(true);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
@@ -283,7 +284,7 @@ const StudentForm = () => {
   const fetchCourses = async () => {
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:3000/api/courses', {
+      const response = await fetch('http://localhost:3000/api/courses/available', {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -294,12 +295,15 @@ const StudentForm = () => {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       
-      const courses = await response.json();
-      setCourses(courses);
-      console.log('Courses fetched successfully:', courses);
+      const result = await response.json();
+      const coursesData = result.courses || result;
+      setCourses(coursesData);
+      setAvailableCourses(coursesData);
+      console.log('Available courses fetched successfully:', coursesData);
     } catch (err) {
       console.error('Failed to fetch courses:', err);
       setCourses([]);
+      setAvailableCourses([]);
     }
   };
 
@@ -354,165 +358,41 @@ const StudentForm = () => {
   };
 
   const validateForm = () => {
-    const requiredFields = ['first_name', 'last_name', 'email'];
-    const missingFields = requiredFields.filter(field => !formData[field].trim());
-    
-    if (missingFields.length > 0) {
-      setError(`Please fill in all required fields: ${missingFields.join(', ')}`);
+    const requiredFields = [
+      'first_name',
+      'last_name',
+      'email',
+      'phone',
+      'gender',
+      'education',
+      'birth_place',
+      'birth_date',
+      'address',
+      'trading_level_id',
+      'course_id',
+    ];
+
+    for (const field of requiredFields) {
+      if (!formData[field] || formData[field].toString().trim() === '') {
+        setError(`Please fill out the ${field.replace(/_/g, ' ')} field.`);
+        return false;
+      }
+    }
+
+    if (formData.device_type.length === 0) {
+      setError('Please select at least one available device.');
       return false;
     }
 
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(formData.email)) {
-      setError("Please enter a valid email address.");
+    if (formData.learning_style.length === 0) {
+      setError('Please select at least one learning style.');
       return false;
     }
 
+    setError('');
     return true;
   };
 
-//   const handleSubmit = async () => {
-//     if (!validateForm()) {
-//       return;
-//     }
-
-//     if (!checkAuthentication()) {
-//       return;
-//     }
-
-//     setLoading(true);
-//     setError(null);
-//     setSuccess(null);
-
-//     try {
-//       // Generate random password
-//       const generatedPassword = generateRandomPassword();
-      
-//       // Prepare data for the server (matching the API schema)
-//       const submitData = {
-//         first_name: formData.first_name,
-//         middle_name: formData.middle_name || null,
-//         last_name: formData.last_name,
-//         birth_date: formData.birth_date || null,
-//         birth_place: formData.birth_place || null,
-//         gender: formData.gender || null,
-//         email: formData.email,
-//         education: formData.education || null,
-//         phone: formData.phone || null,
-//         address: formData.address || null,
-//         password: generatedPassword,
-//         trading_level_id: formData.trading_level_id ? parseInt(formData.trading_level_id) : null,
-//         course_id: formData.course_id ? parseInt(formData.course_id) : null,
-//         referred_by: selectedReferrer ? selectedReferrer.student_id : null,
-//         device_type: formData.device_type.length > 0 ? formData.device_type.join(',') : null,
-//         learning_style: formData.learning_style.length > 0 ? formData.learning_style.join(',') : null
-//       };
-
-//       console.log('Submitting student data:', submitData);
-
-//       const token = localStorage.getItem('token');
-//       const response = await fetch('http://localhost:3000/api/students', {
-//         method: 'POST',
-//         headers: {
-//           'Authorization': `Bearer ${token}`,
-//           'Content-Type': 'application/json',
-//         },
-//         body: JSON.stringify(submitData)
-//       });
-      
-//       if (!response.ok) {
-//         const errorData = await response.json();
-//         throw new Error(errorData.error || `Failed to create student: ${response.statusText}`);
-//       }
-
-//       const result = await response.json();
-//       console.log('Student created successfully:', result);
-
-//       // Try to send email with generated password
-//       let emailSent = false;
-//       let emailError = null;
-
-//       try {
-//         emailSent = await sendPasswordEmail(
-//           formData.email, 
-//           generatedPassword, 
-//           formData.first_name, 
-//           formData.last_name
-//         );
-//       } catch (emailErr) {
-//         console.error('Email sending failed:', emailErr);
-//         emailError = emailErr.message;
-//       }
-
-//       // Provide user feedback based on API response and email status
-//       if (result.email_sent || emailSent) {
-//         setSuccess('Student created successfully! Login credentials have been sent to their email address.');
-//       } else {
-//         setSuccess(`Student created successfully! 
-
-// Login Credentials:
-// Email: ${formData.email}
-// Password: ${generatedPassword}
-
-// ${emailError ? `Email Error: ${emailError}` : 'Email service may be unavailable.'} 
-// Please provide these credentials to the student manually.`);
-        
-//         // Also log to console for admin reference
-//         console.log('=== STUDENT LOGIN CREDENTIALS ===');
-//         console.log('Email:', formData.email);
-//         console.log('Password:', generatedPassword);
-//         console.log('Student ID:', result.student?.student_id || 'N/A');
-//         console.log('================================');
-//       }
-      
-//       // Reset the form
-//       setFormData({
-//         first_name: '',
-//         middle_name: '',
-//         last_name: '',
-//         birth_date: '',
-//         birth_place: '',
-//         gender: '',
-//         email: '',
-//         education: '',
-//         phone: '',
-//         address: '',
-//         trading_level_id: '',
-//         course_id: '',
-//         device_type: [],
-//         learning_style: [],
-//       });
-
-//       // Reset referrer fields
-//       setSelectedReferrer(null);
-//       setReferrerSearchTerm('');
-//       setReferrerSearchResults([]);
-
-//     } catch (err) {
-//       console.error('Submission error:', err);
-      
-//       // Handle specific error types
-//       let errorMessage = 'Failed to create student: ';
-      
-//       if (err.message.includes('401') || err.message.includes('unauthorized')) {
-//         errorMessage = 'Authentication failed. Please log in again.';
-//       } else if (err.message.includes('403') || err.message.includes('forbidden')) {
-//         errorMessage = 'You do not have permission to create students.';
-//       } else if (err.message.includes('409') || err.message.includes('already exists')) {
-//         errorMessage = 'A student with this email already exists.';
-//       } else if (err.message.includes('400')) {
-//         errorMessage = 'Invalid data provided. Please check all required fields.';
-//       } else if (err.message.includes('500')) {
-//         errorMessage = 'Server error. Please try again later.';
-//       } else {
-//         errorMessage += err.message;
-//       }
-      
-//       setError(errorMessage);
-//     } finally {
-//       setLoading(false);
-//     }
-//   };
 const handleSubmit = async () => {
   if (!validateForm()) {
     return;
@@ -531,52 +411,44 @@ const handleSubmit = async () => {
       setError('Please select a course');
       return;
     }
-
-    // Prepare data for the new API endpoint
+    
+    // Prepare data for the new API endpoint - only include fields with values
     const submitData = {
       first_name: formData.first_name.trim(),
       last_name: formData.last_name.trim(),
       email: formData.email.trim(),
-      course_id: parseInt(formData.course_id) // Changed back to course_id
+      course_id: parseInt(formData.course_id)
     };
-
-    // Add optional fields only if they have values
-    if (formData.middle_name && formData.middle_name.trim()) {
-      submitData.middle_name = formData.middle_name.trim();
-    }
     
-    if (formData.birth_date) {
-      submitData.birth_date = formData.birth_date;
-    }
+    // Helper function to add field only if it has a valid value
+    const addFieldIfValid = (fieldName, value, parser = null) => {
+      if (value !== null && value !== undefined && value !== '') {
+        if (typeof value === 'string' && value.trim() === '') return;
+        if (Array.isArray(value) && value.length === 0) return;
+        
+        submitData[fieldName] = parser ? parser(value) : value;
+      }
+    };
     
-    if (formData.birth_place && formData.birth_place.trim()) {
-      submitData.birth_place = formData.birth_place.trim();
-    }
+    // Add optional fields only if they have valid values
+    addFieldIfValid('middle_name', formData.middle_name?.trim());
+    addFieldIfValid('birth_date', formData.birth_date);
+    addFieldIfValid('birth_place', formData.birth_place?.trim());
+    addFieldIfValid('gender', formData.gender);
+    addFieldIfValid('education', formData.education?.trim());
+    addFieldIfValid('phone', formData.phone?.trim());
+    addFieldIfValid('address', formData.address?.trim());
+    addFieldIfValid('trading_level_id', formData.trading_level_id, parseInt);
+    addFieldIfValid('scheme_id', formData.scheme_id, parseInt);
+    addFieldIfValid('total_due', formData.total_due, parseFloat);
+    addFieldIfValid('amount_paid', formData.amount_paid, parseFloat);
     
-    if (formData.gender) {
-      submitData.gender = formData.gender;
-    }
-    
-    if (formData.education && formData.education.trim()) {
-      submitData.education = formData.education.trim();
-    }
-    
-    if (formData.phone && formData.phone.trim()) {
-      submitData.phone = formData.phone.trim();
-    }
-    
-    if (formData.address && formData.address.trim()) {
-      submitData.address = formData.address.trim();
-    }
-    
-    if (formData.trading_level_id) {
-      submitData.trading_level_id = parseInt(formData.trading_level_id);
-    }
-    
+    // Handle referrer - only add if there's a valid selection
     if (selectedReferrer && selectedReferrer.student_id) {
       submitData.referred_by = parseInt(selectedReferrer.student_id);
     }
     
+    // Handle arrays - only add if they have values
     if (formData.device_type && formData.device_type.length > 0) {
       submitData.device_type = formData.device_type.join(',');
     }
@@ -585,18 +457,6 @@ const handleSubmit = async () => {
       submitData.learning_style = formData.learning_style.join(',');
     }
     
-    if (formData.scheme_id) {
-      submitData.scheme_id = parseInt(formData.scheme_id);
-    }
-    
-    if (formData.total_due) {
-      submitData.total_due = parseFloat(formData.total_due);
-    }
-    
-    if (formData.amount_paid) {
-      submitData.amount_paid = parseFloat(formData.amount_paid);
-    }
-
     console.log('Submitting student registration data:', submitData);
     
     const token = localStorage.getItem('token');
@@ -629,19 +489,19 @@ const handleSubmit = async () => {
     if (result.email_sent) {
       setSuccess(`Student registered successfully for ${result.course_offering.course_name}! 
 Login credentials have been sent to their email address.
-Student ID: ${result.student.student_id}
+Student ID: ${result.student_id}
+Account ID: ${result.account_id}
 Batch: ${result.course_offering.batch_identifier}
 Offering ID: ${result.course_offering.offering_id}`);
     } else {
       setSuccess(`Student registered successfully for ${result.course_offering.course_name}!
-
 Login Credentials:
 Email: ${result.credentials.email}
 Password: ${result.credentials.password}
-Student ID: ${result.student.student_id}
+Student ID: ${result.student_id}
+Account ID: ${result.account_id}
 Batch: ${result.course_offering.batch_identifier}
 Offering ID: ${result.course_offering.offering_id}
-
 ${result.email_error ? `Email Error: ${result.email_error}` : 'Email service may be unavailable.'} 
 Please provide these credentials to the student manually.`);
       
@@ -649,7 +509,8 @@ Please provide these credentials to the student manually.`);
       console.log('=== STUDENT LOGIN CREDENTIALS ===');
       console.log('Email:', result.credentials.email);
       console.log('Password:', result.credentials.password);
-      console.log('Student ID:', result.student.student_id);
+      console.log('Student ID:', result.student_id);
+      console.log('Account ID:', result.account_id);
       console.log('Course:', result.course_offering.course_name);
       console.log('Batch:', result.course_offering.batch_identifier);
       console.log('Offering ID:', result.course_offering.offering_id);
@@ -669,7 +530,7 @@ Please provide these credentials to the student manually.`);
       phone: '',
       address: '',
       trading_level_id: '',
-      course_id: '', // Changed back to course_id
+      course_id: '',
       device_type: [],
       learning_style: [],
       scheme_id: '',
@@ -682,6 +543,8 @@ Please provide these credentials to the student manually.`);
     setReferrerSearchTerm('');
     setReferrerSearchResults([]);
     
+    await fetchCourses();
+
   } catch (err) {
     console.error('Registration error:', err);
     
@@ -950,8 +813,6 @@ useEffect(() => {
         </div>
       ) : (
         <div>
-        {error && <div style={styles.error}>{error}</div>}
-        {success && <div style={styles.success}>{success}</div>}
 
         <fieldset style={styles.fieldset}>
           <legend style={styles.legend}>Personal Information</legend>
@@ -1121,9 +982,12 @@ useEffect(() => {
                 {courses.length === 0 ? (
                   <option value="" disabled>No courses available</option>
                 ) : (
-                  courses.map((course) => (
-                    <option key={course.course_id} value={course.course_id}>
-                      {course.course_name} ({course.duration_weeks} weeks)
+                   availableCourses.map((course) => (
+                      <option key={course.course_id} value={course.course_id}>
+                        {course.course_name} ({course.duration_weeks} weeks)
+                        {course.available_offerings > 0 && (
+                          ` - ${course.available_offerings} offering(s) available`
+                        )}
                     </option>
                   ))
                 )}
@@ -1305,6 +1169,8 @@ useEffect(() => {
             'Register Student'
           )}
         </button>
+        {error && <div style={styles.error}>{error}</div>}
+        {success && <div style={styles.success}>{success}</div>}
       </div>
       )}
     </div>

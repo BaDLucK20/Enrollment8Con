@@ -195,8 +195,8 @@ const PendingDocument = () => {
         return colors.lightGreen;
       case 'pending':
         return colors.coral;
-      case 'rejected':
-        return colors.red;
+      // case 'rejected':
+      //   return colors.red;
       case 'requires_update':
         return colors.dustyRose;
       default:
@@ -208,8 +208,8 @@ const PendingDocument = () => {
     switch (status) {
       case 'verified':
         return <CheckIcon />;
-      case 'rejected':
-        return <XIcon />;
+      // case 'rejected':
+      //   return <XIcon />;
       case 'pending':
       case 'requires_update':
         return <ClockIcon />;
@@ -233,7 +233,7 @@ const PendingDocument = () => {
   // Calculate statistics
   const pendingCount = documents.filter(d => d.verification_status === 'pending').length;
   const verifiedCount = documents.filter(d => d.verification_status === 'verified').length;
-  const rejectedCount = documents.filter(d => d.verification_status === 'rejected').length;
+  // const rejectedCount = documents.filter(d => d.verification_status === 'rejected').length;
   const requiresUpdateCount = documents.filter(d => d.verification_status === 'requires_update').length;
 
   const styles = {
@@ -725,10 +725,10 @@ const PendingDocument = () => {
             <div style={styles.statValue}>{verifiedCount}</div>
             <div style={styles.statLabel}>Verified Documents</div>
           </div>
-          <div style={styles.statItem}>
+          {/* <div style={styles.statItem}>
             <div style={styles.statValue}>{rejectedCount}</div>
             <div style={styles.statLabel}>Rejected Documents</div>
-          </div>
+          </div> */}
           <div style={styles.statItem}>
             <div style={styles.statValue}>{requiresUpdateCount}</div>
             <div style={styles.statLabel}>Requires Update</div>
@@ -757,7 +757,7 @@ const PendingDocument = () => {
           <div style={styles.filterGroup}>
             <label style={styles.filterLabel}>Filter by Status</label>
             <div style={styles.filterButtons}>
-              {['all', 'pending', 'verified', 'rejected'].map((status) => (
+              {['all', 'pending', 'verified'].map((status) => (
                 <button
                   key={status}
                   style={{
@@ -904,7 +904,7 @@ const PendingDocument = () => {
                               <CheckIcon size={14} />
                               Verify
                             </button>
-                            <button
+                            {/* <button
                               style={{ ...styles.actionButton, ...styles.rejectButton }}
                               onClick={() => {
                                 setSelectedDocument(doc);
@@ -915,7 +915,7 @@ const PendingDocument = () => {
                             >
                               <XIcon size={14} />
                               Reject
-                            </button>
+                            </button> */}
                           </>
                         )}
                       </div>
@@ -969,7 +969,7 @@ const PendingDocument = () => {
                   onChange={(e) => setVerificationStatus(e.target.value)}
                 >
                   <option value="verified">Verified - Document is valid</option>
-                  <option value="rejected">Rejected - Document is invalid</option>
+                  {/* <option value="rejected">Rejected - Document is invalid</option> */}
                   <option value="requires_update">Requires Update - Needs resubmission</option>
                 </select>
               </div>

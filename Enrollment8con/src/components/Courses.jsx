@@ -6,11 +6,11 @@ const Courses = () => {
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [selectedCourse, setSelectedCourse] = useState(null);
-  const [viewMode, setViewMode] = useState('list'); // list, add, edit, details, competency-manage
+  const [viewMode, setViewMode] = useState('list'); // list, add, edit, details, competency-manage, students
   const [courseOfferings, setCourseOfferings] = useState([]);
   const [competencies, setCompetencies] = useState([]);
-  const [allCompetencies, setAllCompetencies] = useState([]); // All available competencies
-  const [courseCompetencies, setCourseCompetencies] = useState([]); // Competencies for selected course
+  const [allCompetencies, setAllCompetencies] = useState([]);
+  const [courseCompetencies, setCourseCompetencies] = useState([]);
   const [enrolledStudents, setEnrolledStudents] = useState([]);
   const [studentProgress, setStudentProgress] = useState({});
   const [selectedOffering, setSelectedOffering] = useState(null);
@@ -482,6 +482,34 @@ const Courses = () => {
     }
   }, []);
 
+  // NEW: Fetch all students enrolled in a specific course
+  const fetchCourseStudents = useCallback(async (courseId) => {
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`http://localhost:3000/api/courses/${courseId}/students`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) throw new Error('Failed to fetch course students');
+
+      const students = await response.json();
+      setEnrolledStudents(students);
+      
+      console.log('Fetched students for course:', courseId, students);
+    } catch (err) {
+      setError(err.message);
+      console.error('Error fetching course students:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   // Fetch course offerings for a specific course
   const fetchCourseOfferings = useCallback(async (courseId) => {
     try {
@@ -527,7 +555,7 @@ const Courses = () => {
   const fetchCourseCompetencies = useCallback(async (courseId) => {
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(`http://localhost:3000/api/courses/${course.course_id}/competencies`, {
+      const response = await fetch(`http://localhost:3000/api/courses/${courseId}/competencies`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -651,126 +679,125 @@ const Courses = () => {
     }
   };
 
+  // Frontend: Updated handleUpdateCourse function
+  const handleUpdateCourse = async (e) => {
+    e.preventDefault();
+    setLoading(true);
 
+    try {
+      // Make sure we have a course ID for updates
+      if (!selectedCourse?.course_id) {
+        throw new Error('No course selected for update');
+      }
 
-// Frontend: Updated handleUpdateCourse function
-const handleUpdateCourse = async (e) => {
-  e.preventDefault();
-  setLoading(true);
+      const updateData = {
+        course_code: formData.course_code,
+        course_name: formData.course_name,
+        course_description: formData.course_description,
+        duration_weeks: parseInt(formData.duration_weeks),
+        credits: parseFloat(formData.credits),
+        competencies: formData.competencies,
+        pricing: formData.pricing, // Include pricing data
+        is_active: formData.is_active !== undefined ? formData.is_active : true
+      };
 
-  try {
-    // Make sure we have a course ID for updates
-    if (!selectedCourse?.course_id) {
-      throw new Error('No course selected for update');
-    }
+      // Debug logging
+      console.log('Update data being sent:', updateData);
+      console.log('Course ID:', selectedCourse.course_id);
 
-    const updateData = {
-      course_code: formData.course_code,
-      course_name: formData.course_name,
-      course_description: formData.course_description,
-      duration_weeks: parseInt(formData.duration_weeks),
-      credits: parseFloat(formData.credits),
-      competencies: formData.competencies,
-      pricing: formData.pricing, // Include pricing data
-      is_active: formData.is_active !== undefined ? formData.is_active : true
-    };
+      const response = await fetch(`http://localhost:3000/api/courses/${selectedCourse.course_id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}` // Adjust based on your auth setup
+        },
+        body: JSON.stringify(updateData)
+      });
 
-    // Debug logging
-    console.log('Update data being sent:', updateData);
-    console.log('Course ID:', selectedCourse.course_id);
+      // Check if response is ok first
+      if (!response.ok) {
+        let errorMessage = 'Failed to update course';
+        
+        // Try to get error message from response
+        try {
+          const contentType = response.headers.get('content-type');
+          if (contentType && contentType.includes('application/json')) {
+            const errorData = await response.json();
+            errorMessage = errorData.error || errorData.message || errorMessage;
+          } else {
+            // If not JSON, get text response
+            const errorText = await response.text();
+            console.error('Non-JSON error response:', errorText);
+            errorMessage = `Server error (${response.status}): ${response.statusText}`;
+          }
+        } catch (parseError) {
+          console.error('Error parsing error response:', parseError);
+          errorMessage = `Server error (${response.status}): ${response.statusText}`;
+        }
+        
+        throw new Error(errorMessage);
+      }
 
-    const response = await fetch(`http://localhost:3000/api/courses/${selectedCourse.course_id}`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${localStorage.getItem('token')}` // Adjust based on your auth setup
-      },
-      body: JSON.stringify(updateData)
-    });
-
-    // Check if response is ok first
-    if (!response.ok) {
-      let errorMessage = 'Failed to update course';
-      
-      // Try to get error message from response
+      // Parse successful response
+      let result;
       try {
         const contentType = response.headers.get('content-type');
         if (contentType && contentType.includes('application/json')) {
-          const errorData = await response.json();
-          errorMessage = errorData.error || errorData.message || errorMessage;
+          result = await response.json();
         } else {
-          // If not JSON, get text response
-          const errorText = await response.text();
-          console.error('Non-JSON error response:', errorText);
-          errorMessage = `Server error (${response.status}): ${response.statusText}`;
+          throw new Error('Server did not return JSON response');
         }
       } catch (parseError) {
-        console.error('Error parsing error response:', parseError);
-        errorMessage = `Server error (${response.status}): ${response.statusText}`;
+        console.error('Error parsing success response:', parseError);
+        throw new Error('Invalid response from server');
       }
       
-      throw new Error(errorMessage);
+      // Update the courses list with the updated course
+      setCourses(prevCourses => 
+        prevCourses.map(course => 
+          course.course_id === selectedCourse.course_id 
+            ? result.course 
+            : course
+        )
+      );
+
+      // Reset form and switch back to list view
+      resetForm();
+      setViewMode('list');
+      setSelectedCourse(null);
+      
+      // Show success message (adjust based on your notification system)
+      alert('Course updated successfully!');
+
+    } catch (error) {
+      console.error('Update course error:', error);
+      alert(`Error updating course: ${error.message}`);
+    } finally {
+      setLoading(false);
     }
+  };
 
-    // Parse successful response
-    let result;
-    try {
-      const contentType = response.headers.get('content-type');
-      if (contentType && contentType.includes('application/json')) {
-        result = await response.json();
-      } else {
-        throw new Error('Server did not return JSON response');
-      }
-    } catch (parseError) {
-      console.error('Error parsing success response:', parseError);
-      throw new Error('Invalid response from server');
-    }
-    
-    // Update the courses list with the updated course
-    setCourses(prevCourses => 
-      prevCourses.map(course => 
-        course.course_id === selectedCourse.course_id 
-          ? result.course 
-          : course
-      )
-    );
+  // Helper function to populate form when editing
+  const handleEditCourse = (course) => {
+    setSelectedCourse(course);
+    setFormData({
+      course_code: course.course_code || '',
+      course_name: course.course_name || '',
+      course_description: course.course_description || '',
+      duration_weeks: course.duration_weeks || '',
+      credits: course.credits || '',
+      competencies: course.competencies || [], // Assume this comes from API
+      pricing: course.pricing || {
+        regular_price: '',
+        early_bird_price: '',
+        group_price: '',
+        corporate_price: ''
+      },
+      is_active: course.is_active !== undefined ? course.is_active : true
+    });
+    setViewMode('edit'); // or 'add' if you're using the same mode
+  };
 
-    // Reset form and switch back to list view
-    resetForm();
-    setViewMode('list');
-    setSelectedCourse(null);
-    
-    // Show success message (adjust based on your notification system)
-    alert('Course updated successfully!');
-
-  } catch (error) {
-    console.error('Update course error:', error);
-    alert(`Error updating course: ${error.message}`);
-  } finally {
-    setLoading(false);
-  }
-};
-
-// Helper function to populate form when editing
-const handleEditCourse = (course) => {
-  setSelectedCourse(course);
-  setFormData({
-    course_code: course.course_code || '',
-    course_name: course.course_name || '',
-    course_description: course.course_description || '',
-    duration_weeks: course.duration_weeks || '',
-    credits: course.credits || '',
-    competencies: course.competencies || [], // Assume this comes from API
-    pricing: course.pricing || {
-      regular_price: '',
-      early_bird_price: '',
-      group_price: '',
-      corporate_price: ''
-    },
-    is_active: course.is_active !== undefined ? course.is_active : true
-  });
-  setViewMode('edit'); // or 'add' if you're using the same mode
-};
   // Handle add competency
   const handleAddCompetency = async (e) => {
     e.preventDefault();
@@ -908,8 +935,12 @@ const handleEditCourse = (course) => {
     fetchCourseCompetencies(course.course_id);
   };
 
-  // Handle edit course
-  
+  // NEW: Handle view students
+  const handleViewStudents = (course) => {
+    setSelectedCourse(course);
+    setViewMode('students');
+    fetchCourseStudents(course.course_id);
+  };
 
   // Handle competency click
   const handleCompetencyClick = (competency) => {
@@ -933,6 +964,140 @@ const handleEditCourse = (course) => {
       return progress && progress.competency_id === competencyId;
     }).length;
   };
+
+  // NEW: Render course students view
+  const renderCourseStudents = () => (
+    <div>
+      <button
+        style={styles.backButton}
+        onClick={() => {
+          setViewMode('list');
+          setSelectedCourse(null);
+          setEnrolledStudents([]);
+        }}
+        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = colors.gray[200]}
+        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = colors.gray[100]}
+      >
+        <BackIcon />
+        Back to Courses
+      </button>
+
+      <div style={styles.card}>
+        <div style={styles.header}>
+          <div>
+            <h1 style={styles.title}>Students in {selectedCourse?.course_name}</h1>
+            <p style={styles.courseCode}>Code: {selectedCourse?.course_code}</p>
+          </div>
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <button
+              style={{ ...styles.button, ...styles.secondaryButton }}
+              onClick={() => handleViewDetails(selectedCourse)}
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = colors.gray[50]}
+              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+            >
+              <EyeIcon />
+              Course Details
+            </button>
+          </div>
+        </div>
+
+        <div style={{ marginBottom: '24px' }}>
+          <span style={styles.enrollmentBadge}>
+            <UsersIcon size={16} />
+            {enrolledStudents.length} Students Enrolled
+          </span>
+        </div>
+
+        {loading && (
+          <div style={{ textAlign: 'center', padding: '40px' }}>
+            <LoadingSpinner />
+            <p style={{ marginTop: '16px', color: colors.gray[600] }}>Loading students...</p>
+          </div>
+        )}
+
+        {!loading && enrolledStudents.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '40px' }}>
+            <p style={{ color: colors.gray[500] }}>No students enrolled in this course yet.</p>
+          </div>
+        )}
+
+        {!loading && enrolledStudents.length > 0 && (
+          <div style={styles.studentList}>
+            <table style={styles.table}>
+              <thead>
+                <tr>
+                  <th style={styles.th}>Student ID</th>
+                  <th style={styles.th}>Name</th>
+                  <th style={styles.th}>Email</th>
+                  <th style={styles.th}>Batch</th>
+                  <th style={styles.th}>Status</th>
+                  <th style={styles.th}>Completion</th>
+                  <th style={styles.th}>Attendance</th>
+                  <th style={styles.th}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {enrolledStudents.map((student) => (
+                  <tr key={student.student_id}>
+                    <td style={styles.td}>{student.student_id}</td>
+                    <td style={styles.td}>
+                      {student.first_name} {student.last_name}
+                    </td>
+                    <td style={styles.td}>{student.email}</td>
+                    <td style={styles.td}>{student.batch_identifier}</td>
+                    <td style={styles.td}>
+                      <span style={{
+                        ...styles.badge,
+                        backgroundColor: student.enrollment_status === 'enrolled' 
+                          ? colors.success + '20' 
+                          : colors.warning + '20',
+                        color: student.enrollment_status === 'enrolled' 
+                          ? colors.success 
+                          : colors.warning,
+                      }}>
+                        {student.enrollment_status || 'enrolled'}
+                      </span>
+                    </td>
+                    <td style={styles.td}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <div style={{ ...styles.progressBar, width: '80px' }}>
+                          <div
+                            style={{
+                              ...styles.progressFill,
+                              width: `${student.completion_percentage || 0}%`,
+                            }}
+                          />
+                        </div>
+                        <span style={{ fontSize: '12px', fontWeight: '500' }}>
+                          {(student.completion_percentage || 0).toFixed(1)}%
+                        </span>
+                      </div>
+                    </td>
+                    <td style={styles.td}>
+                      {student.attendance_percentage 
+                        ? `${student.attendance_percentage.toFixed(1)}%` 
+                        : 'N/A'}
+                    </td>
+                    <td style={styles.td}>
+                      <button
+                        style={{ ...styles.button, ...styles.secondaryButton, padding: '6px 12px', fontSize: '12px' }}
+                        onClick={() => window.location.href = `/students/${student.student_id}`}
+                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = colors.gray[50]}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                      >
+                        <EyeIcon size={14} />
+                        View
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 
   // Render course list
   const renderCourseList = () => (
@@ -1015,7 +1180,16 @@ const handleEditCourse = (course) => {
                   onMouseLeave={(e) => e.currentTarget.style.backgroundColor = colors.primary}
                 >
                   <EyeIcon />
-                  View Details
+                  Details
+                </button>
+                <button
+                  style={{ ...styles.button, ...styles.successButton }}
+                  onClick={() => handleViewStudents(course)}
+                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = colors.secondaryDark}
+                  onMouseLeave={(e) => e.currentTarget.style.backgroundColor = colors.success}
+                >
+                  <UsersIcon />
+                  Students
                 </button>
                 <button
                   style={{ ...styles.button, ...styles.secondaryButton }}
@@ -1366,15 +1540,26 @@ const handleEditCourse = (course) => {
             <h1 style={styles.title}>{selectedCourse?.course_name}</h1>
             <p style={styles.courseCode}>Code: {selectedCourse?.course_code}</p>
           </div>
-          <button
-            style={{ ...styles.button, ...styles.secondaryButton }}
-            onClick={() => handleEditCourse(selectedCourse)}
-            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = colors.gray[50]}
-            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-          >
-            <EditIcon />
-            Edit Course
-          </button>
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <button
+              style={{ ...styles.button, ...styles.successButton }}
+              onClick={() => handleViewStudents(selectedCourse)}
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = colors.secondaryDark}
+              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = colors.success}
+            >
+              <UsersIcon />
+              View Students
+            </button>
+            <button
+              style={{ ...styles.button, ...styles.secondaryButton }}
+              onClick={() => handleEditCourse(selectedCourse)}
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = colors.gray[50]}
+              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+            >
+              <EditIcon />
+              Edit Course
+            </button>
+          </div>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '24px', marginTop: '24px' }}>
@@ -1750,6 +1935,7 @@ const handleEditCourse = (course) => {
         {viewMode === 'list' && renderCourseList()}
         {(viewMode === 'add' || viewMode === 'edit') && renderCourseForm()}
         {viewMode === 'details' && renderCourseDetails()}
+        {viewMode === 'students' && renderCourseStudents()}
         {viewMode === 'competency-manage' && renderCompetencyManagement()}
 
         {/* Competency Modal */}
