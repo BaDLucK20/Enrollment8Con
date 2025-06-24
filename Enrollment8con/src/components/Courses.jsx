@@ -30,10 +30,10 @@ const Courses = () => {
     competencies: [],
     pricing: {
       regular: '',
-      early_bird: '',
-      group: '',
-      scholarship: '',
-      special: ''
+      // early_bird: '',
+      // group: '',
+      // scholarship: '',
+      // special: ''
     }
   });
 
@@ -654,6 +654,8 @@ const Courses = () => {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    
+    
 
     try {
       const token = localStorage.getItem('token');
@@ -789,9 +791,9 @@ const Courses = () => {
       competencies: course.competencies || [], // Assume this comes from API
       pricing: course.pricing || {
         regular_price: '',
-        early_bird_price: '',
-        group_price: '',
-        corporate_price: ''
+        // early_bird_price: '',
+        // group_price: '',
+        // corporate_price: ''
       },
       is_active: course.is_active !== undefined ? course.is_active : true
     });
@@ -906,10 +908,10 @@ const Courses = () => {
       competencies: [],
       pricing: {
         regular: '',
-        early_bird: '',
-        group: '',
-        scholarship: '',
-        special: ''
+        // early_bird: '',
+        // group: '',
+        // scholarship: '',
+        // special: ''
       }
     });
     setSelectedCourse(null);
@@ -1031,7 +1033,6 @@ const Courses = () => {
                   <th style={styles.th}>Email</th>
                   <th style={styles.th}>Batch</th>
                   <th style={styles.th}>Status</th>
-                  <th style={styles.th}>Attendance</th>
                 </tr>
               </thead>
               <tbody>
@@ -1055,12 +1056,6 @@ const Courses = () => {
                       }}>
                         {student.enrollment_status || 'enrolled'}
                       </span>
-                    </td>
-                    
-                    <td style={styles.td}>
-                      {student.attendance_percentage 
-                        ? `${student.attendance_percentage.toFixed(1)}%` 
-                        : 'N/A'}
                     </td>
                   </tr>
                 ))}
@@ -1276,7 +1271,7 @@ const Courses = () => {
             />
           </div>
         </div>
-
+{/* 
         <h3 style={styles.sectionTitle}>Course Competencies</h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '12px' }}>
           {allCompetencies.map((comp) => (
@@ -1301,7 +1296,7 @@ const Courses = () => {
               <span style={{ fontSize: '14px' }}>{comp.competency_name}</span>
             </label>
           ))}
-        </div>
+        </div> */}
 
         <h3 style={styles.sectionTitle}>Pricing Options</h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '16px' }}>
@@ -1319,7 +1314,7 @@ const Courses = () => {
                   onChange={(e) => handlePricingChange(type, e.target.value)}
                   placeholder="0.00"
                   min="0"
-                  step="0.01"
+                  step="10.0"
                 />
               </div>
             </div>
@@ -1446,7 +1441,7 @@ const Courses = () => {
                   required
                   min="0"
                   max="100"
-                  step="0.01"
+                  step="1.0"
                 />
               </div>
             </div>
@@ -1714,7 +1709,6 @@ const Courses = () => {
                     <th style={styles.th}>Progress</th>
                     <th style={styles.th}>Score</th>
                     <th style={styles.th}>Status</th>
-                    <th style={styles.th}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1755,17 +1749,6 @@ const Courses = () => {
                           }}>
                             {isPassed ? 'Passed' : progress ? 'In Progress' : 'Not Started'}
                           </span>
-                        </td>
-                        <td style={styles.td}>
-                          <button
-                            style={{ ...styles.button, ...styles.secondaryButton, padding: '6px 12px', fontSize: '12px' }}
-                            onClick={() => window.location.href = `/students/${student.student_id}`}
-                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = colors.gray[50]}
-                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                          >
-                            <EyeIcon size={14} />
-                            View
-                          </button>
                         </td>
                       </tr>
                     );
