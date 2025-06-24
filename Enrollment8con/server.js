@@ -1840,59 +1840,61 @@ app.put('/api/profile/:account_id', [
 app.get('/api/students', authenticateToken, authorize(['admin', 'staff']), async (req, res) => {
   try {
     const { name_sort, graduation_status, trading_level, search } = req.query;
-    
+   
     let query = `
       SELECT s.student_id, s.graduation_status, s.academic_standing, s.gpa, s.registration_date,
              p.first_name, p.last_name, p.birth_date, p.birth_place, p.gender,
              tl.level_name as current_trading_level,
-             COUNT(DISTINCT se.enrollment_id) as total_enrollments
+             COUNT(DISTINCT se.enrollment_id) as total_enrollments,
+             GROUP_CONCAT(DISTINCT CONCAT(c.course_code, ' - ', c.course_name) SEPARATOR ', ') as enrolled_courses
       FROM students s
       JOIN persons p ON s.person_id = p.person_id
       LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
       LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
       LEFT JOIN student_enrollments se ON s.student_id = se.student_id
+      LEFT JOIN course_offerings co ON se.offering_id = co.offering_id
+      LEFT JOIN courses c ON co.course_id = c.course_id
     `;
-    
+   
     const params = [];
     const conditions = [];
-    
+   
     if (graduation_status) {
       conditions.push('s.graduation_status = ?');
       params.push(graduation_status);
     }
-    
+   
     if (trading_level) {
       conditions.push('tl.level_name = ?');
       params.push(trading_level);
     }
-    
+   
     if (search) {
       conditions.push('(p.first_name LIKE ? OR p.last_name LIKE ? OR s.student_id LIKE ?)');
       const searchParam = `%${search}%`;
       params.push(searchParam, searchParam, searchParam);
     }
-    
-    // WHERE clause goes here - after all JOINs, before GROUP BY
+   
     if (conditions.length > 0) {
       query += ' WHERE ' + conditions.join(' AND ');
     }
-    
+   
     query += ' GROUP BY s.student_id, p.first_name, p.last_name, p.birth_date, p.birth_place, p.gender, s.graduation_status, s.academic_standing, s.gpa, s.registration_date, tl.level_name';
-    
+   
     if (name_sort) {
       query += ` ORDER BY p.first_name ${name_sort === 'ascending' ? 'ASC' : 'DESC'}`;
     } else {
       query += ' ORDER BY s.registration_date DESC';
     }
-    
+   
     console.log('Executing query:', query);
     console.log('With parameters:', params);
-    
+   
     const [students] = await pool.execute(query, params);
-    
+   
     console.log(`Found ${students.length} students`);
     res.json(students);
-    
+   
   } catch (error) {
     console.error('Students fetch error:', error);
     res.status(500).json({ error: 'Failed to fetch students' });

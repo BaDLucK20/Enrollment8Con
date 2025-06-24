@@ -208,27 +208,27 @@ const DisplayAccount = () => {
     
     console.log('Processing student:', student.student_id, 'Available courses:', courses.length);
     console.log('Student course data:', {
-      enrolled_courses: courses.courses,
-      course_id: courses.course_id,
-      course_code: courses.course_code,
-      courses: courses.courses
+      enrolled_courses: student.enrolled_courses,
+      course_id: student.course_id,
+      course_code: student.course_code,
+      courses: student.courses
     });
 
     // Method 1: If student has enrolled_courses as a string (comma-separated course codes/names)
     if (student.enrolled_courses && typeof student.enrolled_courses === 'string') {
-      const enrolledCourseStrings = course.courses.split(',').map(c => c.trim());
+      const enrolledCourseStrings = student.enrolled_courses.split(',').map(c => c.trim());
       console.log('Enrolled course strings:', enrolledCourseStrings);
       
       courseInfo = enrolledCourseStrings.map(courseStr => {
         // Try to find exact course code match first
         let matchedCourse = courses.find(course => 
-          courses.course_code.toLowerCase() === courseStr.toLowerCase()
+          course.course_code.toLowerCase() === courseStr.toLowerCase()
         );
         
         // If no exact match, try partial matching
         if (!matchedCourse) {
           matchedCourse = courses.find(course => 
-            courses.course_name.toLowerCase().includes(courseStr.toLowerCase()) ||
+            course.course_name.toLowerCase().includes(courseStr.toLowerCase()) ||
             courseStr.toLowerCase().includes(course.course_code.toLowerCase())
           );
         }
@@ -246,29 +246,29 @@ const DisplayAccount = () => {
     // Method 2: If student has course_id, find the matching course
     else if (student.course_id) {
       const matchedCourse = courses.find(course => 
-        courses.course_id === parseInt(courses.course_id)
+        course.course_id === parseInt(student.course_id)
       );
       
       if (matchedCourse) {
         console.log('Found course by ID:', matchedCourse);
         courseInfo = [`${matchedCourse.course_code} - ${matchedCourse.course_name}`];
       } else {
-        console.log('No course found for ID:', courses.course_id);
-        courseInfo = [`Course ID: ${courses.course_id}`];
+        console.log('No course found for ID:', student.course_id);
+        courseInfo = [`Course ID: ${student.course_id}`];
       }
     }
     
     // Method 3: If student has course_code, find the matching course
     else if (student.course_code) {
       const matchedCourse = courses.find(course => 
-        courses.course_code.toLowerCase() === courses.course_code.toLowerCase()
+        course.course_code.toLowerCase() === student.course_code.toLowerCase()
       );
       
       if (matchedCourse) {
         console.log('Found course by code:', matchedCourse);
         courseInfo = [`${matchedCourse.course_code} - ${matchedCourse.course_name}`];
       } else {
-        console.log('No course found for code:', courses.course_code);
+        console.log('No course found for code:', student.course_code);
         courseInfo = [student.course_code];
       }
     }
@@ -276,11 +276,11 @@ const DisplayAccount = () => {
     // Method 4: If student has an array of courses
     else if (Array.isArray(student.courses)) {
       courseInfo = student.courses.map(course => {
-        if (typeof courses === 'object' && courses.course_name) {
-          return `${courses.course_code || 'N/A'} - ${course.course_name}`;
+        if (typeof course === 'object' && course.course_name) {
+          return `${course.course_code || 'N/A'} - ${course.course_name}`;
         } else if (typeof course === 'object' && course.course_id) {
           // Look up course by ID
-          const matchedCourse = courses.find(c => c.course_id === courses.course_id);
+          const matchedCourse = courses.find(c => c.course_id === course.course_id);
           if (matchedCourse) {
             return `${matchedCourse.course_code} - ${matchedCourse.course_name}`;
           }
@@ -291,8 +291,8 @@ const DisplayAccount = () => {
     }
     
     // Method 5: Check if student has course_name directly
-    else if (courses.course_name) {
-      courseInfo = [`${courses.course_code || 'N/A'} - ${courses.course_name}`];
+    else if (student.course_name) {
+      courseInfo = [`${student.course_code || 'N/A'} - ${student.course_name}`];
     }
     
     // Return formatted display text
@@ -1132,23 +1132,11 @@ const DisplayAccount = () => {
         </div>
       </div>
 
-      {/* Debug Info - Remove this in production */}
-      {process.env.NODE_ENV === 'development' && (
-        <div style={{ backgroundColor: '#f0f0f0', padding: '10px', marginBottom: '20px', fontSize: '12px' }}>
-          <strong>Debug Info:</strong><br />
-          Total Courses Loaded: {courses.length}<br />
-          Courses: {courses.map(c => `${c.course_code} - ${c.course_name}`).join(', ')}<br />
-          Sample Student Enrolled Courses (Raw): {students[0]?.enrolled_courses || 'N/A'}<br />
-          Sample Student Courses (Processed): {students[0] ? getStudentCoursesDisplay(students[0]) : 'N/A'}
-        </div>
-      )}
-
       {/* Student Content */}
       {activeTab === 'students' && (
         <div>
           <div style={styles.sectionTitle}>
             Students
-            <span style={styles.count}>{filteredStudents.length}</span>
             {filteredStudents.length !== students.length && (
               <span style={{...styles.count, backgroundColor: colors.olive}}>
                 of {students.length}
