@@ -1,8 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
+import { Filter, ChevronDown, ChevronUp, User, Users, RefreshCw } from 'lucide-react';
 
 const DisplayAccount = () => {
   const [students, setStudents] = useState([]);
   const [staff, setStaff] = useState([]);
+  const [courses, setCourses] = useState([]); // Add courses state
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState('students');
@@ -31,7 +33,19 @@ const DisplayAccount = () => {
   };
 
   useEffect(() => { 
-    fetchAccounts(); 
+    const initializeData = async () => {
+      try {
+        // First, fetch courses
+        await fetchCourses();
+        // Then fetch accounts
+        await fetchAccounts();
+      } catch (error) {
+        console.error('Error initializing data:', error);
+        setError('Failed to initialize data. Please refresh the page.');
+      }
+    };
+    
+    initializeData();
   }, []);
 
   // Helper function to get auth token
@@ -76,6 +90,24 @@ const DisplayAccount = () => {
     return response.json();
   };
 
+  // Add function to fetch courses
+  const fetchCourses = async () => {
+    try {
+      const token = getAuthToken();
+      if (!token) {
+        console.warn('No token available for courses fetch');
+        return;
+      }
+
+      const coursesData = await makeAuthenticatedRequest('http://localhost:3000/api/courses');
+      setCourses(coursesData || []);
+      console.log('Fetched courses:', coursesData);
+    } catch (err) {
+      console.error('Failed to fetch courses:', err.message);
+      // Don't set error state here as it's not critical for the main functionality
+    }
+  };
+
   const fetchAccounts = async () => {
     try {
       setLoading(true);
@@ -88,6 +120,12 @@ const DisplayAccount = () => {
         return;
       }
       
+      // Ensure courses are loaded first if not already loaded
+      if (courses.length === 0) {
+        console.log('Courses not loaded yet, fetching courses first...');
+        await fetchCourses();
+      }
+      
       // Fetch students and staff data concurrently
       const [studentsResult, staffResult] = await Promise.allSettled([
         makeAuthenticatedRequest(`http://localhost:3000/api/students`),
@@ -96,6 +134,7 @@ const DisplayAccount = () => {
 
       // Handle students data
       if (studentsResult.status === 'fulfilled') {
+        console.log('Fetched students:', studentsResult.value);
         setStudents(studentsResult.value || []);
       } else {
         console.error('Failed to fetch students:', studentsResult.reason.message);
@@ -141,12 +180,16 @@ const DisplayAccount = () => {
     return [...new Set(values)].sort();
   };
 
+  // Updated to use actual courses data
   const uniqueCourses = useMemo(() => {
-    const courses = students.flatMap(student => 
-      student.enrolled_courses ? student.enrolled_courses.split(',').map(c => c.trim()) : []
-    );
-    return [...new Set(courses)].filter(Boolean).sort();
-  }, [students]);
+    // Use the actual courses from the API instead of parsing student enrollment strings
+    return courses.map(course => ({
+      id: course.course_id,
+      code: course.course_code,
+      name: course.course_name,
+      display: `${course.course_code} - ${course.course_name}`
+    })).sort((a, b) => a.display.localeCompare(b.display));
+  }, [courses]);
 
   const uniqueBatches = useMemo(() => {
     return getUniqueValues(students, 'batch_year');
@@ -160,14 +203,142 @@ const DisplayAccount = () => {
     return getUniqueValues(staff, 'role_name');
   }, [staff]);
 
-  // Filter logic
+  const getStudentCoursesDisplay = (student) => {
+    let courseInfo = [];
+    
+    console.log('Processing student:', student.student_id, 'Available courses:', courses.length);
+    console.log('Student course data:', {
+      enrolled_courses: courses.courses,
+      course_id: courses.course_id,
+      course_code: courses.course_code,
+      courses: courses.courses
+    });
+
+    // Method 1: If student has enrolled_courses as a string (comma-separated course codes/names)
+    if (student.enrolled_courses && typeof student.enrolled_courses === 'string') {
+      const enrolledCourseStrings = course.courses.split(',').map(c => c.trim());
+      console.log('Enrolled course strings:', enrolledCourseStrings);
+      
+      courseInfo = enrolledCourseStrings.map(courseStr => {
+        // Try to find exact course code match first
+        let matchedCourse = courses.find(course => 
+          courses.course_code.toLowerCase() === courseStr.toLowerCase()
+        );
+        
+        // If no exact match, try partial matching
+        if (!matchedCourse) {
+          matchedCourse = courses.find(course => 
+            courses.course_name.toLowerCase().includes(courseStr.toLowerCase()) ||
+            courseStr.toLowerCase().includes(course.course_code.toLowerCase())
+          );
+        }
+        
+        if (matchedCourse) {
+          console.log('Found match for', courseStr, ':', matchedCourse);
+          return `${matchedCourse.course_code} - ${matchedCourse.course_name}`;
+        } else {
+          console.log('No match found for:', courseStr);
+          return courseStr; // Return original string if no match
+        }
+      });
+    }
+    
+    // Method 2: If student has course_id, find the matching course
+    else if (student.course_id) {
+      const matchedCourse = courses.find(course => 
+        courses.course_id === parseInt(courses.course_id)
+      );
+      
+      if (matchedCourse) {
+        console.log('Found course by ID:', matchedCourse);
+        courseInfo = [`${matchedCourse.course_code} - ${matchedCourse.course_name}`];
+      } else {
+        console.log('No course found for ID:', courses.course_id);
+        courseInfo = [`Course ID: ${courses.course_id}`];
+      }
+    }
+    
+    // Method 3: If student has course_code, find the matching course
+    else if (student.course_code) {
+      const matchedCourse = courses.find(course => 
+        courses.course_code.toLowerCase() === courses.course_code.toLowerCase()
+      );
+      
+      if (matchedCourse) {
+        console.log('Found course by code:', matchedCourse);
+        courseInfo = [`${matchedCourse.course_code} - ${matchedCourse.course_name}`];
+      } else {
+        console.log('No course found for code:', courses.course_code);
+        courseInfo = [student.course_code];
+      }
+    }
+    
+    // Method 4: If student has an array of courses
+    else if (Array.isArray(student.courses)) {
+      courseInfo = student.courses.map(course => {
+        if (typeof courses === 'object' && courses.course_name) {
+          return `${courses.course_code || 'N/A'} - ${course.course_name}`;
+        } else if (typeof course === 'object' && course.course_id) {
+          // Look up course by ID
+          const matchedCourse = courses.find(c => c.course_id === courses.course_id);
+          if (matchedCourse) {
+            return `${matchedCourse.course_code} - ${matchedCourse.course_name}`;
+          }
+          return `Course ID: ${course.course_id}`;
+        }
+        return course.toString();
+      });
+    }
+    
+    // Method 5: Check if student has course_name directly
+    else if (courses.course_name) {
+      courseInfo = [`${courses.course_code || 'N/A'} - ${courses.course_name}`];
+    }
+    
+    // Return formatted display text
+    if (courseInfo.length === 0) {
+      console.log('No course info found for student:', student.student_id);
+      return 'No active enrollments';
+    } else if (courseInfo.length === 1) {
+      return courseInfo[0];
+    } else {
+      return `${courseInfo.length} courses: ${courseInfo.slice(0, 2).join(', ')}${courseInfo.length > 2 ? '...' : ''}`;
+    }
+  };
+
+  // Updated filter logic for courses
   const filteredStudents = useMemo(() => {
     return students.filter(student => {
       const fullName = `${student.first_name || ''} ${student.last_name || ''}`.toLowerCase();
       const matchesName = fullName.includes(filters.name.toLowerCase());
       
-      const matchesCourse = !filters.course || 
-        (student.enrolled_courses && student.enrolled_courses.toLowerCase().includes(filters.course.toLowerCase()));
+      // Updated course matching logic
+      const matchesCourse = !filters.course || (() => {
+        // If student has enrolled_courses as a string, check if it contains the course
+        if (student.enrolled_courses) {
+          return student.enrolled_courses.toLowerCase().includes(filters.course.toLowerCase());
+        }
+        
+        // If student has course_id or course_code, match against that
+        if (student.course_id) {
+          return student.course_id.toString() === filters.course;
+        }
+        
+        if (student.course_code) {
+          return student.course_code.toLowerCase().includes(filters.course.toLowerCase());
+        }
+        
+        // If student has an array of courses
+        if (Array.isArray(student.courses)) {
+          return student.courses.some(course => 
+            course.course_id?.toString() === filters.course ||
+            course.course_code?.toLowerCase().includes(filters.course.toLowerCase()) ||
+            course.course_name?.toLowerCase().includes(filters.course.toLowerCase())
+          );
+        }
+        
+        return false;
+      })();
       
       const matchesBatch = !filters.batch || 
         (student.batch_year && student.batch_year.toString() === filters.batch);
@@ -177,7 +348,7 @@ const DisplayAccount = () => {
 
       return matchesName && matchesCourse && matchesBatch && matchesStatus;
     });
-  }, [students, filters]);
+  }, [students, filters, courses]);
 
   const filteredStaff = useMemo(() => {
     return staff.filter(member => {
@@ -274,6 +445,27 @@ const DisplayAccount = () => {
         </div>
         
         <div style={styles.modalBody}>
+          {/* Special handling for student courses */}
+          {modalType === 'student' && (
+            <div style={{ marginBottom: '20px', padding: '16px', backgroundColor: '#f8f9fa', borderRadius: '8px' }}>
+              <h4 style={{ margin: '0 0 12px 0', color: colors.darkGreen }}>Course Information</h4>
+              <div style={styles.expandedRow}>
+                <span style={styles.expandedLabel}>Enrolled Courses:</span>
+                <span style={styles.expandedValue}>
+                  {getStudentCoursesDisplay(modalData)}
+                </span>
+              </div>
+              {modalData.enrolled_courses && (
+                <div style={styles.expandedRow}>
+                  <span style={styles.expandedLabel}>Raw Course Data:</span>
+                  <span style={styles.expandedValue}>
+                    {modalData.enrolled_courses}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+          
           <div style={styles.expandedGrid}>
             {allFields.map(([key, value]) => (
               <div key={key} style={styles.expandedRow}>
@@ -307,168 +499,217 @@ const DisplayAccount = () => {
 
   const styles = {
     container: {
-      maxWidth: '1200px',
-      margin: '40px auto',
-      backgroundColor: '#fff',
-      padding: '32px',
-      borderRadius: '10px',
-      boxShadow: '0 6px 12px rgba(0, 0, 0, 0.1)',
-      fontFamily: 'Arial, sans-serif',
-    },
-    heading: {
-      textAlign: 'center',
-      color: colors.darkGreen,
-      marginBottom: '30px',
-      fontSize: '28px',
-    },
-    // Filter styles
-    filterContainer: {
+      padding: '24px',
       backgroundColor: colors.cream,
-      border: `1px solid ${colors.lightGreen}`,
-      borderRadius: '8px',
-      padding: '20px',
+      minHeight: '100vh',
+      fontFamily: 'Arial, sans-serif'
+    },
+
+    header: {
+      backgroundColor: '#ffffff',
+      borderRadius: '12px',
+      padding: '24px',
+      marginBottom: '24px',
+      border: '1px solid #e2e8f0',
+      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
+    },
+
+    title: {
+      fontSize: '32px',
+      fontWeight: 'bold',
+      color: colors.black,
+      margin: 0,
+      marginBottom: '8px'
+    },
+
+    subtitle: {
+      fontSize: '16px',
+      color: colors.lightGreen,
+      margin: 0
+    },
+
+    // Updated Filter Section to match PendingPayment.jsx design
+    filterSection: {
+      backgroundColor: '#ffffff',
+      borderRadius: '12px',
+      padding: '24px',
+      marginBottom: '24px',
+      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
+    },
+
+    filterTitle: {
+      fontSize: '20px',
+      fontWeight: 'bold',
+      color: '#2d3748',
       marginBottom: '20px',
-      transition: 'all 0.3s ease',
-    },
-    filterHeader: {
-      display: 'flex',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      marginBottom: '15px',
-    },
-    filterToggle: {
-      backgroundColor: colors.lightGreen,
-      color: 'white',
-      border: 'none',
-      padding: '8px 16px',
-      borderRadius: '5px',
-      cursor: 'pointer',
-      fontSize: '14px',
       display: 'flex',
       alignItems: 'center',
-      gap: '8px',
-      transition: 'background-color 0.2s ease',
+      gap: '8px'
     },
+
     filterGrid: {
       display: 'grid',
       gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-      gap: '15px',
-      marginBottom: '15px',
+      gap: '20px',
+      alignItems: 'end'
     },
+
     filterGroup: {
       display: 'flex',
       flexDirection: 'column',
-      gap: '5px',
+      gap: '8px'
     },
+
     filterLabel: {
       fontSize: '14px',
-      fontWeight: 'bold',
-      color: colors.black,
+      fontWeight: '500',
+      color: '#4a5568',
+      marginBottom: '4px'
     },
+
     filterInput: {
-      padding: '8px 12px',
-      border: `1px solid ${colors.lightGreen}`,
-      borderRadius: '4px',
+      padding: '12px 16px',
+      border: '1px solid #e2e8f0',
+      borderRadius: '8px',
       fontSize: '14px',
-      transition: 'border-color 0.2s ease',
+      outline: 'none',
+      transition: 'border-color 0.2s',
+      width: '100%'
     },
+
     filterSelect: {
-      padding: '8px 12px',
-      border: `1px solid ${colors.lightGreen}`,
-      borderRadius: '4px',
+      padding: '12px 16px',
+      border: '1px solid #e2e8f0',
+      borderRadius: '8px',
       fontSize: '14px',
+      outline: 'none',
       backgroundColor: 'white',
       cursor: 'pointer',
-      transition: 'border-color 0.2s ease',
+      transition: 'border-color 0.2s',
+      width: '100%'
     },
+
     filterActions: {
       display: 'flex',
-      gap: '10px',
+      gap: '12px',
       justifyContent: 'flex-end',
+      marginTop: '20px',
+      flexWrap: 'wrap'
     },
+
     clearButton: {
-      backgroundColor: colors.coral,
-      color: 'white',
-      border: 'none',
-      padding: '8px 16px',
-      borderRadius: '5px',
-      cursor: 'pointer',
-      fontSize: '14px',
-      transition: 'background-color 0.2s ease',
-    },
-    activeFiltersIndicator: {
-      backgroundColor: colors.dustyRose,
-      color: 'white',
-      padding: '4px 8px',
-      borderRadius: '12px',
-      fontSize: '12px',
-      fontWeight: 'bold',
-    },
-    tabContainer: {
-      display: 'flex',
-      marginBottom: '30px',
-      borderBottom: '2px solid #e9ecef',
-    },
-    tab: {
       padding: '12px 24px',
-      backgroundColor: 'transparent',
-      border: 'none',
-      borderRadius: '4px 4px 0 0',
-      cursor: 'pointer',
-      fontSize: '16px',
-      fontWeight: 'bold',
-      transition: 'all 0.3s ease',
-      marginRight: '4px',
-    },
-    activeTab: {
-      backgroundColor: colors.darkGreen,
+      backgroundColor: '#e53e3e',
       color: 'white',
+      border: 'none',
+      borderRadius: '8px',
+      fontSize: '14px',
+      fontWeight: '500',
+      cursor: 'pointer',
+      transition: 'background-color 0.2s'
     },
-    inactiveTab: {
-      backgroundColor: '#f8f9fa',
-      color: colors.black,
-    },
-    error: {
-      color: colors.red,
-      textAlign: 'center',
-      padding: '20px',
-      backgroundColor: '#ffebee',
-      borderRadius: '4px',
-      border: `1px solid ${colors.red}`,
-      marginBottom: '20px',
-    },
-    warning: {
-      color: '#856404',
-      textAlign: 'center',
-      padding: '15px',
-      backgroundColor: '#fff3cd',
-      borderRadius: '4px',
-      border: '1px solid #ffeaa7',
-      marginBottom: '20px',
-    },
-    loading: {
-      textAlign: 'center',
-      padding: '40px',
-      fontSize: '18px',
-      color: colors.olive,
-    },
+
     refreshButton: {
+      padding: '12px 24px',
       backgroundColor: colors.lightGreen,
       color: 'white',
       border: 'none',
-      padding: '10px 20px',
-      borderRadius: '5px',
-      cursor: 'pointer',
+      borderRadius: '8px',
       fontSize: '14px',
-      marginLeft: '10px',
-      transition: 'background-color 0.2s ease',
+      fontWeight: '500',
+      cursor: 'pointer',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      transition: 'background-color 0.2s'
     },
+
+    // Stats Card
+    statsCard: {
+      backgroundColor: '#ffffff',
+      borderRadius: '12px',
+      padding: '20px',
+      marginBottom: '24px',
+      border: '1px solid #e2e8f0'
+    },
+
+    statsGrid: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+      gap: '16px'
+    },
+
+    statItem: {
+      textAlign: 'center',
+      padding: '16px',
+      backgroundColor: colors.cream,
+      borderRadius: '8px'
+    },
+
+    statValue: {
+      fontSize: '24px',
+      fontWeight: 'bold',
+      color: colors.darkGreen,
+      margin: 0
+    },
+
+    statLabel: {
+      fontSize: '14px',
+      color: colors.olive,
+      margin: 0
+    },
+
+    // Tab Container
+    tabContainer: {
+      backgroundColor: '#ffffff',
+      borderRadius: '12px',
+      marginBottom: '24px',
+      border: '1px solid #e2e8f0',
+      overflow: 'hidden'
+    },
+
+    tabHeader: {
+      display: 'flex',
+      backgroundColor: colors.lightGreen,
+    },
+
+    tab: {
+      flex: 1,
+      padding: '16px 24px',
+      backgroundColor: 'transparent',
+      border: 'none',
+      cursor: 'pointer',
+      fontSize: '16px',
+      fontWeight: '600',
+      transition: 'all 0.3s ease',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: '8px'
+    },
+
+    activeTab: {
+      backgroundColor: colors.darkGreen,
+      color: '#ffffff',
+    },
+
+    inactiveTab: {
+      backgroundColor: colors.lightGreen,
+      color: '#ffffff',
+      opacity: 0.8
+    },
+
+    tabContent: {
+      padding: '20px'
+    },
+
+    // Account Grid
     accountsGrid: {
       display: 'grid',
       gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))',
-      gap: '20px',
-      marginTop: '20px',
+      gap: '20px'
     },
+
     accountCard: {
       backgroundColor: '#f8f9fa',
       border: '1px solid #dee2e6',
@@ -477,69 +718,55 @@ const DisplayAccount = () => {
       transition: 'transform 0.2s ease, box-shadow 0.2s ease',
       cursor: 'pointer',
     },
+
     accountCardHover: {
       transform: 'translateY(-2px)',
       boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
     },
+
     accountHeader: {
       display: 'flex',
       justifyContent: 'space-between',
       alignItems: 'center',
       marginBottom: '15px',
     },
+
     accountName: {
       fontSize: '18px',
       fontWeight: 'bold',
       color: colors.darkGreen,
       margin: 0,
     },
+
     accountId: {
       fontSize: '12px',
       color: colors.olive,
       fontFamily: 'monospace',
     },
+
     accountInfo: {
       display: 'flex',
       flexDirection: 'column',
       gap: '8px',
     },
+
     infoRow: {
       display: 'flex',
       justifyContent: 'space-between',
       alignItems: 'center',
     },
+
     infoLabel: {
       fontWeight: 'bold',
       color: colors.black,
       fontSize: '14px',
     },
+
     infoValue: {
       color: colors.olive,
       fontSize: '14px',
     },
-    sectionTitle: {
-      fontSize: '20px',
-      fontWeight: 'bold',
-      color: colors.darkGreen,
-      marginBottom: '10px',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '10px',
-    },
-    count: {
-      backgroundColor: colors.coral,
-      color: 'white',
-      padding: '4px 8px',
-      borderRadius: '12px',
-      fontSize: '12px',
-      fontWeight: 'bold',
-    },
-    emptyState: {
-      textAlign: 'center',
-      padding: '40px',
-      color: colors.olive,
-      fontSize: '16px',
-    },
+
     viewMoreButton: {
       backgroundColor: colors.lightGreen,
       color: 'white',
@@ -552,7 +779,73 @@ const DisplayAccount = () => {
       transition: 'background-color 0.2s ease',
       width: '100%',
     },
-    // Modal styles
+
+    // Error and Loading States
+    error: {
+      backgroundColor: '#ffffff',
+      borderRadius: '12px',
+      padding: '24px',
+      marginTop: '24px',
+      border: `1px solid ${colors.red}`,
+      display: 'flex',
+      alignItems: 'center',
+      gap: '12px'
+    },
+
+    errorText: {
+      color: colors.red,
+      margin: 0
+    },
+
+    warning: {
+      backgroundColor: '#fff3cd',
+      borderRadius: '12px',
+      padding: '16px',
+      marginBottom: '24px',
+      border: '1px solid #ffeaa7',
+      color: '#856404'
+    },
+
+    loading: {
+      display: 'flex',
+      justifyContent: 'center',
+      alignItems: 'center',
+      minHeight: '400px',
+      backgroundColor: '#ffffff',
+      borderRadius: '12px',
+      marginTop: '24px'
+    },
+
+    emptyState: {
+      textAlign: 'center',
+      padding: '40px',
+      color: colors.olive,
+      fontSize: '16px',
+      backgroundColor: '#ffffff',
+      borderRadius: '12px',
+      border: '1px solid #e2e8f0'
+    },
+
+    sectionTitle: {
+      fontSize: '24px',
+      fontWeight: 'bold',
+      color: colors.darkGreen,
+      marginBottom: '20px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '12px'
+    },
+
+    count: {
+      backgroundColor: colors.darkGreen,
+      color: 'white',
+      padding: '4px 12px',
+      borderRadius: '20px',
+      fontSize: '14px',
+      fontWeight: '500'
+    },
+
+    // Modal styles (kept as is)
     modalOverlay: {
       position: 'fixed',
       top: 0,
@@ -661,7 +954,13 @@ const DisplayAccount = () => {
   if (loading) {
     return (
       <div style={styles.container}>
-        <div style={styles.loading}>Loading accounts...</div>
+        <div style={styles.header}>
+          <h1 style={styles.title}>Account Management</h1>
+          <p style={styles.subtitle}>Loading account data...</p>
+        </div>
+        <div style={styles.loading}>
+          <div>Loading...</div>
+        </div>
       </div>
     );
   }
@@ -669,15 +968,20 @@ const DisplayAccount = () => {
   if (error && (students.length === 0 && staff.length === 0)) {
     return (
       <div style={styles.container}>
+        <div style={styles.header}>
+          <h1 style={styles.title}>Account Management</h1>
+          <p style={styles.subtitle}>Error loading account data</p>
+        </div>
         <div style={styles.error}>
-          {error}
-          <br />
+          <p style={styles.errorText}>{error}</p>
           <button 
             style={styles.refreshButton}
-            onClick={fetchAccounts}
-            onMouseOver={(e) => e.target.style.backgroundColor = colors.darkGreen}
-            onMouseOut={(e) => e.target.style.backgroundColor = colors.lightGreen}
+            onClick={() => {
+              fetchAccounts();
+              fetchCourses();
+            }}
           >
+            <RefreshCw size={16} />
             Retry
           </button>
         </div>
@@ -686,149 +990,160 @@ const DisplayAccount = () => {
   }
 
   const currentData = activeTab === 'students' ? filteredStudents : filteredStaff;
-  const totalData = activeTab === 'students' ? students : staff;
+  const totalStudents = students.length;
+  const totalStaff = staff.length;
+  const activeStudents = students.filter(s => s.graduation_status?.toLowerCase() === 'enrolled').length;
+  const graduatedStudents = students.filter(s => s.graduation_status?.toLowerCase() === 'graduated').length;
 
   return (
     <div style={styles.container}>
-      <h1 style={styles.heading}>
-        Account Management
-      </h1>
+      {/* Header */}
+      <div style={styles.header}>
+        <h1 style={styles.title}>Account Management</h1>
+        <p style={styles.subtitle}>Manage and track all student and staff accounts</p>
+      </div>
       
       {/* Show warning if there was a partial error */}
       {error && (students.length > 0 || staff.length > 0) && (
         <div style={styles.warning}>{error}</div>
       )}
 
-      {/* Filter Section */}
-      <div style={styles.filterContainer}>
-        <div style={styles.filterHeader}>
-          <button
-            style={styles.filterToggle}
-            onClick={() => setShowFilters(!showFilters)}
-            onMouseOver={(e) => e.target.style.backgroundColor = colors.darkGreen}
-            onMouseOut={(e) => e.target.style.backgroundColor = colors.lightGreen}
-          >
-            {showFilters ? '▼' : '▶'} Filters
-            {hasActiveFilters && (
-              <span style={styles.activeFiltersIndicator}>
-                Active
-              </span>
-            )}
-          </button>
+      {/* Updated Filter Section */}
+      <div style={styles.filterSection}>
+        <div style={styles.filterTitle}>
+          <Filter size={20} />
+          Filter {activeTab === 'students' ? 'Students' : 'Staff'}
         </div>
         
-        {showFilters && (
-          <>
-            <div style={styles.filterGrid}>
+        <div style={styles.filterGrid}>
+          <div style={styles.filterGroup}>
+            <label style={styles.filterLabel}>Search by Name</label>
+            <input
+              type="text"
+              placeholder="Enter name to search..."
+              value={filters.name}
+              onChange={(e) => handleFilterChange('name', e.target.value)}
+              style={styles.filterInput}
+            />
+          </div>
+          
+          {activeTab === 'students' && (
+            <>
               <div style={styles.filterGroup}>
-                <label style={styles.filterLabel}>Name Search</label>
-                <input
-                  type="text"
-                  placeholder="Search by name..."
-                  value={filters.name}
-                  onChange={(e) => handleFilterChange('name', e.target.value)}
-                  style={styles.filterInput}
-                />
+                <label style={styles.filterLabel}>Course</label>
+                <select
+                  value={filters.course}
+                  onChange={(e) => handleFilterChange('course', e.target.value)}
+                  style={styles.filterSelect}
+                >
+                  <option value="">All Courses</option>
+                  {uniqueCourses.map(course => (
+                    <option key={course.id} value={course.code}>
+                      {course.display}
+                    </option>
+                  ))}
+                </select>
               </div>
               
-              {activeTab === 'students' && (
-                <>
-                  <div style={styles.filterGroup}>
-                    <label style={styles.filterLabel}>Course</label>
-                    <select
-                      value={filters.course}
-                      onChange={(e) => handleFilterChange('course', e.target.value)}
-                      style={styles.filterSelect}
-                    >
-                      <option value="">All Courses</option>
-                      {uniqueCourses.map(course => (
-                        <option key={course} value={course}>{course}</option>
-                      ))}
-                    </select>
-                  </div>
-                  
-                  <div style={styles.filterGroup}>
-                    <label style={styles.filterLabel}>Batch</label>
-                    <select
-                      value={filters.batch}
-                      onChange={(e) => handleFilterChange('batch', e.target.value)}
-                      style={styles.filterSelect}
-                    >
-                      <option value="">All Batches</option>
-                      {uniqueBatches.map(batch => (
-                        <option key={batch} value={batch}>{batch}</option>
-                      ))}
-                    </select>
-                  </div>
-                  
-                  <div style={styles.filterGroup}>
-                    <label style={styles.filterLabel}>Status</label>
-                    <select
-                      value={filters.status}
-                      onChange={(e) => handleFilterChange('status', e.target.value)}
-                      style={styles.filterSelect}
-                    >
-                      <option value="">All Statuses</option>
-                      {uniqueStatuses.map(status => (
-                        <option key={status} value={status}>{status}</option>
-                      ))}
-                    </select>
-                  </div>
-                </>
-              )}
+              <div style={styles.filterGroup}>
+                <label style={styles.filterLabel}>Batch Year</label>
+                <select
+                  value={filters.batch}
+                  onChange={(e) => handleFilterChange('batch', e.target.value)}
+                  style={styles.filterSelect}
+                >
+                  <option value="">All Batches</option>
+                  {uniqueBatches.map(batch => (
+                    <option key={batch} value={batch}>{batch}</option>
+                  ))}
+                </select>
+              </div>
               
-              {activeTab === 'staff' && (
-                <div style={styles.filterGroup}>
-                  <label style={styles.filterLabel}>Role</label>
-                  <select
-                    value={filters.role}
-                    onChange={(e) => handleFilterChange('role', e.target.value)}
-                    style={styles.filterSelect}
-                  >
-                    <option value="">All Roles</option>
-                    {uniqueRoles.map(role => (
-                      <option key={role} value={role}>{role}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
-            </div>
-            
-            <div style={styles.filterActions}>
-              <button
-                style={styles.clearButton}
-                onClick={clearFilters}
-                onMouseOver={(e) => e.target.style.backgroundColor = colors.red}
-                onMouseOut={(e) => e.target.style.backgroundColor = colors.coral}
+              <div style={styles.filterGroup}>
+                <label style={styles.filterLabel}>Graduation Status</label>
+                <select
+                  value={filters.status}
+                  onChange={(e) => handleFilterChange('status', e.target.value)}
+                  style={styles.filterSelect}
+                >
+                  <option value="">All Statuses</option>
+                  {uniqueStatuses.map(status => (
+                    <option key={status} value={status}>{status}</option>
+                  ))}
+                </select>
+              </div>
+            </>
+          )}
+          
+          {activeTab === 'staff' && (
+            <div style={styles.filterGroup}>
+              <label style={styles.filterLabel}>Role</label>
+              <select
+                value={filters.role}
+                onChange={(e) => handleFilterChange('role', e.target.value)}
+                style={styles.filterSelect}
               >
-                Clear Filters
-              </button>
+                <option value="">All Roles</option>
+                {uniqueRoles.map(role => (
+                  <option key={role} value={role}>{role}</option>
+                ))}
+              </select>
             </div>
-          </>
+          )}
+        </div>
+        
+        {hasActiveFilters && (
+          <div style={styles.filterActions}>
+            <button
+              style={styles.clearButton}
+              onClick={clearFilters}
+              onMouseOver={(e) => e.target.style.backgroundColor = '#c53030'}
+              onMouseOut={(e) => e.target.style.backgroundColor = '#e53e3e'}
+            >
+              Clear All Filters
+            </button>
+          </div>
         )}
       </div>
 
+      {/* Tab Container */}
       <div style={styles.tabContainer}>
-        <button
-          style={{
-            ...styles.tab,
-            ...(activeTab === 'students' ? styles.activeTab : styles.inactiveTab)
-          }}
-          onClick={() => setActiveTab('students')}
-        >
-          Students ({filteredStudents.length}/{students.length})
-        </button>
-        <button
-          style={{
-            ...styles.tab,
-            ...(activeTab === 'staff' ? styles.activeTab : styles.inactiveTab)
-          }}
-          onClick={() => setActiveTab('staff')}
-        >
-          Staff ({filteredStaff.length}/{staff.length})
-        </button>
+        <div style={styles.tabHeader}>
+          <button
+            style={{
+              ...styles.tab,
+              ...(activeTab === 'students' ? styles.activeTab : styles.inactiveTab)
+            }}
+            onClick={() => setActiveTab('students')}
+          >
+            <User size={20} />
+            Students ({students.length})
+          </button>
+          <button
+            style={{
+              ...styles.tab,
+              ...(activeTab === 'staff' ? styles.activeTab : styles.inactiveTab)
+            }}
+            onClick={() => setActiveTab('staff')}
+          >
+            <Users size={20} />
+            Staff ({staff.length})
+          </button>
+        </div>
       </div>
 
+      {/* Debug Info - Remove this in production */}
+      {process.env.NODE_ENV === 'development' && (
+        <div style={{ backgroundColor: '#f0f0f0', padding: '10px', marginBottom: '20px', fontSize: '12px' }}>
+          <strong>Debug Info:</strong><br />
+          Total Courses Loaded: {courses.length}<br />
+          Courses: {courses.map(c => `${c.course_code} - ${c.course_name}`).join(', ')}<br />
+          Sample Student Enrolled Courses (Raw): {students[0]?.enrolled_courses || 'N/A'}<br />
+          Sample Student Courses (Processed): {students[0] ? getStudentCoursesDisplay(students[0]) : 'N/A'}
+        </div>
+      )}
+
+      {/* Student Content */}
       {activeTab === 'students' && (
         <div>
           <div style={styles.sectionTitle}>
@@ -885,7 +1200,7 @@ const DisplayAccount = () => {
                       <div style={styles.infoRow}>
                         <span style={styles.infoLabel}>Enrolled Courses:</span>
                         <span style={styles.infoValue}>
-                          {student.enrolled_courses || 'No active enrollments'}
+                          {getStudentCoursesDisplay(student)}
                         </span>
                       </div>
                       
@@ -927,19 +1242,28 @@ const DisplayAccount = () => {
         </div>
       )}
 
+      {/* Staff Content */}
       {activeTab === 'staff' && (
         <div>
           <div style={styles.sectionTitle}>
             Staff
-            <span style={styles.count}>{staff.length}</span>
+            <span style={styles.count}>{filteredStaff.length}</span>
+            {filteredStaff.length !== staff.length && (
+              <span style={{...styles.count, backgroundColor: colors.olive}}>
+                of {staff.length}
+              </span>
+            )}
           </div>
-          {staff.length === 0 ? (
+          {filteredStaff.length === 0 ? (
             <div style={styles.emptyState}>
-              No staff data available. This could be due to insufficient admin privileges or empty database.
+              {staff.length === 0 
+                ? "No staff data available. This could be due to insufficient admin privileges or empty database."
+                : "No staff members match the current filter criteria."
+              }
             </div>
           ) : (
             <div style={styles.accountsGrid}>
-              {staff.map((member, index) => {
+              {filteredStaff.map((member, index) => {
                 const cardId = member.account_id || member.user_identifier || `staff-${index}`;
                 
                 return (
