@@ -1,432 +1,563 @@
 import React, { useState, useEffect } from "react";
-import { CheckCircle, Download, Search, Filter } from "lucide-react";
+import {
+  CheckCircle,
+  Download,
+  Search,
+  Filter,
+  Eye,
+  ChevronLeft,
+  ChevronRight,
+} from "lucide-react";
 
-// Mock API function
-const getCompletedPaymentsAPI = async () => {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      resolve([
-        {
-          id: "PAY-003",
-          enrolleeName: "Mike Johnson",
-          enrolleeId: "STU-2024-003",
-          paymentType: "Tuition",
-          tuitionFee: 25000,
-          paymentMethod: "Bank Transfer",
-          uploadDate: "2024-01-10",
-          completedDate: "2024-01-12",
-          status: "completed",
-        },
-        {
-          id: "PAY-006",
-          enrolleeName: "Emily Davis",
-          enrolleeId: "STU-2024-006",
-          paymentType: "Registration",
-          tuitionFee: 5000,
-          paymentMethod: "Credit Card",
-          uploadDate: "2024-01-08",
-          completedDate: "2024-01-09",
-          status: "completed",
-        },
-        {
-          id: "PAY-007",
-          enrolleeName: "Robert Wilson",
-          enrolleeId: "STU-2024-007",
-          paymentType: "Laboratory Fee",
-          tuitionFee: 3000,
-          paymentMethod: "Online Payment",
-          uploadDate: "2024-01-05",
-          completedDate: "2024-01-06",
-          status: "completed",
-        },
-        {
-          id: "PAY-008",
-          enrolleeName: "Lisa Chen",
-          enrolleeId: "STU-2024-008",
-          paymentType: "Miscellaneous",
-          tuitionFee: 1500,
-          paymentMethod: "Cash",
-          uploadDate: "2024-01-03",
-          completedDate: "2024-01-04",
-          status: "completed",
-        },
-      ]);
-    }, 500);
-  });
+// API functions
+const API_BASE_URL = "http://localhost:3000/api";
+
+const getAuthHeaders = () => {
+  const token =
+    typeof window !== "undefined" && window.localStorage
+      ? window.localStorage.getItem("token")
+      : "";
+  return {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+  };
 };
 
-const styles = {
-  container: {
-    backgroundColor: "#f5f5f5",
-    minHeight: "100vh",
-    padding: "10px",
-    "@media (min-width: 768px)": {
-      padding: "20px",
-    },
-  },
-  header: {
-    backgroundColor: "white",
-    padding: "15px",
-    marginBottom: "15px",
-    borderRadius: "8px",
-    boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
-    "@media (min-width: 768px)": {
-      padding: "20px",
-      marginBottom: "20px",
-    },
-  },
-  title: {
-    fontSize: "20px",
-    fontWeight: "bold",
-    color: "#333",
-    marginBottom: "8px",
-    "@media (min-width: 768px)": {
-      fontSize: "24px",
-    },
-  },
-  subtitle: {
-    fontSize: "12px",
-    color: "#666",
-    marginBottom: "0",
-    "@media (min-width: 768px)": {
-      fontSize: "14px",
-    },
-  },
-  statsContainer: {
-    display: "grid",
-    gridTemplateColumns: "repeat(2, 1fr)",
-    gap: "10px",
-    marginBottom: "15px",
-    "@media (min-width: 768px)": {
-      gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-      gap: "20px",
-      marginBottom: "20px",
-    },
-  },
-  statCard: {
-    backgroundColor: "#e8f4f8",
-    padding: "15px",
-    borderRadius: "8px",
-    textAlign: "center",
-    border: "1px solid #d1ecf1",
-    "@media (min-width: 768px)": {
-      padding: "20px",
-    },
-  },
-  statNumber: {
-    fontSize: "24px",
-    fontWeight: "bold",
-    color: "#333",
-    marginBottom: "6px",
-    "@media (min-width: 768px)": {
-      fontSize: "32px",
-      marginBottom: "8px",
-    },
-  },
-  statLabel: {
-    fontSize: "12px",
-    color: "#666",
-    fontWeight: "500",
-    "@media (min-width: 768px)": {
-      fontSize: "14px",
-    },
-  },
-  filtersContainer: {
-    backgroundColor: "white",
-    padding: "15px",
-    marginBottom: "15px",
-    borderRadius: "8px",
-    boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
-    "@media (min-width: 768px)": {
-      padding: "20px",
-      marginBottom: "20px",
-    },
-  },
-  filtersTitle: {
-    fontSize: "16px",
-    fontWeight: "bold",
-    color: "#333",
-    marginBottom: "15px",
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-    "@media (min-width: 768px)": {
-      fontSize: "18px",
-      marginBottom: "20px",
-      gap: "10px",
-    },
-  },
-  filtersRow: {
-    display: "grid",
-    gridTemplateColumns: "1fr",
-    gap: "15px",
-    "@media (min-width: 768px)": {
-      gridTemplateColumns: "1fr 200px 200px",
-      gap: "20px",
-      alignItems: "end",
-    },
-  },
-  inputGroup: {
-    display: "flex",
-    flexDirection: "column",
-  },
-  label: {
-    fontSize: "12px",
-    fontWeight: "500",
-    color: "#333",
-    marginBottom: "6px",
-    "@media (min-width: 768px)": {
-      fontSize: "14px",
-      marginBottom: "8px",
-    },
-  },
-  input: {
-    padding: "10px 12px",
-    border: "1px solid #ddd",
-    borderRadius: "4px",
-    fontSize: "14px",
-    outline: "none",
-    transition: "border-color 0.2s",
-  },
-  select: {
-    padding: "10px 12px",
-    border: "1px solid #ddd",
-    borderRadius: "4px",
-    fontSize: "14px",
-    outline: "none",
-    backgroundColor: "white",
-    cursor: "pointer",
-  },
-  hideFiltersBtn: {
-    backgroundColor: "#5a6c57",
-    color: "white",
-    border: "none",
-    padding: "10px 16px",
-    borderRadius: "4px",
-    fontSize: "14px",
-    cursor: "pointer",
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-  },
-  tableContainer: {
-    backgroundColor: "white",
-    borderRadius: "8px",
-    overflow: "hidden",
-    boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
-  },
-  tableHeader: {
-    background: "linear-gradient(135deg, #375e4b 0%, #6d8f81 100%)",
-    color: "white",
-    padding: "12px 15px",
-    display: "flex",
-    flexDirection: "column",
-    gap: "8px",
-    "@media (min-width: 768px)": {
-      padding: "16px 20px",
-      flexDirection: "row",
-      justifyContent: "space-between",
-      alignItems: "center",
-      gap: "0",
-    },
-  },
-  tableTitle: {
-    fontSize: "14px",
-    fontWeight: "bold",
-    margin: 0,
-    "@media (min-width: 768px)": {
-      fontSize: "16px",
-    },
-  },
-  tableInfo: {
-    fontSize: "12px",
-    opacity: 0.9,
-    "@media (min-width: 768px)": {
-      fontSize: "14px",
-    },
-  },
-  tableWrapper: {
-    overflowX: "auto",
-    "-webkit-overflow-scrolling": "touch",
-  },
-  table: {
-    width: "100%",
-    borderCollapse: "collapse",
-    minWidth: "800px", // Ensures table doesn't get too cramped on mobile
-  },
-  tableHeaderRow: {
-    backgroundColor: "#375e4b",
-    color: "white",
-  },
-  th: {
-    padding: "10px 8px",
-    textAlign: "left",
-    fontSize: "12px",
-    fontWeight: "600",
-    borderRight: "1px solid rgba(255,255,255,0.1)",
-    whiteSpace: "nowrap",
-    "@media (min-width: 768px)": {
-      padding: "12px 16px",
-      fontSize: "14px",
-    },
-  },
-  td: {
-    padding: "10px 8px",
-    fontSize: "12px",
-    borderBottom: "1px solid #eee",
-    borderRight: "1px solid #eee",
-    whiteSpace: "nowrap",
-    "@media (min-width: 768px)": {
-      padding: "12px 16px",
-      fontSize: "14px",
-    },
-  },
-  statusCompleted: {
-    color: "#28a745",
-    fontWeight: "500",
-  },
-  noResults: {
-    textAlign: "center",
-    padding: "30px 15px",
-    color: "#666",
-    fontSize: "12px",
-    "@media (min-width: 768px)": {
-      padding: "40px",
-      fontSize: "14px",
-    },
-  },
-  loading: {
-    display: "flex",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: "30px",
-    "@media (min-width: 768px)": {
-      padding: "40px",
-    },
-  },
-  spinner: {
-    width: "28px",
-    height: "28px",
-    border: "3px solid #f3f3f3",
-    borderTop: "3px solid #5a6c57",
-    borderRadius: "50%",
-    animation: "spin 1s linear infinite",
-    "@media (min-width: 768px)": {
-      width: "32px",
-      height: "32px",
-    },
-  },
-  exportButton: {
-    background: "none",
-    border: "none",
-    color: "#5a6c57",
-    cursor: "pointer",
-    fontSize: "12px",
-    textDecoration: "underline",
-    padding: "4px",
-    "@media (min-width: 768px)": {
-      fontSize: "14px",
-    },
-  },
+const fetchCompletedPayments = async (filters = {}) => {
+  try {
+    const queryParams = new URLSearchParams();
+    if (filters.student_search)
+      queryParams.append("student_search", filters.student_search);
+    if (filters.name_sort) queryParams.append("name_sort", filters.name_sort);
+    if (filters.date_range)
+      queryParams.append("date_range", filters.date_range);
+
+    const response = await fetch(
+      `${API_BASE_URL}/payments/completed?${queryParams}`,
+      {
+        headers: getAuthHeaders(),
+      }
+    );
+
+    if (!response.ok) throw new Error("Failed to fetch completed payments");
+    return await response.json();
+  } catch (error) {
+    console.error("Error fetching completed payments:", error);
+    throw error;
+  }
 };
 
-// CSS-in-JS media query helper
-const useMediaQuery = () => {
+const ITEMS_PER_PAGE = 15;
+
+// Responsive hook similar to UploadPayment
+const useResponsive = () => {
   const [isMobile, setIsMobile] = useState(false);
+  const [screenSize, setScreenSize] = useState("lg");
 
   useEffect(() => {
-    const checkIsMobile = () => {
-      setIsMobile(window.innerWidth < 768);
+    const checkScreenSize = () => {
+      const width = window.innerWidth;
+      setIsMobile(width < 768);
+
+      if (width < 640) {
+        setScreenSize("xs");
+      } else if (width < 768) {
+        setScreenSize("sm");
+      } else if (width < 1024) {
+        setScreenSize("md");
+      } else {
+        setScreenSize("lg");
+      }
     };
 
-    checkIsMobile();
-    window.addEventListener("resize", checkIsMobile);
+    checkScreenSize();
+    window.addEventListener("resize", checkScreenSize);
 
-    return () => window.removeEventListener("resize", checkIsMobile);
+    return () => window.removeEventListener("resize", checkScreenSize);
   }, []);
 
-  return { isMobile };
+  return { isMobile, screenSize };
 };
 
 const CompletedPayments = () => {
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
-  const [filterType, setFilterType] = useState("");
-  const [sortBy, setSortBy] = useState("Latest Completed");
-  const [dateRange, setDateRange] = useState("All Time");
-  const { isMobile } = useMediaQuery();
+  const [sortBy, setSortBy] = useState("latest");
+  const [dateRange, setDateRange] = useState("all");
+  const [courseFilter, setCourseFilter] = useState("");
+  const [selectedPayment, setSelectedPayment] = useState(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [error, setError] = useState("");
+  const { isMobile, screenSize } = useResponsive();
+
+  // Get unique courses for filter
+  const uniqueCourses = [
+    ...new Set(payments.map((p) => p.course_name).filter(Boolean)),
+  ];
 
   useEffect(() => {
-    fetchCompletedPayments();
-  }, []);
+    fetchPayments();
+  }, [searchTerm, sortBy, dateRange, courseFilter, currentPage]);
 
-  const fetchCompletedPayments = async () => {
+  const fetchPayments = async () => {
     try {
-      const data = await getCompletedPaymentsAPI();
-      setPayments(data);
+      setError("");
+      const filters = {
+        student_search: searchTerm,
+        name_sort: sortBy === "name" ? "ascending" : undefined,
+        date_range: dateRange !== "all" ? dateRange : undefined,
+      };
+
+      const data = await fetchCompletedPayments(filters);
+
+      // Filter by course if selected
+      let filteredData = data;
+      if (courseFilter) {
+        filteredData = data.filter(
+          (payment) => payment.course_name === courseFilter
+        );
+      }
+
+      // Sort data
+      switch (sortBy) {
+        case "latest":
+          filteredData.sort(
+            (a, b) => new Date(b.updated_at) - new Date(a.updated_at)
+          );
+          break;
+        case "oldest":
+          filteredData.sort(
+            (a, b) => new Date(a.updated_at) - new Date(b.updated_at)
+          );
+          break;
+        case "amount-high":
+          filteredData.sort((a, b) => b.payment_amount - a.payment_amount);
+          break;
+        case "amount-low":
+          filteredData.sort((a, b) => a.payment_amount - b.payment_amount);
+          break;
+        case "name":
+          filteredData.sort((a, b) =>
+            `${a.first_name} ${a.last_name}`.localeCompare(
+              `${b.first_name} ${b.last_name}`
+            )
+          );
+          break;
+      }
+
+      // Apply pagination
+      const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+      const endIndex = startIndex + ITEMS_PER_PAGE;
+      const paginatedData = filteredData.slice(startIndex, endIndex);
+
+      setPayments(paginatedData);
+      setTotalPages(Math.ceil(filteredData.length / ITEMS_PER_PAGE));
     } catch (error) {
+      setError("Failed to fetch completed payments. Please try again.");
       console.error("Failed to fetch completed payments:", error);
     } finally {
       setLoading(false);
     }
   };
 
-  const filteredPayments = payments.filter((payment) => {
-    const matchesSearch =
-      payment.enrolleeName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      payment.enrolleeId.toLowerCase().includes(searchTerm.toLowerCase());
-
-    const matchesFilter =
-      filterType === "" || payment.paymentType === filterType;
-
-    return matchesSearch && matchesFilter;
-  });
-
   const handleExport = () => {
     const csvContent =
       "data:text/csv;charset=utf-8," +
-      "Payment ID,Student Name,Course,Amount Paid,Completed Date,Payment Method,Status\n" +
-      filteredPayments
+      "Payment ID,Student Name,Course,Amount Paid,Completed Date,Payment Method,Reference Number,Status\n" +
+      payments
         .map(
           (payment) =>
-            `${payment.id},${payment.enrolleeName},${payment.paymentType},₱${payment.tuitionFee},${payment.completedDate},${payment.paymentMethod},Completed`
+            `${payment.payment_id},"${payment.first_name} ${
+              payment.last_name
+            }",${payment.course_name},₱${payment.payment_amount},${
+              payment.updated_at
+            },${payment.method_name},${
+              payment.reference_number || "N/A"
+            },Completed`
         )
         .join("\n");
 
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", "completed_payments.csv");
+    link.setAttribute("download", `completed_payments_page_${currentPage}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
-  const totalAmount = filteredPayments.reduce(
-    (sum, payment) => sum + payment.tuitionFee,
+  const handlePageChange = (newPage) => {
+    if (newPage >= 1 && newPage <= totalPages) {
+      setCurrentPage(newPage);
+    }
+  };
+
+  const formatDate = (dateString) => {
+    return new Date(dateString).toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  };
+
+  const formatCurrency = (amount) => {
+    if (!amount || amount === 0) return "₱0";
+
+    // For very large numbers, use abbreviated format
+    if (amount >= 1000000) {
+      return `₱${(amount / 1000000).toFixed(1)}M`;
+    } else if (amount >= 1000) {
+      return `₱${(amount / 1000).toFixed(1)}K`;
+    }
+
+    return `₱${amount.toLocaleString()}`;
+  };
+
+  const totalAmount = payments.reduce(
+    (sum, payment) => sum + (parseInt(payment.payment_amount) || 0),
     0
   );
 
-  // Apply responsive styles based on screen size
-  const getResponsiveStyle = (baseStyle) => {
-    if (isMobile) {
-      return {
-        ...baseStyle,
-        ...(baseStyle["@media (min-width: 768px)"] ? {} : baseStyle),
-      };
-    }
-    return {
-      ...baseStyle,
-      ...(baseStyle["@media (min-width: 768px)"] || {}),
-    };
+  // Improved responsive styles based on UploadPayment patterns
+  const styles = {
+    container: {
+      width: "100%",
+      // Remove background color to let dashboard handle it
+    },
+    mainContent: {
+      padding: isMobile ? "0" : "0",
+      width: "100%",
+    },
+    contentWrapper: {
+      maxWidth: "100%",
+      margin: "0",
+      padding: isMobile ? "1rem" : "1.5rem",
+    },
+    errorMessage: {
+      backgroundColor: "#fef2f2",
+      color: "#dc2626",
+      padding: isMobile ? "0.75rem" : "1rem",
+      borderRadius: "0.5rem",
+      marginBottom: "1rem",
+      border: "1px solid #fecaca",
+      fontSize: isMobile ? "0.875rem" : "1rem",
+    },
+    statsGrid: {
+      display: "grid",
+      gridTemplateColumns: isMobile
+        ? screenSize === "xs"
+          ? "1fr"
+          : "repeat(2, 1fr)"
+        : "repeat(auto-fit, minmax(220px, 1fr))", // Increased min width
+      gap: isMobile ? "0.75rem" : "1rem",
+      marginBottom: "1.5rem",
+    },
+    statsCard: {
+      backgroundColor: "#e0f2fe",
+      padding: isMobile ? "0.75rem" : "1.25rem",
+      borderRadius: "0.5rem",
+      textAlign: "center",
+      border: "1px solid #b3e5fc",
+      minHeight: isMobile ? "60px" : "80px",
+      display: "flex",
+      flexDirection: "column",
+      justifyContent: "center",
+      minWidth: 0, // Allow shrinking
+      overflow: "hidden", // Prevent overflow
+    },
+    statsNumber: {
+      fontSize: isMobile ? "1.125rem" : "1.875rem", // Slightly smaller to prevent overflow
+      fontWeight: "700",
+      color: "#1f2937",
+      marginBottom: "0.25rem",
+      lineHeight: "1.1",
+      wordBreak: "break-word", // Break long numbers if needed
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      maxWidth: "100%", // Ensure it doesn't exceed container width
+    },
+    statsLabel: {
+      fontSize: isMobile ? "0.625rem" : "0.75rem",
+      color: "#6b7280",
+      fontWeight: "500",
+      lineHeight: "1.2",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      wordBreak: "break-word",
+    },
+    filtersContainer: {
+      backgroundColor: "white",
+      padding: isMobile ? "1rem" : "1.25rem",
+      marginBottom: "1rem",
+      borderRadius: "0.5rem",
+      boxShadow: "0 1px 3px 0 rgba(0, 0, 0, 0.1)",
+      border: "1px solid #e5e7eb",
+    },
+    filtersTitle: {
+      fontSize: isMobile ? "1rem" : "1.125rem",
+      fontWeight: "600",
+      color: "#1f2937",
+      marginBottom: "1rem",
+      display: "flex",
+      alignItems: "center",
+      gap: "0.5rem",
+    },
+    filtersGrid: {
+      display: "grid",
+      gridTemplateColumns: isMobile
+        ? "1fr"
+        : screenSize === "md"
+        ? "repeat(2, 1fr)"
+        : "repeat(4, 1fr)",
+      gap: isMobile ? "0.75rem" : "1rem",
+    },
+    inputGroup: {
+      display: "flex",
+      flexDirection: "column",
+    },
+    label: {
+      fontSize: isMobile ? "0.8rem" : "0.875rem",
+      fontWeight: "500",
+      color: "#374151",
+      marginBottom: "0.5rem",
+    },
+    input: {
+      padding: isMobile ? "0.6rem" : "0.75rem",
+      border: "1px solid #d1d5db",
+      borderRadius: "0.375rem",
+      fontSize: isMobile ? "0.9rem" : "0.875rem",
+      outline: "none",
+      transition: "border-color 0.2s",
+      width: "100%",
+      boxSizing: "border-box",
+    },
+    select: {
+      padding: isMobile ? "0.6rem" : "0.75rem",
+      border: "1px solid #d1d5db",
+      borderRadius: "0.375rem",
+      fontSize: isMobile ? "0.9rem" : "0.875rem",
+      outline: "none",
+      backgroundColor: "white",
+      cursor: "pointer",
+      width: "100%",
+      boxSizing: "border-box",
+    },
+    tableContainer: {
+      backgroundColor: "white",
+      borderRadius: "0.5rem",
+      overflow: "hidden",
+      boxShadow: "0 1px 3px 0 rgba(0, 0, 0, 0.1)",
+      border: "1px solid #e5e7eb",
+    },
+    tableHeader: {
+      background: "linear-gradient(135deg, #065f46 0%, #047857 100%)",
+      color: "white",
+      padding: isMobile ? "0.75rem" : "1rem 1.25rem",
+      display: "flex",
+      flexDirection: isMobile ? "column" : "row",
+      justifyContent: "space-between",
+      alignItems: isMobile ? "flex-start" : "center",
+      gap: isMobile ? "0.5rem" : "0",
+    },
+    tableTitle: {
+      fontSize: isMobile ? "1rem" : "1.125rem",
+      fontWeight: "600",
+      margin: 0,
+    },
+    tableInfo: {
+      fontSize: isMobile ? "0.75rem" : "0.875rem",
+      opacity: 0.9,
+    },
+    tableWrapper: {
+      overflowX: "auto",
+      WebkitOverflowScrolling: "touch",
+    },
+    table: {
+      width: "100%",
+      borderCollapse: "collapse",
+      minWidth: isMobile ? "700px" : "900px",
+    },
+    tableHeaderRow: {
+      backgroundColor: "#065f46",
+      color: "white",
+    },
+    th: {
+      padding: isMobile ? "0.6rem 0.4rem" : "0.875rem 1rem",
+      textAlign: "left",
+      fontSize: isMobile ? "0.7rem" : "0.875rem",
+      fontWeight: "600",
+      borderRight: "1px solid rgba(255,255,255,0.1)",
+      whiteSpace: "nowrap",
+    },
+    td: {
+      padding: isMobile ? "0.6rem 0.4rem" : "0.875rem 1rem",
+      fontSize: isMobile ? "0.7rem" : "0.875rem",
+      borderBottom: "1px solid #f3f4f6",
+      borderRight: "1px solid #f3f4f6",
+      whiteSpace: "nowrap",
+    },
+    statusCompleted: {
+      color: "#059669",
+      fontWeight: "500",
+      backgroundColor: "#d1fae5",
+      padding: isMobile ? "0.125rem 0.5rem" : "0.25rem 0.75rem",
+      borderRadius: "9999px",
+      fontSize: isMobile ? "0.625rem" : "0.75rem",
+      textTransform: "uppercase",
+      display: "inline-block",
+    },
+    noResults: {
+      textAlign: "center",
+      padding: isMobile ? "2rem 1rem" : "3rem 1rem",
+      color: "#6b7280",
+      fontSize: isMobile ? "0.8rem" : "0.875rem",
+    },
+    loading: {
+      display: "flex",
+      justifyContent: "center",
+      alignItems: "center",
+      padding: isMobile ? "2rem" : "3rem",
+    },
+    spinner: {
+      width: isMobile ? "1.5rem" : "2rem",
+      height: isMobile ? "1.5rem" : "2rem",
+      border: "3px solid #f3f4f6",
+      borderTop: "3px solid #059669",
+      borderRadius: "50%",
+      animation: "spin 1s linear infinite",
+    },
+    actionButton: {
+      background: "none",
+      border: "none",
+      color: "#059669",
+      cursor: "pointer",
+      fontSize: isMobile ? "0.75rem" : "0.875rem",
+      padding: isMobile ? "0.25rem 0.5rem" : "0.5rem 0.75rem",
+      borderRadius: "0.25rem",
+      transition: "background-color 0.2s",
+      display: "inline-flex",
+      alignItems: "center",
+      gap: "0.25rem",
+      marginRight: isMobile ? "0.25rem" : "0.5rem",
+    },
+    pagination: {
+      display: "flex",
+      justifyContent: "center",
+      alignItems: "center",
+      gap: isMobile ? "0.25rem" : "0.5rem",
+      padding: isMobile ? "0.75rem" : "1rem",
+      backgroundColor: "white",
+      borderTop: "1px solid #f3f4f6",
+      flexWrap: "wrap",
+    },
+    paginationButton: {
+      padding: isMobile ? "0.4rem 0.6rem" : "0.5rem 1rem",
+      border: "1px solid #d1d5db",
+      backgroundColor: "white",
+      cursor: "pointer",
+      borderRadius: "0.375rem",
+      fontSize: isMobile ? "0.75rem" : "0.875rem",
+      display: "flex",
+      alignItems: "center",
+      gap: "0.25rem",
+      transition: "all 0.2s",
+    },
+    paginationButtonDisabled: {
+      opacity: 0.5,
+      cursor: "not-allowed",
+    },
+    paginationInfo: {
+      fontSize: isMobile ? "0.75rem" : "0.875rem",
+      color: "#6b7280",
+      margin: isMobile ? "0 0.25rem" : "0 0.5rem",
+      textAlign: "center",
+    },
+    modal: {
+      position: "fixed",
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: "rgba(0, 0, 0, 0.6)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      zIndex: 50,
+      padding: isMobile ? "0.5rem" : "1rem",
+    },
+    modalContent: {
+      backgroundColor: "white",
+      borderRadius: "0.75rem",
+      padding: isMobile ? "1rem" : "2rem",
+      maxWidth: isMobile ? "95vw" : "600px",
+      width: "100%",
+      maxHeight: isMobile ? "95vh" : "90vh",
+      overflowY: "auto",
+      boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1)",
+    },
+    modalTitle: {
+      fontSize: isMobile ? "1.125rem" : "1.5rem",
+      fontWeight: "700",
+      marginBottom: "1.5rem",
+      color: "#1f2937",
+    },
+    modalDetails: {
+      display: "grid",
+      gap: isMobile ? "0.75rem" : "1rem",
+      fontSize: isMobile ? "0.875rem" : "1rem",
+      marginBottom: "2rem",
+    },
+    modalDetailRow: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      padding: isMobile ? "0.5rem 0" : "0.75rem 0",
+      borderBottom: "1px solid #f3f4f6",
+      flexDirection: isMobile ? "column" : "row",
+      alignItems: isMobile ? "flex-start" : "center",
+      gap: isMobile ? "0.25rem" : "0",
+    },
+    modalLabel: {
+      fontWeight: "600",
+      color: "#4b5563",
+    },
+    modalValue: {
+      color: "#1f2937",
+      textAlign: isMobile ? "left" : "right",
+      wordBreak: "break-word",
+    },
+    modalActions: {
+      display: "flex",
+      justifyContent: "flex-end",
+      gap: "0.75rem",
+    },
+    closeButton: {
+      padding: isMobile ? "0.6rem 1.25rem" : "0.75rem 1.5rem",
+      color: "#4b5563",
+      backgroundColor: "#f3f4f6",
+      borderRadius: "0.5rem",
+      border: "none",
+      cursor: "pointer",
+      fontSize: isMobile ? "0.8rem" : "0.875rem",
+      fontWeight: "500",
+      transition: "background-color 0.2s",
+    },
+    iconInline: {
+      display: "inline",
+      width: isMobile ? "0.875rem" : "1rem",
+      height: isMobile ? "0.875rem" : "1rem",
+      marginRight: "0.5rem",
+      verticalAlign: "middle",
+    },
   };
 
   if (loading) {
     return (
-      <div style={getResponsiveStyle(styles.container)}>
-        <div style={getResponsiveStyle(styles.loading)}>
-          <div style={getResponsiveStyle(styles.spinner)}></div>
+      <div style={styles.container}>
+        <div style={styles.loading}>
+          <div style={styles.spinner}></div>
         </div>
         <style>
           {`
@@ -441,186 +572,392 @@ const CompletedPayments = () => {
   }
 
   return (
-    <div style={getResponsiveStyle(styles.container)}>
-      {/* Header */}
-      <div style={getResponsiveStyle(styles.header)}>
-        <h1 style={getResponsiveStyle(styles.title)}>Completed Payments</h1>
-        <p style={getResponsiveStyle(styles.subtitle)}>
-          View and manage all completed student payments and receipts
-        </p>
+    <div style={styles.container}>
+      {/* Main Content */}
+      <div style={styles.mainContent}>
+        <div style={styles.contentWrapper}>
+          {/* Error Message */}
+          {error && <div style={styles.errorMessage}>{error}</div>}
+
+          {/* Stats Cards */}
+          <div style={styles.statsGrid}>
+            <div style={styles.statsCard}>
+              <div style={styles.statsNumber}>{payments.length}</div>
+              <div style={styles.statsLabel}>Completed (This Page)</div>
+            </div>
+            <div style={styles.statsCard}>
+              <div
+                style={styles.statsNumber}
+                title={`₱${totalAmount.toLocaleString()}`} // Show full amount on hover
+              >
+                {formatCurrency(totalAmount)}
+              </div>
+              <div style={styles.statsLabel}>Total Collected (This Page)</div>
+            </div>
+            <div style={styles.statsCard}>
+              <div style={styles.statsNumber}>{currentPage}</div>
+              <div style={styles.statsLabel}>Current Page</div>
+            </div>
+            <div style={styles.statsCard}>
+              <div style={styles.statsNumber}>{totalPages}</div>
+              <div style={styles.statsLabel}>Total Pages</div>
+            </div>
+          </div>
+
+          {/* Filters */}
+          <div style={styles.filtersContainer}>
+            <h3 style={styles.filtersTitle}>
+              <Filter style={styles.iconInline} />
+              Filter Completed Payments
+            </h3>
+            <div style={styles.filtersGrid}>
+              <div style={styles.inputGroup}>
+                <label style={styles.label}>Search by Name/ID</label>
+                <input
+                  type="text"
+                  placeholder="Enter student name or ID..."
+                  value={searchTerm}
+                  onChange={(e) => {
+                    setSearchTerm(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  style={styles.input}
+                  onFocus={(e) => {
+                    e.target.style.borderColor = "#10b981";
+                    e.target.style.boxShadow =
+                      "0 0 0 3px rgba(16, 185, 129, 0.1)";
+                  }}
+                  onBlur={(e) => {
+                    e.target.style.borderColor = "#d1d5db";
+                    e.target.style.boxShadow = "none";
+                  }}
+                />
+              </div>
+              <div style={styles.inputGroup}>
+                <label style={styles.label}>Sort By</label>
+                <select
+                  value={sortBy}
+                  onChange={(e) => {
+                    setSortBy(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  style={styles.select}
+                  onFocus={(e) => {
+                    e.target.style.borderColor = "#10b981";
+                    e.target.style.boxShadow =
+                      "0 0 0 3px rgba(16, 185, 129, 0.1)";
+                  }}
+                  onBlur={(e) => {
+                    e.target.style.borderColor = "#d1d5db";
+                    e.target.style.boxShadow = "none";
+                  }}
+                >
+                  <option value="latest">Latest Completed</option>
+                  <option value="oldest">Oldest First</option>
+                  <option value="amount-high">Amount High to Low</option>
+                  <option value="amount-low">Amount Low to High</option>
+                  <option value="name">Student Name</option>
+                </select>
+              </div>
+              <div style={styles.inputGroup}>
+                <label style={styles.label}>Date Range</label>
+                <select
+                  value={dateRange}
+                  onChange={(e) => {
+                    setDateRange(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  style={styles.select}
+                  onFocus={(e) => {
+                    e.target.style.borderColor = "#10b981";
+                    e.target.style.boxShadow =
+                      "0 0 0 3px rgba(16, 185, 129, 0.1)";
+                  }}
+                  onBlur={(e) => {
+                    e.target.style.borderColor = "#d1d5db";
+                    e.target.style.boxShadow = "none";
+                  }}
+                >
+                  <option value="all">All Time</option>
+                  <option value="week">Last 7 Days</option>
+                  <option value="month">Last 30 Days</option>
+                  <option value="quarter">Last 90 Days</option>
+                </select>
+              </div>
+              <div style={styles.inputGroup}>
+                <label style={styles.label}>Course Filter</label>
+                <select
+                  value={courseFilter}
+                  onChange={(e) => {
+                    setCourseFilter(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  style={styles.select}
+                  onFocus={(e) => {
+                    e.target.style.borderColor = "#10b981";
+                    e.target.style.boxShadow =
+                      "0 0 0 3px rgba(16, 185, 129, 0.1)";
+                  }}
+                  onBlur={(e) => {
+                    e.target.style.borderColor = "#d1d5db";
+                    e.target.style.boxShadow = "none";
+                  }}
+                >
+                  <option value="">All Courses</option>
+                  {uniqueCourses.map((course) => (
+                    <option key={course} value={course}>
+                      {course}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Table */}
+          <div style={styles.tableContainer}>
+            <div style={styles.tableHeader}>
+              <h3 style={styles.tableTitle}>Completed Payments</h3>
+              <span style={styles.tableInfo}>
+                Page {currentPage} of {totalPages} | Showing {payments.length}{" "}
+                of {totalPages * ITEMS_PER_PAGE} results
+              </span>
+            </div>
+
+            {payments.length === 0 ? (
+              <div style={styles.noResults}>
+                <CheckCircle size={isMobile ? 36 : 48} color="#ccc" />
+                <p>No completed payments found</p>
+              </div>
+            ) : (
+              <div style={styles.tableWrapper}>
+                <table style={styles.table}>
+                  <thead>
+                    <tr style={styles.tableHeaderRow}>
+                      <th style={styles.th}>Payment ID</th>
+                      <th style={styles.th}>Student Name</th>
+                      <th style={styles.th}>Course</th>
+                      <th style={styles.th}>Amount Paid</th>
+                      <th style={styles.th}>Completed Date</th>
+                      <th style={styles.th}>Payment Method</th>
+                      <th style={styles.th}>Status</th>
+                      <th style={styles.th}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {payments.map((payment) => (
+                      <tr key={payment.payment_id}>
+                        <td style={styles.td}>{payment.payment_id}</td>
+                        <td style={styles.td}>
+                          {payment.first_name} {payment.last_name}
+                        </td>
+                        <td style={styles.td}>{payment.course_name}</td>
+                        <td style={styles.td}>
+                          {formatCurrency(payment.payment_amount)}
+                        </td>
+                        <td style={styles.td}>
+                          {formatDate(payment.updated_at)}
+                        </td>
+                        <td style={styles.td}>{payment.method_name}</td>
+                        <td style={styles.td}>
+                          <span style={styles.statusCompleted}>Completed</span>
+                        </td>
+                        <td style={styles.td}>
+                          <button
+                            onClick={() => setSelectedPayment(payment)}
+                            style={styles.actionButton}
+                            title="View Details"
+                            onMouseEnter={(e) => {
+                              e.target.style.backgroundColor = "#f0fdf4";
+                            }}
+                            onMouseLeave={(e) => {
+                              e.target.style.backgroundColor = "transparent";
+                            }}
+                          >
+                            <Eye size={isMobile ? 12 : 14} />
+                            {!isMobile && "View"}
+                          </button>
+                          <button
+                            onClick={handleExport}
+                            style={styles.actionButton}
+                            title="Export Data"
+                            onMouseEnter={(e) => {
+                              e.target.style.backgroundColor = "#f0fdf4";
+                            }}
+                            onMouseLeave={(e) => {
+                              e.target.style.backgroundColor = "transparent";
+                            }}
+                          >
+                            <Download size={isMobile ? 12 : 14} />
+                            {!isMobile && "Export"}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div style={styles.pagination}>
+                <button
+                  onClick={() => handlePageChange(currentPage - 1)}
+                  disabled={currentPage === 1}
+                  style={{
+                    ...styles.paginationButton,
+                    ...(currentPage === 1
+                      ? styles.paginationButtonDisabled
+                      : {}),
+                  }}
+                  onMouseEnter={(e) => {
+                    if (currentPage !== 1) {
+                      e.target.style.backgroundColor = "#f9fafb";
+                      e.target.style.borderColor = "#059669";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (currentPage !== 1) {
+                      e.target.style.backgroundColor = "white";
+                      e.target.style.borderColor = "#d1d5db";
+                    }
+                  }}
+                >
+                  <ChevronLeft size={16} />
+                  {!isMobile && "Previous"}
+                </button>
+
+                <span style={styles.paginationInfo}>
+                  Page {currentPage} of {totalPages}
+                </span>
+
+                <button
+                  onClick={() => handlePageChange(currentPage + 1)}
+                  disabled={currentPage === totalPages}
+                  style={{
+                    ...styles.paginationButton,
+                    ...(currentPage === totalPages
+                      ? styles.paginationButtonDisabled
+                      : {}),
+                  }}
+                  onMouseEnter={(e) => {
+                    if (currentPage !== totalPages) {
+                      e.target.style.backgroundColor = "#f9fafb";
+                      e.target.style.borderColor = "#059669";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (currentPage !== totalPages) {
+                      e.target.style.backgroundColor = "white";
+                      e.target.style.borderColor = "#d1d5db";
+                    }
+                  }}
+                >
+                  {!isMobile && "Next"}
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Payment Details Modal */}
+          {selectedPayment && (
+            <div style={styles.modal}>
+              <div style={styles.modalContent}>
+                <h3 style={styles.modalTitle}>Payment Details</h3>
+                <div style={styles.modalDetails}>
+                  <div style={styles.modalDetailRow}>
+                    <span style={styles.modalLabel}>Payment ID:</span>
+                    <span style={styles.modalValue}>
+                      {selectedPayment.payment_id}
+                    </span>
+                  </div>
+                  <div style={styles.modalDetailRow}>
+                    <span style={styles.modalLabel}>Student Name:</span>
+                    <span style={styles.modalValue}>
+                      {selectedPayment.first_name} {selectedPayment.last_name}
+                    </span>
+                  </div>
+                  <div style={styles.modalDetailRow}>
+                    <span style={styles.modalLabel}>Student ID:</span>
+                    <span style={styles.modalValue}>
+                      {selectedPayment.student_id}
+                    </span>
+                  </div>
+                  <div style={styles.modalDetailRow}>
+                    <span style={styles.modalLabel}>Course:</span>
+                    <span style={styles.modalValue}>
+                      {selectedPayment.course_name}
+                    </span>
+                  </div>
+                  <div style={styles.modalDetailRow}>
+                    <span style={styles.modalLabel}>Batch:</span>
+                    <span style={styles.modalValue}>
+                      {selectedPayment.batch_identifier}
+                    </span>
+                  </div>
+                  <div style={styles.modalDetailRow}>
+                    <span style={styles.modalLabel}>Amount:</span>
+                    <span style={styles.modalValue}>
+                      {formatCurrency(selectedPayment.payment_amount)}
+                    </span>
+                  </div>
+                  <div style={styles.modalDetailRow}>
+                    <span style={styles.modalLabel}>Payment Method:</span>
+                    <span style={styles.modalValue}>
+                      {selectedPayment.method_name}
+                    </span>
+                  </div>
+                  <div style={styles.modalDetailRow}>
+                    <span style={styles.modalLabel}>Reference Number:</span>
+                    <span style={styles.modalValue}>
+                      {selectedPayment.reference_number || "N/A"}
+                    </span>
+                  </div>
+                  <div style={styles.modalDetailRow}>
+                    <span style={styles.modalLabel}>Processing Fee:</span>
+                    <span style={styles.modalValue}>
+                      {formatCurrency(selectedPayment.processing_fee || 0)}
+                    </span>
+                  </div>
+                  <div style={styles.modalDetailRow}>
+                    <span style={styles.modalLabel}>Payment Date:</span>
+                    <span style={styles.modalValue}>
+                      {formatDate(selectedPayment.payment_date)}
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      ...styles.modalDetailRow,
+                      borderBottom: "none",
+                    }}
+                  >
+                    <span style={styles.modalLabel}>Completed Date:</span>
+                    <span style={styles.modalValue}>
+                      {formatDate(selectedPayment.updated_at)}
+                    </span>
+                  </div>
+                </div>
+                <div style={styles.modalActions}>
+                  <button
+                    onClick={() => setSelectedPayment(null)}
+                    style={styles.closeButton}
+                    onMouseEnter={(e) => {
+                      e.target.style.backgroundColor = "#e5e7eb";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.target.style.backgroundColor = "#f3f4f6";
+                    }}
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
-
-      {/* Stats Cards */}
-      {/* <div style={getResponsiveStyle(styles.statsContainer)}>
-        <div style={getResponsiveStyle(styles.statCard)}>
-          <div style={getResponsiveStyle(styles.statNumber)}>
-            {filteredPayments.length}
-          </div>
-          <div style={getResponsiveStyle(styles.statLabel)}>
-            Completed Payments
-          </div>
-        </div>
-        <div style={getResponsiveStyle(styles.statCard)}>
-          <div style={getResponsiveStyle(styles.statNumber)}>
-            ₱{totalAmount.toLocaleString()}
-          </div>
-          <div style={getResponsiveStyle(styles.statLabel)}>
-            Total Collected
-          </div>
-        </div>
-        <div style={getResponsiveStyle(styles.statCard)}>
-          <div style={getResponsiveStyle(styles.statNumber)}>
-            {filteredPayments.length}
-          </div>
-          <div style={getResponsiveStyle(styles.statLabel)}>Total Receipts</div>
-        </div>
-        <div style={getResponsiveStyle(styles.statCard)}>
-          <div style={getResponsiveStyle(styles.statNumber)}>
-            {filteredPayments.length}
-          </div>
-          <div style={getResponsiveStyle(styles.statLabel)}>
-            Filtered Results
-          </div>
-        </div>
-      </div> */}
-
-      {/* Filters */}
-      <div style={getResponsiveStyle(styles.filtersContainer)}>
-        <h3 style={getResponsiveStyle(styles.filtersTitle)}>
-          <Filter size={isMobile ? 16 : 20} />
-          Filter Completed Payments
-        </h3>
-        <div style={getResponsiveStyle(styles.filtersRow)}>
-          <div style={styles.inputGroup}>
-            <label style={getResponsiveStyle(styles.label)}>
-              Filter by Name
-            </label>
-            <input
-              type="text"
-              placeholder="Enter student name..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              style={styles.input}
-            />
-          </div>
-          <div style={styles.inputGroup}>
-            <label style={getResponsiveStyle(styles.label)}>Sort By</label>
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
-              style={styles.select}
-            >
-              <option value="Latest Completed">Latest Completed</option>
-              <option value="Oldest First">Oldest First</option>
-              <option value="Amount High to Low">Amount High to Low</option>
-              <option value="Amount Low to High">Amount Low to High</option>
-            </select>
-          </div>
-          <div style={styles.inputGroup}>
-            <label style={getResponsiveStyle(styles.label)}>Date Range</label>
-            <select
-              value={dateRange}
-              onChange={(e) => setDateRange(e.target.value)}
-              style={styles.select}
-            >
-              <option value="All Time">All Time</option>
-              <option value="Last 7 Days">Last 7 Days</option>
-              <option value="Last 30 Days">Last 30 Days</option>
-              <option value="Last 90 Days">Last 90 Days</option>
-            </select>
-          </div>
-        </div>
-      </div>
-
-      {/* Table */}
-      <div style={styles.tableContainer}>
-        <div style={getResponsiveStyle(styles.tableHeader)}>
-          <h3 style={getResponsiveStyle(styles.tableTitle)}>
-            Completed Payments (All Records)
-          </h3>
-          <span style={getResponsiveStyle(styles.tableInfo)}>
-            Showing 1-{filteredPayments.length} of {filteredPayments.length}{" "}
-            results
-          </span>
-        </div>
-
-        {filteredPayments.length === 0 ? (
-          <div style={getResponsiveStyle(styles.noResults)}>
-            <CheckCircle size={isMobile ? 36 : 48} color="#ccc" />
-            <p>No completed payments found</p>
-          </div>
-        ) : (
-          <div style={styles.tableWrapper}>
-            <table style={styles.table}>
-              <thead>
-                <tr style={styles.tableHeaderRow}>
-                  <th style={getResponsiveStyle(styles.th)}>Payment ID</th>
-                  <th style={getResponsiveStyle(styles.th)}>Student Name</th>
-                  <th style={getResponsiveStyle(styles.th)}>Course</th>
-                  <th style={getResponsiveStyle(styles.th)}>Amount Paid</th>
-                  <th style={getResponsiveStyle(styles.th)}>Completed Date</th>
-                  <th style={getResponsiveStyle(styles.th)}>Payment Method</th>
-                  <th style={getResponsiveStyle(styles.th)}>Status</th>
-                  <th style={getResponsiveStyle(styles.th)}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredPayments.map((payment) => (
-                  <tr key={payment.id}>
-                    <td style={getResponsiveStyle(styles.td)}>{payment.id}</td>
-                    <td style={getResponsiveStyle(styles.td)}>
-                      {payment.enrolleeName}
-                    </td>
-                    <td style={getResponsiveStyle(styles.td)}>
-                      {payment.paymentType}
-                    </td>
-                    <td style={getResponsiveStyle(styles.td)}>
-                      ₱{payment.tuitionFee.toLocaleString()}
-                    </td>
-                    <td style={getResponsiveStyle(styles.td)}>
-                      {payment.completedDate}
-                    </td>
-                    <td style={getResponsiveStyle(styles.td)}>
-                      {payment.paymentMethod}
-                    </td>
-                    <td
-                      style={{
-                        ...getResponsiveStyle(styles.td),
-                        ...styles.statusCompleted,
-                      }}
-                    >
-                      Completed
-                    </td>
-                    <td style={getResponsiveStyle(styles.td)}>
-                      <button
-                        onClick={handleExport}
-                        style={getResponsiveStyle(styles.exportButton)}
-                      >
-                        Export
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      <style>
-        {`
-         @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-          }
-          
-          @media (max-width: 480px) {
-            .stats-grid {
-              grid-template-columns: 1fr !important;
-            }
-          }
-        `}
-      </style>
     </div>
   );
 };

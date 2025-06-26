@@ -1,5 +1,73 @@
 import React, { useState, useEffect } from "react";
-import { Check, X, Eye, Clock, Filter, ChevronDown } from "lucide-react";
+import {
+  Check,
+  X,
+  Eye,
+  Clock,
+  Filter,
+  ChevronDown,
+  AlertCircle,
+} from "lucide-react";
+
+// API functions
+const API_BASE_URL = "http://localhost:3000/api";
+
+const getAuthHeaders = () => {
+  const token = localStorage.getItem("token");
+  return {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+  };
+};
+
+const fetchPendingPayments = async (filters = {}) => {
+  try {
+    const queryParams = new URLSearchParams();
+    if (filters.student_search)
+      queryParams.append("student_search", filters.student_search);
+    if (filters.name_sort) queryParams.append("name_sort", filters.name_sort);
+
+    const response = await fetch(
+      `${API_BASE_URL}/payments/pending?${queryParams}`,
+      {
+        headers: getAuthHeaders(),
+      }
+    );
+
+    if (!response.ok) throw new Error("Failed to fetch pending payments");
+    return await response.json();
+  } catch (error) {
+    console.error("Error fetching pending payments:", error);
+    throw error;
+  }
+};
+
+const updatePaymentStatus = async (
+  paymentId,
+  status,
+  notes = "",
+  rejectionReason = ""
+) => {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/payments/${paymentId}/status`,
+      {
+        method: "PUT",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          status,
+          notes: rejectionReason ? `${rejectionReason}: ${notes}` : notes,
+        }),
+      }
+    );
+
+    if (!response.ok) throw new Error("Failed to update payment status");
+    return await response.json();
+  } catch (error) {
+    console.error("Error updating payment status:", error);
+    throw error;
+  }
+};
 
 // Enhanced responsive styles object
 const styles = {
@@ -228,7 +296,7 @@ const styles = {
     backgroundColor: "white",
     borderRadius: "12px",
     padding: "32px",
-    maxWidth: "500px",
+    maxWidth: "600px",
     width: "100%",
     maxHeight: "90vh",
     overflowY: "auto",
@@ -299,6 +367,38 @@ const styles = {
     fontWeight: "500",
     transition: "background-color 0.2s",
   },
+  rejectModal: {
+    position: "fixed",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0, 0, 0, 0.6)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 60,
+    padding: "20px",
+  },
+  rejectModalContent: {
+    backgroundColor: "white",
+    borderRadius: "12px",
+    padding: "32px",
+    maxWidth: "500px",
+    width: "100%",
+    boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1)",
+  },
+  textArea: {
+    width: "100%",
+    padding: "12px 16px",
+    border: "1px solid #e2e8f0",
+    borderRadius: "8px",
+    fontSize: "14px",
+    outline: "none",
+    resize: "vertical",
+    minHeight: "100px",
+    marginTop: "8px",
+  },
   mobileCard: {
     backgroundColor: "white",
     borderRadius: "8px",
@@ -352,88 +452,29 @@ const styles = {
     backgroundColor: "#fed7d7",
     color: "#c53030",
   },
+  errorMessage: {
+    backgroundColor: "#fed7d7",
+    color: "#c53030",
+    padding: "12px 16px",
+    borderRadius: "8px",
+    marginBottom: "16px",
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+  },
 };
 
-// Mock API functions
-const getPendingPaymentsAPI = async () => {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      resolve([
-        {
-          id: "PAY-001",
-          enrolleeName: "John Doe",
-          enrolleeId: "STU-2024-001",
-          paymentType: "Tuition",
-          tuitionFee: 25000,
-          paymentMethod: "Bank Transfer",
-          uploadDate: "2024-01-15",
-          status: "pending",
-          dueDate: "2024-01-25",
-          course: "Computer Science",
-        },
-        {
-          id: "PAY-002",
-          enrolleeName: "Jane Smith",
-          enrolleeId: "STU-2024-002",
-          paymentType: "Registration",
-          tuitionFee: 5000,
-          paymentMethod: "Credit Card",
-          uploadDate: "2024-01-16",
-          status: "pending",
-          dueDate: "2024-01-26",
-          course: "Business Administration",
-        },
-        {
-          id: "PAY-005",
-          enrolleeName: "Alex Johnson",
-          enrolleeId: "STU-2024-005",
-          paymentType: "Laboratory Fee",
-          tuitionFee: 3000,
-          paymentMethod: "Online Payment",
-          uploadDate: "2024-01-17",
-          status: "pending",
-          dueDate: "2024-01-27",
-          course: "Engineering",
-        },
-        {
-          id: "PAY-006",
-          enrolleeName: "Sarah Williams",
-          enrolleeId: "STU-2024-006",
-          paymentType: "Tuition",
-          tuitionFee: 28000,
-          paymentMethod: "Bank Transfer",
-          uploadDate: "2024-01-18",
-          status: "pending",
-          dueDate: "2024-01-28",
-          course: "Medical Technology",
-        },
-        {
-          id: "PAY-007",
-          enrolleeName: "Michael Brown",
-          enrolleeId: "STU-2024-007",
-          paymentType: "Miscellaneous",
-          tuitionFee: 2500,
-          paymentMethod: "Cash",
-          uploadDate: "2024-01-19",
-          status: "pending",
-          dueDate: "2024-01-29",
-          course: "Information Technology",
-        },
-      ]);
-    }, 500);
-  });
-};
-
-const processPaymentAPI = async (paymentId, action) => {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      resolve({
-        success: true,
-        message: `Payment ${action} successfully`,
-      });
-    }, 1000);
-  });
-};
+const REJECTION_REASONS = [
+  "Invalid payment proof",
+  "Insufficient amount",
+  "Expired payment deadline",
+  "Invalid bank reference",
+  "Duplicate payment",
+  "Wrong account details",
+  "Payment method not accepted",
+  "Student account suspended",
+  "Other (please specify)",
+];
 
 const PendingPayments = ({ onPaymentProcessed }) => {
   const [payments, setPayments] = useState([]);
@@ -444,6 +485,13 @@ const PendingPayments = ({ onPaymentProcessed }) => {
   const [hoveredRow, setHoveredRow] = useState(null);
   const [hoveredButton, setHoveredButton] = useState(null);
   const [isMobile, setIsMobile] = useState(false);
+  const [error, setError] = useState("");
+
+  // Rejection modal states
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState("");
+  const [rejectionNotes, setRejectionNotes] = useState("");
+  const [paymentToReject, setPaymentToReject] = useState(null);
 
   // Filter states
   const [nameFilter, setNameFilter] = useState("");
@@ -451,7 +499,7 @@ const PendingPayments = ({ onPaymentProcessed }) => {
   const [dateRange, setDateRange] = useState("all");
 
   useEffect(() => {
-    fetchPendingPayments();
+    fetchPayments();
 
     // Check if mobile
     const checkMobile = () => {
@@ -470,8 +518,12 @@ const PendingPayments = ({ onPaymentProcessed }) => {
 
     // Filter by name
     if (nameFilter.trim()) {
-      filtered = filtered.filter((payment) =>
-        payment.enrolleeName.toLowerCase().includes(nameFilter.toLowerCase())
+      filtered = filtered.filter(
+        (payment) =>
+          `${payment.first_name} ${payment.last_name}`
+            .toLowerCase()
+            .includes(nameFilter.toLowerCase()) ||
+          payment.student_id.toLowerCase().includes(nameFilter.toLowerCase())
       );
     }
 
@@ -493,7 +545,7 @@ const PendingPayments = ({ onPaymentProcessed }) => {
       }
 
       filtered = filtered.filter((payment) => {
-        const paymentDate = new Date(payment.uploadDate);
+        const paymentDate = new Date(payment.payment_date);
         return paymentDate >= filterDate;
       });
     }
@@ -502,22 +554,26 @@ const PendingPayments = ({ onPaymentProcessed }) => {
     switch (sortBy) {
       case "latest":
         filtered.sort(
-          (a, b) => new Date(b.uploadDate) - new Date(a.uploadDate)
+          (a, b) => new Date(b.payment_date) - new Date(a.payment_date)
         );
         break;
       case "oldest":
         filtered.sort(
-          (a, b) => new Date(a.uploadDate) - new Date(b.uploadDate)
+          (a, b) => new Date(a.payment_date) - new Date(b.payment_date)
         );
         break;
       case "amount-high":
-        filtered.sort((a, b) => b.tuitionFee - a.tuitionFee);
+        filtered.sort((a, b) => b.payment_amount - a.payment_amount);
         break;
       case "amount-low":
-        filtered.sort((a, b) => a.tuitionFee - b.tuitionFee);
+        filtered.sort((a, b) => a.payment_amount - b.payment_amount);
         break;
-      case "due-date":
-        filtered.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+      case "name":
+        filtered.sort((a, b) =>
+          `${a.first_name} ${a.last_name}`.localeCompare(
+            `${b.first_name} ${b.last_name}`
+          )
+        );
         break;
       default:
         break;
@@ -526,11 +582,16 @@ const PendingPayments = ({ onPaymentProcessed }) => {
     setFilteredPayments(filtered);
   }, [payments, nameFilter, sortBy, dateRange]);
 
-  const fetchPendingPayments = async () => {
+  const fetchPayments = async () => {
     try {
-      const data = await getPendingPaymentsAPI();
+      setError("");
+      const data = await fetchPendingPayments({
+        student_search: nameFilter,
+        name_sort: sortBy === "name" ? "ascending" : undefined,
+      });
       setPayments(data);
     } catch (error) {
+      setError("Failed to fetch pending payments. Please try again.");
       console.error("Failed to fetch pending payments:", error);
     } finally {
       setLoading(false);
@@ -538,16 +599,53 @@ const PendingPayments = ({ onPaymentProcessed }) => {
   };
 
   const handlePaymentAction = async (paymentId, action) => {
+    if (action === "failed") {
+      setPaymentToReject(paymentId);
+      setShowRejectModal(true);
+      return;
+    }
+
     setProcessing(paymentId);
     try {
-      const result = await processPaymentAPI(paymentId, action);
-      if (result.success) {
-        setPayments((prev) => prev.filter((p) => p.id !== paymentId));
-        setSelectedPayment(null);
-        onPaymentProcessed && onPaymentProcessed(paymentId, action);
-      }
+      const status = action === "approved" ? "confirmed" : action;
+      await updatePaymentStatus(paymentId, status);
+
+      setPayments((prev) => prev.filter((p) => p.payment_id !== paymentId));
+      setSelectedPayment(null);
+      onPaymentProcessed && onPaymentProcessed(paymentId, action);
     } catch (error) {
-      console.error("Payment processing failed:", error);
+      setError(`Failed to ${action} payment. Please try again.`);
+    } finally {
+      setProcessing(null);
+    }
+  };
+
+  const handleRejectConfirm = async () => {
+    if (!rejectionReason) {
+      setError("Please select a rejection reason.");
+      return;
+    }
+
+    setProcessing(paymentToReject);
+    try {
+      await updatePaymentStatus(
+        paymentToReject,
+        "failed",
+        rejectionNotes,
+        rejectionReason
+      );
+
+      setPayments((prev) =>
+        prev.filter((p) => p.payment_id !== paymentToReject)
+      );
+      setShowRejectModal(false);
+      setSelectedPayment(null);
+      setPaymentToReject(null);
+      setRejectionReason("");
+      setRejectionNotes("");
+      onPaymentProcessed && onPaymentProcessed(paymentToReject, "failed");
+    } catch (error) {
+      setError("Failed to reject payment. Please try again.");
     } finally {
       setProcessing(null);
     }
@@ -568,7 +666,7 @@ const PendingPayments = ({ onPaymentProcessed }) => {
   };
 
   const totalPendingAmount = payments.reduce(
-    (sum, payment) => sum + payment.tuitionFee,
+    (sum, payment) => sum + (parseInt(payment.payment_amount) || 0),
     0
   );
 
@@ -581,7 +679,7 @@ const PendingPayments = ({ onPaymentProcessed }) => {
   };
 
   const formatCurrency = (amount) => {
-    return `₱${amount.toLocaleString()}`;
+    return `₱${(amount || 0).toLocaleString()}`;
   };
 
   // Mobile Card Component
@@ -589,35 +687,35 @@ const PendingPayments = ({ onPaymentProcessed }) => {
     <div style={styles.mobileCard}>
       <div style={styles.mobileCardHeader}>
         <div>
-          <div style={styles.mobileCardTitle}>{payment.enrolleeName}</div>
-          <div style={styles.mobileCardSubtitle}>{payment.id}</div>
+          <div style={styles.mobileCardTitle}>
+            {payment.first_name} {payment.last_name}
+          </div>
+          <div style={styles.mobileCardSubtitle}>{payment.payment_id}</div>
         </div>
         <div style={{ ...styles.statusBadge, ...styles.statusPending }}>
-          {payment.status}
+          {payment.payment_status}
         </div>
       </div>
 
       <div style={styles.mobileCardDetails}>
         <div style={styles.mobileCardRow}>
           <span style={styles.mobileCardLabel}>Course</span>
-          <span style={styles.mobileCardValue}>{payment.course}</span>
+          <span style={styles.mobileCardValue}>{payment.course_name}</span>
         </div>
         <div style={styles.mobileCardRow}>
           <span style={styles.mobileCardLabel}>Amount</span>
           <span style={styles.mobileCardValue}>
-            {formatCurrency(payment.tuitionFee)}
+            {formatCurrency(payment.payment_amount)}
           </span>
         </div>
         <div style={styles.mobileCardRow}>
-          <span style={styles.mobileCardLabel}>Due Date</span>
-          <span style={styles.mobileCardValue}>
-            {formatDate(payment.dueDate)}
-          </span>
+          <span style={styles.mobileCardLabel}>Method</span>
+          <span style={styles.mobileCardValue}>{payment.method_name}</span>
         </div>
         <div style={styles.mobileCardRow}>
-          <span style={styles.mobileCardLabel}>Upload Date</span>
+          <span style={styles.mobileCardLabel}>Date</span>
           <span style={styles.mobileCardValue}>
-            {formatDate(payment.uploadDate)}
+            {formatDate(payment.payment_date)}
           </span>
         </div>
       </div>
@@ -627,9 +725,9 @@ const PendingPayments = ({ onPaymentProcessed }) => {
           style={getButtonStyle(
             styles.iconButton,
             { backgroundColor: "#2c5282" },
-            `view-${payment.id}`
+            `view-${payment.payment_id}`
           )}
-          onMouseEnter={() => setHoveredButton(`view-${payment.id}`)}
+          onMouseEnter={() => setHoveredButton(`view-${payment.payment_id}`)}
           onMouseLeave={() => setHoveredButton(null)}
           onClick={() => setSelectedPayment(payment)}
           title="View Details"
@@ -640,13 +738,13 @@ const PendingPayments = ({ onPaymentProcessed }) => {
           style={getButtonStyle(
             { ...styles.iconButton, ...styles.approveButton },
             { backgroundColor: "#2f855a" },
-            `approve-${payment.id}`,
-            processing === payment.id
+            `approve-${payment.payment_id}`,
+            processing === payment.payment_id
           )}
-          onMouseEnter={() => setHoveredButton(`approve-${payment.id}`)}
+          onMouseEnter={() => setHoveredButton(`approve-${payment.payment_id}`)}
           onMouseLeave={() => setHoveredButton(null)}
-          onClick={() => handlePaymentAction(payment.id, "approved")}
-          disabled={processing === payment.id}
+          onClick={() => handlePaymentAction(payment.payment_id, "approved")}
+          disabled={processing === payment.payment_id}
           title="Approve Payment"
         >
           <Check style={styles.icon} />
@@ -655,13 +753,13 @@ const PendingPayments = ({ onPaymentProcessed }) => {
           style={getButtonStyle(
             { ...styles.iconButton, ...styles.rejectButton },
             { backgroundColor: "#c53030" },
-            `reject-${payment.id}`,
-            processing === payment.id
+            `reject-${payment.payment_id}`,
+            processing === payment.payment_id
           )}
-          onMouseEnter={() => setHoveredButton(`reject-${payment.id}`)}
+          onMouseEnter={() => setHoveredButton(`reject-${payment.payment_id}`)}
           onMouseLeave={() => setHoveredButton(null)}
-          onClick={() => handlePaymentAction(payment.id, "rejected")}
-          disabled={processing === payment.id}
+          onClick={() => handlePaymentAction(payment.payment_id, "failed")}
+          disabled={processing === payment.payment_id}
           title="Reject Payment"
         >
           <X style={styles.icon} />
@@ -706,6 +804,14 @@ const PendingPayments = ({ onPaymentProcessed }) => {
         </p>
       </div>
 
+      {/* Error Message */}
+      {error && (
+        <div style={styles.errorMessage}>
+          <AlertCircle style={styles.icon} />
+          {error}
+        </div>
+      )}
+
       {/* Stats Cards */}
       <div style={styles.statsContainer}>
         <div style={styles.statCard}>
@@ -732,10 +838,10 @@ const PendingPayments = ({ onPaymentProcessed }) => {
         </div>
         <div style={styles.filterGrid}>
           <div style={styles.filterGroup}>
-            <label style={styles.filterLabel}>Filter by Name</label>
+            <label style={styles.filterLabel}>Filter by Name/ID</label>
             <input
               type="text"
-              placeholder="Enter student name..."
+              placeholder="Enter student name or ID..."
               value={nameFilter}
               onChange={(e) => setNameFilter(e.target.value)}
               style={styles.filterInput}
@@ -748,11 +854,11 @@ const PendingPayments = ({ onPaymentProcessed }) => {
               onChange={(e) => setSortBy(e.target.value)}
               style={styles.filterSelect}
             >
-              <option value="latest">Latest Uploaded</option>
+              <option value="latest">Latest Submitted</option>
               <option value="oldest">Oldest First</option>
               <option value="amount-high">Amount (High to Low)</option>
               <option value="amount-low">Amount (Low to High)</option>
-              <option value="due-date">Due Date</option>
+              <option value="name">Student Name</option>
             </select>
           </div>
           <div style={styles.filterGroup}>
@@ -789,7 +895,7 @@ const PendingPayments = ({ onPaymentProcessed }) => {
         ) : isMobile ? (
           <div style={{ padding: "16px" }}>
             {filteredPayments.map((payment) => (
-              <MobilePaymentCard key={payment.id} payment={payment} />
+              <MobilePaymentCard key={payment.payment_id} payment={payment} />
             ))}
           </div>
         ) : (
@@ -801,7 +907,8 @@ const PendingPayments = ({ onPaymentProcessed }) => {
                   <th style={styles.tableHeaderCell}>Student Name</th>
                   <th style={styles.tableHeaderCell}>Course</th>
                   <th style={styles.tableHeaderCell}>Amount</th>
-                  <th style={styles.tableHeaderCell}>Due Date</th>
+                  <th style={styles.tableHeaderCell}>Method</th>
+                  <th style={styles.tableHeaderCell}>Date</th>
                   <th style={styles.tableHeaderCell}>Status</th>
                   <th
                     style={{ ...styles.tableHeaderCell, borderRight: "none" }}
@@ -813,24 +920,27 @@ const PendingPayments = ({ onPaymentProcessed }) => {
               <tbody style={styles.tableBody}>
                 {filteredPayments.map((payment) => (
                   <tr
-                    key={payment.id}
+                    key={payment.payment_id}
                     style={{
                       ...styles.tableRow,
-                      ...(hoveredRow === payment.id
+                      ...(hoveredRow === payment.payment_id
                         ? styles.tableRowHover
                         : {}),
                     }}
-                    onMouseEnter={() => setHoveredRow(payment.id)}
+                    onMouseEnter={() => setHoveredRow(payment.payment_id)}
                     onMouseLeave={() => setHoveredRow(null)}
                   >
-                    <td style={styles.tableCell}>{payment.id}</td>
-                    <td style={styles.tableCell}>{payment.enrolleeName}</td>
-                    <td style={styles.tableCell}>{payment.course}</td>
+                    <td style={styles.tableCell}>{payment.payment_id}</td>
                     <td style={styles.tableCell}>
-                      {formatCurrency(payment.tuitionFee)}
+                      {payment.first_name} {payment.last_name}
                     </td>
+                    <td style={styles.tableCell}>{payment.course_name}</td>
                     <td style={styles.tableCell}>
-                      {formatDate(payment.dueDate)}
+                      {formatCurrency(payment.payment_amount)}
+                    </td>
+                    <td style={styles.tableCell}>{payment.method_name}</td>
+                    <td style={styles.tableCell}>
+                      {formatDate(payment.payment_date)}
                     </td>
                     <td style={styles.tableCell}>
                       <span
@@ -839,7 +949,7 @@ const PendingPayments = ({ onPaymentProcessed }) => {
                           ...styles.statusPending,
                         }}
                       >
-                        {payment.status}
+                        {payment.payment_status}
                       </span>
                     </td>
                     <td style={{ ...styles.tableCell, borderRight: "none" }}>
@@ -848,10 +958,10 @@ const PendingPayments = ({ onPaymentProcessed }) => {
                           style={getButtonStyle(
                             { ...styles.iconButton, ...styles.viewButton },
                             { backgroundColor: "#2c5282" },
-                            `view-${payment.id}`
+                            `view-${payment.payment_id}`
                           )}
                           onMouseEnter={() =>
-                            setHoveredButton(`view-${payment.id}`)
+                            setHoveredButton(`view-${payment.payment_id}`)
                           }
                           onMouseLeave={() => setHoveredButton(null)}
                           onClick={() => setSelectedPayment(payment)}
@@ -863,17 +973,17 @@ const PendingPayments = ({ onPaymentProcessed }) => {
                           style={getButtonStyle(
                             { ...styles.iconButton, ...styles.approveButton },
                             { backgroundColor: "#2f855a" },
-                            `approve-${payment.id}`,
-                            processing === payment.id
+                            `approve-${payment.payment_id}`,
+                            processing === payment.payment_id
                           )}
                           onMouseEnter={() =>
-                            setHoveredButton(`approve-${payment.id}`)
+                            setHoveredButton(`approve-${payment.payment_id}`)
                           }
                           onMouseLeave={() => setHoveredButton(null)}
                           onClick={() =>
-                            handlePaymentAction(payment.id, "approved")
+                            handlePaymentAction(payment.payment_id, "approved")
                           }
-                          disabled={processing === payment.id}
+                          disabled={processing === payment.payment_id}
                           title="Approve Payment"
                         >
                           <Check style={styles.icon} />
@@ -882,17 +992,17 @@ const PendingPayments = ({ onPaymentProcessed }) => {
                           style={getButtonStyle(
                             { ...styles.iconButton, ...styles.rejectButton },
                             { backgroundColor: "#c53030" },
-                            `reject-${payment.id}`,
-                            processing === payment.id
+                            `reject-${payment.payment_id}`,
+                            processing === payment.payment_id
                           )}
                           onMouseEnter={() =>
-                            setHoveredButton(`reject-${payment.id}`)
+                            setHoveredButton(`reject-${payment.payment_id}`)
                           }
                           onMouseLeave={() => setHoveredButton(null)}
                           onClick={() =>
-                            handlePaymentAction(payment.id, "rejected")
+                            handlePaymentAction(payment.payment_id, "failed")
                           }
-                          disabled={processing === payment.id}
+                          disabled={processing === payment.payment_id}
                           title="Reject Payment"
                         >
                           <X style={styles.icon} />
@@ -933,7 +1043,7 @@ const PendingPayments = ({ onPaymentProcessed }) => {
                   style={styles.modalValue}
                   className="pending-payments-modal-value"
                 >
-                  {selectedPayment.id}
+                  {selectedPayment.payment_id}
                 </span>
               </div>
               <div
@@ -950,7 +1060,7 @@ const PendingPayments = ({ onPaymentProcessed }) => {
                   style={styles.modalValue}
                   className="pending-payments-modal-value"
                 >
-                  {selectedPayment.enrolleeName}
+                  {selectedPayment.first_name} {selectedPayment.last_name}
                 </span>
               </div>
               <div
@@ -967,7 +1077,7 @@ const PendingPayments = ({ onPaymentProcessed }) => {
                   style={styles.modalValue}
                   className="pending-payments-modal-value"
                 >
-                  {selectedPayment.enrolleeId}
+                  {selectedPayment.student_id}
                 </span>
               </div>
               <div
@@ -984,7 +1094,7 @@ const PendingPayments = ({ onPaymentProcessed }) => {
                   style={styles.modalValue}
                   className="pending-payments-modal-value"
                 >
-                  {selectedPayment.course}
+                  {selectedPayment.course_name}
                 </span>
               </div>
               <div
@@ -995,13 +1105,13 @@ const PendingPayments = ({ onPaymentProcessed }) => {
                   style={styles.modalLabel}
                   className="pending-payments-modal-label"
                 >
-                  Payment Type:
+                  Batch:
                 </span>
                 <span
                   style={styles.modalValue}
                   className="pending-payments-modal-value"
                 >
-                  {selectedPayment.paymentType}
+                  {selectedPayment.batch_identifier}
                 </span>
               </div>
               <div
@@ -1018,7 +1128,7 @@ const PendingPayments = ({ onPaymentProcessed }) => {
                   style={styles.modalValue}
                   className="pending-payments-modal-value"
                 >
-                  ₱{selectedPayment.tuitionFee.toLocaleString()}
+                  {formatCurrency(selectedPayment.payment_amount)}
                 </span>
               </div>
               <div
@@ -1035,7 +1145,7 @@ const PendingPayments = ({ onPaymentProcessed }) => {
                   style={styles.modalValue}
                   className="pending-payments-modal-value"
                 >
-                  {selectedPayment.paymentMethod}
+                  {selectedPayment.method_name}
                 </span>
               </div>
               <div
@@ -1046,13 +1156,30 @@ const PendingPayments = ({ onPaymentProcessed }) => {
                   style={styles.modalLabel}
                   className="pending-payments-modal-label"
                 >
-                  Upload Date:
+                  Reference Number:
                 </span>
                 <span
                   style={styles.modalValue}
                   className="pending-payments-modal-value"
                 >
-                  {selectedPayment.uploadDate}
+                  {selectedPayment.reference_number || "N/A"}
+                </span>
+              </div>
+              <div
+                style={styles.modalDetailRow}
+                className="pending-payments-modal-row"
+              >
+                <span
+                  style={styles.modalLabel}
+                  className="pending-payments-modal-label"
+                >
+                  Current Balance:
+                </span>
+                <span
+                  style={styles.modalValue}
+                  className="pending-payments-modal-value"
+                >
+                  {formatCurrency(selectedPayment.balance)}
                 </span>
               </div>
               <div
@@ -1063,13 +1190,13 @@ const PendingPayments = ({ onPaymentProcessed }) => {
                   style={styles.modalLabel}
                   className="pending-payments-modal-label"
                 >
-                  Due Date:
+                  Payment Date:
                 </span>
                 <span
                   style={styles.modalValue}
                   className="pending-payments-modal-value"
                 >
-                  {selectedPayment.dueDate}
+                  {formatDate(selectedPayment.payment_date)}
                 </span>
               </div>
             </div>
@@ -1092,7 +1219,7 @@ const PendingPayments = ({ onPaymentProcessed }) => {
               </button>
               <button
                 onClick={() =>
-                  handlePaymentAction(selectedPayment.id, "approve")
+                  handlePaymentAction(selectedPayment.payment_id, "approved")
                 }
                 style={getButtonStyle(
                   styles.approveActionButton,
@@ -1102,12 +1229,15 @@ const PendingPayments = ({ onPaymentProcessed }) => {
                 className="pending-payments-modal-button"
                 onMouseEnter={() => setHoveredButton("approve-modal")}
                 onMouseLeave={() => setHoveredButton(null)}
+                disabled={processing === selectedPayment.payment_id}
               >
-                Approve
+                {processing === selectedPayment.payment_id
+                  ? "Processing..."
+                  : "Approve"}
               </button>
               <button
                 onClick={() =>
-                  handlePaymentAction(selectedPayment.id, "reject")
+                  handlePaymentAction(selectedPayment.payment_id, "failed")
                 }
                 style={getButtonStyle(
                   styles.rejectActionButton,
@@ -1117,13 +1247,72 @@ const PendingPayments = ({ onPaymentProcessed }) => {
                 className="pending-payments-modal-button"
                 onMouseEnter={() => setHoveredButton("reject-modal")}
                 onMouseLeave={() => setHoveredButton(null)}
+                disabled={processing === selectedPayment.payment_id}
               >
-                Reject
+                {processing === selectedPayment.payment_id
+                  ? "Processing..."
+                  : "Reject"}
               </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* Rejection Modal */}
+      {showRejectModal && (
+        <div style={styles.rejectModal}>
+          <div style={styles.rejectModalContent}>
+            <h3 style={styles.modalTitle}>Reject Payment</h3>
+            <div style={styles.filterGroup}>
+              <label style={styles.filterLabel}>Rejection Reason *</label>
+              <select
+                value={rejectionReason}
+                onChange={(e) => setRejectionReason(e.target.value)}
+                style={styles.filterSelect}
+              >
+                <option value="">Select a reason...</option>
+                {REJECTION_REASONS.map((reason) => (
+                  <option key={reason} value={reason}>
+                    {reason}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div style={styles.filterGroup}>
+              <label style={styles.filterLabel}>Additional Notes</label>
+              <textarea
+                value={rejectionNotes}
+                onChange={(e) => setRejectionNotes(e.target.value)}
+                placeholder="Enter additional details (optional)..."
+                style={styles.textArea}
+              />
+            </div>
+            <div style={styles.modalActions}>
+              <button
+                onClick={() => {
+                  setShowRejectModal(false);
+                  setPaymentToReject(null);
+                  setRejectionReason("");
+                  setRejectionNotes("");
+                }}
+                style={styles.closeButton}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRejectConfirm}
+                style={styles.rejectActionButton}
+                disabled={!rejectionReason || processing === paymentToReject}
+              >
+                {processing === paymentToReject
+                  ? "Processing..."
+                  : "Confirm Rejection"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <style>
         {`
          @keyframes spin {

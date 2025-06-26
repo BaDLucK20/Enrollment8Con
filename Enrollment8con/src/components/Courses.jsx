@@ -19,6 +19,8 @@ const Courses = () => {
   const [courseEnrollmentStats, setCourseEnrollmentStats] = useState({});
   const [editingCompetency, setEditingCompetency] = useState(null);
   const [showAddCompetency, setShowAddCompetency] = useState(false);
+  const [courseCodeExists, setCourseCodeExists] = useState(false);
+  const [showAssignCompetencies, setShowAssignCompetencies] = useState(false);
 
   // Form data for add/edit course
   const [formData, setFormData] = useState({
@@ -30,10 +32,6 @@ const Courses = () => {
     competencies: [],
     pricing: {
       regular: '',
-      // early_bird: '',
-      // group: '',
-      // scholarship: '',
-      // special: ''
     }
   });
 
@@ -157,6 +155,12 @@ const Courses = () => {
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 14l9-5-9-5-9 5 9 5z" />
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z" />
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 14v7" />
+    </svg>
+  );
+
+  const LinkIcon = ({ size = 16 }) => (
+    <svg width={size} height={size} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
     </svg>
   );
 
@@ -429,6 +433,21 @@ const Courses = () => {
     },
   };
 
+  // Clear success and error messages after 5 seconds
+  useEffect(() => {
+    if (success) {
+      const timer = setTimeout(() => setSuccess(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [success]);
+
+  useEffect(() => {
+    if (error) {
+      const timer = setTimeout(() => setError(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [error]);
+
   // Fetch courses with enrollment stats
   const fetchCourses = useCallback(async () => {
     setLoading(true);
@@ -571,6 +590,62 @@ const Courses = () => {
     }
   }, []);
 
+  // NEW: Add competency to course
+  const handleAssignCompetencyToCourse = async (competencyId) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`http://localhost:3000/api/courses/${selectedCourse.course_id}/competencies`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ 
+          competency_id: competencyId,
+          is_required: true,
+          order_sequence: 0,
+          estimated_hours: 0
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to assign competency to course');
+      }
+
+      setSuccess('Competency assigned to course successfully!');
+      fetchCourseCompetencies(selectedCourse.course_id);
+    } catch (err) {
+      setError(`Failed to assign competency: ${err.message}`);
+    }
+  };
+
+  // NEW: Remove competency from course
+  const handleRemoveCompetencyFromCourse = async (competencyId) => {
+    if (!window.confirm('Are you sure you want to remove this competency from the course?')) return;
+
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`http://localhost:3000/api/courses/${selectedCourse.course_id}/competencies/${competencyId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to remove competency from course');
+      }
+
+      setSuccess('Competency removed from course successfully!');
+      fetchCourseCompetencies(selectedCourse.course_id);
+    } catch (err) {
+      setError(`Failed to remove competency: ${err.message}`);
+    }
+  };
+
   // Fetch students enrolled in a specific competency
   const fetchCompetencyStudents = useCallback(async (courseId, competencyId) => {
     try {
@@ -622,10 +697,16 @@ const Courses = () => {
   // Handle form input changes
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: value
-    }));
+    const updatedForm = { ...formData, [name]: value };
+
+    if (name === 'course_code') {
+      const exists = courses.some(
+        (c) => c.course_code.trim().toLowerCase() === value.trim().toLowerCase()
+      );
+      setCourseCodeExists(exists);
+    }
+
+    setFormData(updatedForm);
   };
 
   // Handle pricing input changes
@@ -655,8 +736,6 @@ const Courses = () => {
     setLoading(true);
     setError(null);
     
-    
-
     try {
       const token = localStorage.getItem('token');
       const response = await fetch('http://localhost:3000/api/courses/', {
@@ -768,12 +847,12 @@ const Courses = () => {
       setViewMode('list');
       setSelectedCourse(null);
       
-      // Show success message (adjust based on your notification system)
-      alert('Course updated successfully!');
+      // Show success message
+      setSuccess('Course updated successfully!');
 
     } catch (error) {
       console.error('Update course error:', error);
-      alert(`Error updating course: ${error.message}`);
+      setError(`Error updating course: ${error.message}`);
     } finally {
       setLoading(false);
     }
@@ -791,16 +870,13 @@ const Courses = () => {
       competencies: course.competencies || [], // Assume this comes from API
       pricing: course.pricing || {
         regular_price: '',
-        // early_bird_price: '',
-        // group_price: '',
-        // corporate_price: ''
       },
       is_active: course.is_active !== undefined ? course.is_active : true
     });
     setViewMode('edit'); // or 'add' if you're using the same mode
   };
 
-  // Handle add competency
+  // Handle add competency - UPDATED to refresh course competencies
   const handleAddCompetency = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -819,12 +895,23 @@ const Courses = () => {
 
       if (!response.ok) throw new Error('Failed to add competency');
 
+      const newCompetency = await response.json();
+      
       setSuccess('Competency added successfully!');
       setShowAddCompetency(false);
       resetCompetencyForm();
+      
+      // Refresh all competencies
       fetchAllCompetencies();
-      if (selectedCourse) {
-        fetchCourseCompetencies(selectedCourse.course_id);
+      
+      // If we're viewing a course and want to auto-assign the new competency
+      if (selectedCourse && viewMode === 'details') {
+        // Optionally auto-assign the new competency to the current course
+        try {
+          await handleAssignCompetencyToCourse(newCompetency.competency_id);
+        } catch (assignError) {
+          console.log('Note: New competency created but not auto-assigned to course');
+        }
       }
     } catch (err) {
       setError(err.message);
@@ -908,10 +995,6 @@ const Courses = () => {
       competencies: [],
       pricing: {
         regular: '',
-        // early_bird: '',
-        // group: '',
-        // scholarship: '',
-        // special: ''
       }
     });
     setSelectedCourse(null);
@@ -965,6 +1048,12 @@ const Courses = () => {
       const progress = student.competency_progress;
       return progress && progress.competency_id === competencyId;
     }).length;
+  };
+
+  // NEW: Get unassigned competencies for current course
+  const getUnassignedCompetencies = () => {
+    const assignedIds = courseCompetencies.map(cc => cc.competency_id);
+    return allCompetencies.filter(comp => !assignedIds.includes(comp.competency_id));
   };
 
   // NEW: Render course students view
@@ -1195,22 +1284,30 @@ const Courses = () => {
         {viewMode === 'add' ? 'Add New Course' : 'Edit Course'}
       </h2>
 
-      <form onSubmit={viewMode === 'add' ? handleAddCourse : handleUpdateCourse}>
+      <div>
         <div style={styles.formRow}>
           <div style={styles.formGroup}>
-            <label style={styles.label}>
-              Course Code<span style={styles.required}>*</span>
-            </label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <label style={styles.label}>
+                Course Code<span style={styles.required}>*</span>
+              </label>
+              {courseCodeExists && (
+                <span style={{ color: 'red', fontSize: '0.9em' }}> Already used</span>
+              )}
+            </div>
             <input
               type="text"
               name="course_code"
-              style={styles.input}
+              style={{
+                ...styles.input,
+                borderColor: courseCodeExists ? 'red' : undefined
+              }}
               value={formData.course_code}
               onChange={handleInputChange}
-              required
               placeholder="e.g., FX101"
             />
           </div>
+
           <div style={styles.formGroup}>
             <label style={styles.label}>
               Course Name<span style={styles.required}>*</span>
@@ -1221,7 +1318,6 @@ const Courses = () => {
               style={styles.input}
               value={formData.course_name}
               onChange={handleInputChange}
-              required
               placeholder="e.g., Forex Trading Fundamentals"
             />
           </div>
@@ -1249,7 +1345,6 @@ const Courses = () => {
               style={styles.input}
               value={formData.duration_weeks}
               onChange={handleInputChange}
-              required
               min="1"
               placeholder="12"
             />
@@ -1264,39 +1359,12 @@ const Courses = () => {
               style={styles.input}
               value={formData.credits}
               onChange={handleInputChange}
-              required
               min="0"
               step="0.5"
               placeholder="3"
             />
           </div>
         </div>
-{/* 
-        <h3 style={styles.sectionTitle}>Course Competencies</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '12px' }}>
-          {allCompetencies.map((comp) => (
-            <label
-              key={comp.competency_id}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                cursor: 'pointer',
-                padding: '8px',
-                borderRadius: '4px',
-                backgroundColor: formData.competencies.includes(comp.competency_id) ? colors.primary + '10' : 'transparent',
-                border: `1px solid ${formData.competencies.includes(comp.competency_id) ? colors.primary : colors.gray[300]}`,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={formData.competencies.includes(comp.competency_id)}
-                onChange={() => handleCompetencyToggle(comp.competency_id)}
-              />
-              <span style={{ fontSize: '14px' }}>{comp.competency_name}</span>
-            </label>
-          ))}
-        </div> */}
 
         <h3 style={styles.sectionTitle}>Pricing Options</h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '16px' }}>
@@ -1323,7 +1391,14 @@ const Courses = () => {
 
         <div style={{ display: 'flex', gap: '12px', marginTop: '32px' }}>
           <button
-            type="submit"
+            onClick={(e) => {
+              e.preventDefault();
+              if (viewMode === 'add') {
+                handleAddCourse(e);
+              } else {
+                handleUpdateCourse(e);
+              }
+            }}
             style={{ ...styles.button, ...styles.primaryButton, flex: 1 }}
             disabled={loading}
             onMouseEnter={(e) => !loading && (e.currentTarget.style.backgroundColor = colors.primaryDark)}
@@ -1342,21 +1417,103 @@ const Courses = () => {
             )}
           </button>
           <button
-            type="button"
-            style={{ ...styles.button, ...styles.secondaryButton }}
             onClick={() => {
               setViewMode('list');
               resetForm();
             }}
+            style={{ ...styles.button, ...styles.secondaryButton }}
             onMouseEnter={(e) => e.currentTarget.style.backgroundColor = colors.gray[50]}
             onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
           >
             Cancel
           </button>
         </div>
-      </form>
+      </div>
     </div>
   );
+
+  // NEW: Render assign competencies modal
+  const renderAssignCompetenciesModal = () => {
+    if (!showAssignCompetencies) return null;
+
+    const unassignedCompetencies = getUnassignedCompetencies();
+
+    return (
+      <div style={styles.modal} onClick={() => setShowAssignCompetencies(false)}>
+        <div style={styles.modalContent} onClick={(e) => e.stopPropagation()}>
+          <h2 style={{ ...styles.title, marginBottom: '24px' }}>
+            Assign Competencies to Course
+          </h2>
+
+          {unassignedCompetencies.length === 0 ? (
+            <p style={{ color: colors.gray[500], textAlign: 'center', padding: '40px' }}>
+              All available competencies are already assigned to this course.
+            </p>
+          ) : (
+            <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+              {unassignedCompetencies.map((competency) => (
+                <div
+                  key={competency.competency_id}
+                  style={{
+                    ...styles.competencyCard,
+                    cursor: 'pointer',
+                    marginBottom: '12px',
+                  }}
+                  onClick={() => {
+                    handleAssignCompetencyToCourse(competency.competency_id);
+                    setShowAssignCompetencies(false);
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <h4 style={{ fontSize: '16px', fontWeight: '600', color: colors.gray[900] }}>
+                        {competency.competency_name}
+                      </h4>
+                      <p style={{ fontSize: '14px', color: colors.gray[600], marginTop: '4px' }}>
+                        {competency.competency_description}
+                      </p>
+                      <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
+                        <span style={{
+                          ...styles.badge,
+                          backgroundColor: colors.primaryLight + '20',
+                          color: colors.primaryLight,
+                        }}>
+                          {competency.competency_type}
+                        </span>
+                        <span style={{ fontSize: '12px', color: colors.gray[500] }}>
+                          Code: {competency.competency_code}
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      style={{ ...styles.button, ...styles.primaryButton, padding: '6px 12px' }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleAssignCompetencyToCourse(competency.competency_id);
+                        setShowAssignCompetencies(false);
+                      }}
+                    >
+                      <LinkIcon />
+                      Assign
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '24px' }}>
+            <button
+              style={{ ...styles.button, ...styles.secondaryButton }}
+              onClick={() => setShowAssignCompetencies(false)}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   // Render competency form modal
   const renderCompetencyModal = () => {
@@ -1482,7 +1639,7 @@ const Courses = () => {
     );
   };
 
-  // Render course details
+  // UPDATED: Render course details with proper competency assignment
   const renderCourseDetails = () => (
     <div>
       <button
@@ -1562,11 +1719,20 @@ const Courses = () => {
         </div>
       </div>
 
-      {/* Course Competencies with Student Progress */}
+      {/* Course Competencies with Student Progress - UPDATED */}
       <div style={styles.card}>
         <div style={styles.sectionTitle}>
-          <span>Course Competencies</span>
+          <span>Course Competencies ({courseCompetencies.length})</span>
           <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              style={{ ...styles.button, ...styles.primaryButton, padding: '6px 12px', fontSize: '12px' }}
+              onClick={() => setShowAssignCompetencies(true)}
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = colors.primaryDark}
+              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = colors.primary}
+            >
+              <LinkIcon size={14} />
+              Assign Existing
+            </button>
             <button
               style={{ ...styles.button, ...styles.successButton, padding: '6px 12px', fontSize: '12px' }}
               onClick={() => setShowAddCompetency(true)}
@@ -1574,7 +1740,7 @@ const Courses = () => {
               onMouseLeave={(e) => e.currentTarget.style.backgroundColor = colors.success}
             >
               <PlusIcon size={14} />
-              Add
+              Create New
             </button>
             <button
               style={{ ...styles.button, ...styles.secondaryButton, padding: '6px 12px', fontSize: '12px' }}
@@ -1588,7 +1754,27 @@ const Courses = () => {
         </div>
 
         {courseCompetencies.length === 0 ? (
-          <p style={{ color: colors.gray[500] }}>No competencies assigned to this course.</p>
+          <div style={{ textAlign: 'center', padding: '40px' }}>
+            <p style={{ color: colors.gray[500], marginBottom: '16px' }}>
+              No competencies assigned to this course yet.
+            </p>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+              <button
+                style={{ ...styles.button, ...styles.primaryButton }}
+                onClick={() => setShowAssignCompetencies(true)}
+              >
+                <LinkIcon />
+                Assign Existing Competency
+              </button>
+              <button
+                style={{ ...styles.button, ...styles.successButton }}
+                onClick={() => setShowAddCompetency(true)}
+              >
+                <PlusIcon />
+                Create New Competency
+              </button>
+            </div>
+          </div>
         ) : (
           <div style={{ display: 'grid', gap: '16px' }}>
             {courseCompetencies.map((competency) => (
@@ -1661,12 +1847,13 @@ const Courses = () => {
                         style={{ ...styles.button, ...styles.dangerButton, padding: '4px 8px', fontSize: '12px' }}
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleDeleteCompetency(competency.competency_id);
+                          handleRemoveCompetencyFromCourse(competency.competency_id);
                         }}
                         onMouseEnter={(e) => e.currentTarget.style.backgroundColor = colors.danger + '10'}
                         onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                        title="Remove from course"
                       >
-                        <TrashIcon size={12} />
+                        <XIcon size={12} />
                       </button>
                     </div>
                   </div>
@@ -1706,8 +1893,6 @@ const Courses = () => {
                     <th style={styles.th}>Student ID</th>
                     <th style={styles.th}>Name</th>
                     <th style={styles.th}>Email</th>
-                    <th style={styles.th}>Progress</th>
-                    <th style={styles.th}>Score</th>
                     <th style={styles.th}>Status</th>
                   </tr>
                 </thead>
@@ -1722,25 +1907,6 @@ const Courses = () => {
                         <td style={styles.td}>{student.student_id}</td>
                         <td style={styles.td}>{student.first_name} {student.last_name}</td>
                         <td style={styles.td}>{student.email}</td>
-                        <td style={styles.td}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                            <div style={{ ...styles.progressBar, flex: 1 }}>
-                              <div
-                                style={{
-                                  ...styles.progressFill,
-                                  width: `${progressPercentage}%`,
-                                  backgroundColor: progressPercentage >= 70 ? colors.success : colors.warning,
-                                }}
-                              />
-                            </div>
-                            <span style={{ fontSize: '14px', fontWeight: '500', minWidth: '45px' }}>
-                              {progressPercentage.toFixed(1)}%
-                            </span>
-                          </div>
-                        </td>
-                        <td style={styles.td}>
-                          {progress ? `${progress.score}/${progress.max_score}` : 'Not started'}
-                        </td>
                         <td style={styles.td}>
                           <span style={{
                             ...styles.badge,
@@ -1894,8 +2060,9 @@ const Courses = () => {
         {viewMode === 'students' && renderCourseStudents()}
         {viewMode === 'competency-manage' && renderCompetencyManagement()}
 
-        {/* Competency Modal */}
+        {/* Modals */}
         {renderCompetencyModal()}
+        {renderAssignCompetenciesModal()}
       </div>
     </div>
   );

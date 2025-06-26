@@ -1,15 +1,29 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Filter, ChevronDown, ChevronUp, User, Users, RefreshCw } from 'lucide-react';
+import { Filter, ChevronDown, ChevronUp, User, Users, RefreshCw, Plus, BookOpen, Edit3, Trash2, Save, X } from 'lucide-react';
 
 const DisplayAccount = () => {
   const [students, setStudents] = useState([]);
   const [staff, setStaff] = useState([]);
-  const [courses, setCourses] = useState([]); // Add courses state
+  const [courses, setCourses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState('students');
   const [modalData, setModalData] = useState(null);
-  const [modalType, setModalType] = useState(null); // 'student' or 'staff'
+  const [modalType, setModalType] = useState(null);
+  
+  // Course application states
+  const [showCourseApplication, setShowCourseApplication] = useState(false);
+  const [selectedStudent, setSelectedStudent] = useState(null);
+  const [availableCourses, setAvailableCourses] = useState([]);
+  const [selectedCourses, setSelectedCourses] = useState([]);
+  const [applicationLoading, setApplicationLoading] = useState(false);
+  const [applicationError, setApplicationError] = useState('');
+  
+  // Course management states
+  const [showCourseManagement, setShowCourseManagement] = useState(false);
+  const [currentEnrollments, setCurrentEnrollments] = useState([]);
+  const [managementLoading, setManagementLoading] = useState(false);
+  const [managementError, setManagementError] = useState('');
   
   // Filter states
   const [filters, setFilters] = useState({
@@ -35,9 +49,7 @@ const DisplayAccount = () => {
   useEffect(() => { 
     const initializeData = async () => {
       try {
-        // First, fetch courses
         await fetchCourses();
-        // Then fetch accounts
         await fetchAccounts();
       } catch (error) {
         console.error('Error initializing data:', error);
@@ -76,21 +88,44 @@ const DisplayAccount = () => {
     });
 
     if (!response.ok) {
+      let errorMessage = `Server error: ${response.status} ${response.statusText}`;
+      let errorDetails = null;
+      
+      try {
+        const errorData = await response.json();
+        if (errorData.message) {
+          errorMessage = errorData.message;
+        } else if (errorData.error) {
+          errorMessage = errorData.error;
+        }
+        errorDetails = errorData;
+      } catch (parseError) {
+        console.warn('Could not parse error response:', parseError);
+      }
+
       if (response.status === 401) {
         throw new Error('Authentication failed. Please log in again.');
       } else if (response.status === 403) {
         throw new Error('Access denied. Insufficient permissions.');
       } else if (response.status === 404) {
         throw new Error('Data not found.');
+      } else if (response.status === 409) {
+        const conflictError = new Error(errorMessage);
+        conflictError.details = errorDetails;
+        conflictError.status = 409;
+        throw conflictError;
       } else {
-        throw new Error(`Server error: ${response.status} ${response.statusText}`);
+        const serverError = new Error(errorMessage);
+        serverError.details = errorDetails;
+        serverError.status = response.status;
+        throw serverError;
       }
     }
 
     return response.json();
   };
 
-  // Add function to fetch courses
+  // Fetch courses
   const fetchCourses = async () => {
     try {
       const token = getAuthToken();
@@ -104,7 +139,6 @@ const DisplayAccount = () => {
       console.log('Fetched courses:', coursesData);
     } catch (err) {
       console.error('Failed to fetch courses:', err.message);
-      // Don't set error state here as it's not critical for the main functionality
     }
   };
 
@@ -113,14 +147,12 @@ const DisplayAccount = () => {
       setLoading(true);
       setError(null);
       
-      // Check if we have an auth token
       const token = getAuthToken();
       if (!token) {
         setError('No authentication token found. Please log in to view accounts.');
         return;
       }
       
-      // Ensure courses are loaded first if not already loaded
       if (courses.length === 0) {
         console.log('Courses not loaded yet, fetching courses first...');
         await fetchCourses();
@@ -160,7 +192,6 @@ const DisplayAccount = () => {
           : 'Failed to fetch account data. Please check your permissions and try again.';
         setError(primaryError);
       } else if (studentsResult.status === 'rejected' || staffResult.status === 'rejected') {
-        // Partial failure - show warning but don't block the UI
         const failedType = studentsResult.status === 'rejected' ? 'students' : 'staff';
         const reason = studentsResult.status === 'rejected' ? studentsResult.reason : staffResult.reason;
         setError(`Warning: Could not load ${failedType} data. ${reason.message}`);
@@ -174,6 +205,527 @@ const DisplayAccount = () => {
     }
   };
 
+  // Fixed function to fetch actual enrollments for a student from the API
+  const fetchStudentEnrollments = async (studentId) => {
+    try {
+      console.log('Fetching enrollments for student ID:', studentId);
+      
+      const response = await makeAuthenticatedRequest(
+        `http://localhost:3000/api/student/${studentId}/enrollments`
+      );
+      
+      console.log('Raw API response for enrollments:', response);
+      
+      // Handle different response formats
+      let enrollments = [];
+      if (response.enrollments && Array.isArray(response.enrollments)) {
+        enrollments = response.enrollments;
+      } else if (response.message && response.enrollments) {
+        enrollments = response.enrollments;
+      } else if (Array.isArray(response)) {
+        enrollments = response;
+      } else {
+        console.warn('Unexpected enrollment response format:', response);
+        enrollments = [];
+      }
+      
+      console.log('Processed enrollments:', enrollments);
+      return enrollments;
+          
+    } catch (error) {
+      console.error('Failed to fetch student enrollments:', error);
+      return [];
+    }
+  };
+
+  // Improved function to get current courses for a student
+  const getCurrentStudentCourses = async (student) => {
+    console.log('Getting current courses for student:', student.student_id);
+    
+    try {
+      // First try to get from API
+      const enrollments = await fetchStudentEnrollments(student.student_id);
+      
+      if (enrollments && enrollments.length > 0) {
+        // Return active enrollments
+        return enrollments
+          .filter(enrollment => 
+            ['enrolled', 'active', 'completed'].includes(enrollment.enrollment_status?.toLowerCase())
+          )
+          .map(enrollment => ({
+            course_id: enrollment.course_id,
+            course_code: enrollment.course_code,
+            course_name: enrollment.course_name,
+            enrollment_status: enrollment.enrollment_status,
+            batch_identifier: enrollment.batch_identifier
+          }));
+      }
+    } catch (error) {
+      console.warn('Failed to fetch enrollments from API, falling back to student data');
+    }
+    
+    // Fallback to student data parsing
+    let currentCourses = [];
+    
+    // Method 1: If student has enrolled_courses as a string
+    if (student.enrolled_courses && typeof student.enrolled_courses === 'string') {
+      const enrolledCourseStrings = student.enrolled_courses.split(',').map(c => c.trim());
+      console.log('Enrolled course strings:', enrolledCourseStrings);
+      
+      currentCourses = enrolledCourseStrings.map(courseStr => {
+        // Try to find matching course
+        let matchedCourse = courses.find(course => 
+          course.course_code?.toLowerCase() === courseStr.toLowerCase() ||
+          course.course_name?.toLowerCase().includes(courseStr.toLowerCase())
+        );
+        
+        if (matchedCourse) {
+          return {
+            course_id: matchedCourse.course_id,
+            course_code: matchedCourse.course_code,
+            course_name: matchedCourse.course_name
+          };
+        } else {
+          return { 
+            course_id: null, 
+            course_code: courseStr.toUpperCase(), 
+            course_name: courseStr 
+          };
+        }
+      });
+    }
+    // Method 2: If student has course_id
+    else if (student.course_id) {
+      const matchedCourse = courses.find(course => 
+        course.course_id === parseInt(student.course_id)
+      );
+      if (matchedCourse) {
+        currentCourses = [{
+          course_id: matchedCourse.course_id,
+          course_code: matchedCourse.course_code,
+          course_name: matchedCourse.course_name
+        }];
+      }
+    }
+    
+    console.log('Current courses found:', currentCourses);
+    return currentCourses;
+  };
+
+  // Fixed function to handle course application
+  
+
+  // Function to handle course management
+  const handleCourseManagement = async (studentId) => {
+    try {
+      const student = students.find(s => s.student_id === studentId);
+      if (!student) {
+        setManagementError('Student not found.');
+        return;
+      }
+
+      setSelectedStudent(student);
+      setManagementError('');
+      setManagementLoading(true);
+      
+      console.log('=== COURSE MANAGEMENT PREP ===');
+      console.log('Student:', student);
+      
+      // Fetch current enrollments
+      const enrollments = await fetchStudentEnrollments(studentId);
+      console.log('Current enrollments:', enrollments);
+      
+      setCurrentEnrollments(enrollments);
+      setShowCourseManagement(true);
+      
+    } catch (error) {
+      console.error('Error preparing course management:', error);
+      setManagementError('Failed to load course enrollments. Please try again.');
+    } finally {
+      setManagementLoading(false);
+    }
+  };
+
+  // Function to withdraw from a course
+  const withdrawFromCourse = async (enrollmentId, courseName) => {
+    if (!confirm(`Are you sure you want to withdraw ${selectedStudent?.first_name} ${selectedStudent?.last_name} from ${courseName}?`)) {
+      return;
+    }
+
+    try {
+      setManagementLoading(true);
+      
+      await makeAuthenticatedRequest(
+        `http://localhost:3000/api/student/enrollment/${enrollmentId}`,
+        {
+          method: 'DELETE'
+        }
+      );
+      
+      // Refresh enrollments
+      const updatedEnrollments = await fetchStudentEnrollments(selectedStudent.student_id);
+      setCurrentEnrollments(updatedEnrollments);
+      
+      // Refresh accounts data
+      await fetchAccounts();
+      
+      alert('Successfully withdrew from course!');
+      
+    } catch (error) {
+      console.error('Failed to withdraw from course:', error);
+      setManagementError('Failed to withdraw from course: ' + error.message);
+    } finally {
+      setManagementLoading(false);
+    }
+  };
+
+  // Fixed function to get and display student courses
+  const getStudentCoursesDisplay = (student) => {
+    console.log('Processing student for course display:', student.student_id);
+    
+    let courseInfo = [];
+    
+    // Method 1: Parse enrolled_courses string (most common format)
+    if (student.enrolled_courses && typeof student.enrolled_courses === 'string') {
+      const enrolledCourseStrings = student.enrolled_courses.split(',').map(c => c.trim());
+      console.log('Enrolled course strings:', enrolledCourseStrings);
+      
+      courseInfo = enrolledCourseStrings.map(courseStr => {
+        // Try to find exact course code match
+        let matchedCourse = courses.find(course => 
+          course.course_code?.toLowerCase() === courseStr.toLowerCase()
+        );
+        
+        // If no exact match, try partial matching
+        if (!matchedCourse) {
+          matchedCourse = courses.find(course => 
+            courseStr.toLowerCase().includes(course.course_code?.toLowerCase()) ||
+            course.course_name?.toLowerCase().includes(courseStr.toLowerCase())
+          );
+        }
+        
+        if (matchedCourse) {
+          return `${matchedCourse.course_code} - ${matchedCourse.course_name}`;
+        } else {
+          return courseStr; // Return original string if no match
+        }
+      });
+    }
+    // Method 2: Single course by ID
+    else if (student.course_id) {
+      const matchedCourse = courses.find(course => 
+        course.course_id === parseInt(student.course_id)
+      );
+      
+      if (matchedCourse) {
+        courseInfo = [`${matchedCourse.course_code} - ${matchedCourse.course_name}`];
+      } else {
+        courseInfo = [`Course ID: ${student.course_id}`];
+      }
+    }
+    // Method 3: Single course by code
+    else if (student.course_code) {
+      const matchedCourse = courses.find(course => 
+        course.course_code?.toLowerCase() === student.course_code?.toLowerCase()
+      );
+      
+      if (matchedCourse) {
+        courseInfo = [`${matchedCourse.course_code} - ${matchedCourse.course_name}`];
+      } else {
+        courseInfo = [student.course_code];
+      }
+    }
+    // Method 4: Array of courses
+    else if (Array.isArray(student.courses)) {
+      courseInfo = student.courses.map(course => {
+        if (typeof course === 'object' && course.course_name) {
+          return `${course.course_code || 'N/A'} - ${course.course_name}`;
+        } else if (typeof course === 'object' && course.course_id) {
+          const matchedCourse = courses.find(c => c.course_id === course.course_id);
+          if (matchedCourse) {
+            return `${matchedCourse.course_code} - ${matchedCourse.course_name}`;
+          }
+          return `Course ID: ${course.course_id}`;
+        }
+        return course.toString();
+      });
+    }
+    // Method 5: Direct course_name
+    else if (student.course_name) {
+      courseInfo = [`${student.course_code || 'N/A'} - ${student.course_name}`];
+    }
+    
+    // Return formatted display text
+    if (courseInfo.length === 0) {
+      return 'No active enrollments';
+    } else if (courseInfo.length === 1) {
+      return courseInfo[0];
+    } else {
+      return `${courseInfo.length} courses: ${courseInfo.slice(0, 2).join(', ')}${courseInfo.length > 2 ? '...' : ''}`;
+    }
+  };
+
+// Fixed function to submit course applications
+const submitCourseApplication = async () => {
+  if (selectedCourses.length === 0 || !selectedStudent) {
+    setApplicationError('Please select at least one course.');
+    return;
+  }
+
+  setApplicationLoading(true);
+  setApplicationError('');
+
+  try {
+    const studentId = selectedStudent.student_id; // Keep as string, don't parse as int
+
+    console.log('🚀 Submitting enrollments for student:', studentId);
+    console.log('📚 Selected courses:', selectedCourses);
+
+    const enrollmentResults = [];
+    const enrollmentErrors = [];
+
+    // Enroll in each selected course
+    for (const courseId of selectedCourses) {
+      try {
+        console.log(`📝 Enrolling in course ${courseId}...`);
+        
+        const response = await makeAuthenticatedRequest(
+          'http://localhost:3000/api/student/enroll-course',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              student_id: studentId,  // Keep as string
+              course_id: parseInt(courseId)  // Parse course_id as integer
+            })
+          }
+        );
+
+        enrollmentResults.push(response);
+        console.log('✅ Enrollment success:', response);
+        
+      } catch (error) {
+        console.error('❌ Enrollment error:', error);
+        
+        const course = courses.find(c => c.course_id === parseInt(courseId));
+        const courseName = course ? `${course.course_code} - ${course.course_name}` : `Course ID: ${courseId}`;
+        
+        // Extract meaningful error message
+        let errorMessage = error.message;
+        if (error.details && error.details.message) {
+          errorMessage = error.details.message;
+        } else if (typeof error.details === 'string') {
+          errorMessage = error.details;
+        }
+        
+        enrollmentErrors.push(`${courseName}: ${errorMessage}`);
+      }
+    }
+
+    // Close the modal
+    setShowCourseApplication(false);
+    setSelectedStudent(null);
+    setSelectedCourses([]);
+    
+    // Refresh the accounts data to show the new enrollments
+    await fetchAccounts();
+    
+    // Show results
+    let message = '';
+    if (enrollmentResults.length > 0) {
+      message += `✅ Successfully enrolled in ${enrollmentResults.length} course(s):\n`;
+      enrollmentResults.forEach(result => {
+        const courseName = result.enrollment?.course?.course_name || 
+                          result.enrollment?.course?.course_code || 
+                          'Unknown Course';
+        const batchInfo = result.enrollment?.offering?.batch_identifier || '';
+        message += `• ${courseName} ${batchInfo ? `(${batchInfo})` : ''}\n`;
+      });
+    }
+    
+    if (enrollmentErrors.length > 0) {
+      if (message) message += '\n';
+      message += `❌ Failed to enroll in ${enrollmentErrors.length} course(s):\n`;
+      enrollmentErrors.forEach(error => {
+        message += `• ${error}\n`;
+      });
+    }
+    
+    alert(message || 'Course applications submitted!');
+    
+  } catch (error) {
+    console.error('❌ Failed to submit course applications:', error);
+    setApplicationError(error.message || 'Failed to submit course applications. Please try again.');
+  } finally {
+    setApplicationLoading(false);
+  }
+};
+
+// Enhanced error handling for makeAuthenticatedRequest
+// const makeAuthenticatedRequest = async (url, options = {}) => {
+//   const token = getAuthToken();
+  
+//   if (!token) {
+//     throw new Error('No authentication token found. Please log in.');
+//   }
+
+//   const response = await fetch(url, {
+//     ...options,
+//     headers: {
+//       'Content-Type': 'application/json',
+//       'Authorization': `Bearer ${token}`,
+//       ...options.headers,
+//     },
+//   });
+
+//   if (!response.ok) {
+//     let errorMessage = `Server error: ${response.status} ${response.statusText}`;
+//     let errorDetails = null;
+    
+//     try {
+//       const errorData = await response.json();
+//       console.log('🔍 Server error response:', errorData);
+      
+//       if (errorData.message) {
+//         errorMessage = errorData.message;
+//       } else if (errorData.error) {
+//         errorMessage = errorData.error;
+//       }
+      
+//       errorDetails = errorData;
+//     } catch (parseError) {
+//       console.warn('Could not parse error response:', parseError);
+//     }
+
+//     if (response.status === 401) {
+//       throw new Error('Authentication failed. Please log in again.');
+//     } else if (response.status === 403) {
+//       throw new Error('Access denied. Insufficient permissions.');
+//     } else if (response.status === 404) {
+//       throw new Error(errorDetails?.error || 'Data not found.');
+//     } else if (response.status === 409) {
+//       const conflictError = new Error(errorMessage);
+//       conflictError.details = errorDetails;
+//       conflictError.status = 409;
+//       throw conflictError;
+//     } else {
+//       const serverError = new Error(errorMessage);
+//       serverError.details = errorDetails;
+//       serverError.status = response.status;
+//       throw serverError;
+//     }
+//   }
+
+//   return response.json();
+// };
+
+// Fixed function to get test data before enrolling
+const getTestData = async () => {
+  try {
+    const testData = await makeAuthenticatedRequest(
+      'http://localhost:3000/api/enrollment/test-data'
+    );
+    
+    console.log('📊 Test data from server:', testData);
+    
+    if (testData.data?.suggested_test_request) {
+      console.log('💡 Suggested test request:', testData.data.suggested_test_request);
+      
+      // You can use this to test enrollment:
+      // const testEnrollment = await makeAuthenticatedRequest(
+      //   'http://localhost:3000/api/student/enroll-course',
+      //   {
+      //     method: 'POST',
+      //     body: JSON.stringify(testData.data.suggested_test_request)
+      //   }
+      // );
+    }
+    
+    return testData;
+  } catch (error) {
+    console.error('Failed to get test data:', error);
+    throw error;
+  }
+};
+
+// Enhanced course application handler with better error handling
+const handleCourseApplication = async (studentId) => {
+  try {
+    const student = students.find(s => s.student_id === studentId);
+    if (!student) {
+      setApplicationError('Student not found.');
+      return;
+    }
+
+    console.log('🎯 Preparing course application for student:', student);
+
+    setSelectedStudent(student);
+    setApplicationError('');
+    setSelectedCourses([]);
+    
+    // First, let's get test data to make sure our system is working
+    try {
+      await getTestData();
+    } catch (testError) {
+      console.warn('Test data check failed:', testError);
+    }
+    
+    // Get current enrollments from API
+    const currentEnrollments = await fetchStudentEnrollments(studentId);
+    console.log('📚 Current enrollments:', currentEnrollments);
+    
+    // Extract enrolled course IDs
+    const enrolledCourseIds = new Set();
+    
+    if (currentEnrollments && currentEnrollments.length > 0) {
+      currentEnrollments.forEach(enrollment => {
+        if (['enrolled', 'active', 'completed'].includes(enrollment.enrollment_status?.toLowerCase())) {
+          if (enrollment.course_id) {
+            enrolledCourseIds.add(enrollment.course_id);
+          }
+        }
+      });
+    }
+    
+    console.log('🔒 Already enrolled in course IDs:', Array.from(enrolledCourseIds));
+    
+    // Filter out already enrolled courses
+    const available = courses.filter(course => {
+      const isEnrolled = enrolledCourseIds.has(course.course_id);
+      console.log(`📋 Course ${course.course_code} (ID: ${course.course_id}) - Enrolled: ${isEnrolled}`);
+      return !isEnrolled;
+    });
+    
+    console.log('✅ Available courses for enrollment:', available.length);
+    
+    if (available.length === 0) {
+      if (courses.length === 0) {
+        setApplicationError('No courses are currently available in the system.');
+      } else {
+        setApplicationError('This student is already enrolled in all available courses.');
+      }
+    }
+    
+    setAvailableCourses(available);
+    setShowCourseApplication(true);
+    
+  } catch (error) {
+    console.error('❌ Error preparing course application:', error);
+    setApplicationError('Failed to prepare course application: ' + error.message);
+  }
+};
+
+  // Handle course selection for multiple courses
+  const handleCourseSelectionToggle = (courseId) => {
+    setSelectedCourses(prev => {
+      const courseIdInt = parseInt(courseId);
+      if (prev.includes(courseIdInt)) {
+        return prev.filter(id => id !== courseIdInt);
+      } else {
+        return [...prev, courseIdInt];
+      }
+    });
+  };
+
   // Get unique values for filter dropdowns
   const getUniqueValues = (data, field) => {
     const values = data.map(item => item[field]).filter(Boolean);
@@ -182,7 +734,6 @@ const DisplayAccount = () => {
 
   // Updated to use actual courses data
   const uniqueCourses = useMemo(() => {
-    // Use the actual courses from the API instead of parsing student enrollment strings
     return courses.map(course => ({
       id: course.course_id,
       code: course.course_code,
@@ -202,109 +753,6 @@ const DisplayAccount = () => {
   const uniqueRoles = useMemo(() => {
     return getUniqueValues(staff, 'role_name');
   }, [staff]);
-
-  const getStudentCoursesDisplay = (student) => {
-    let courseInfo = [];
-    
-    console.log('Processing student:', student.student_id, 'Available courses:', courses.length);
-    console.log('Student course data:', {
-      enrolled_courses: student.enrolled_courses,
-      course_id: student.course_id,
-      course_code: student.course_code,
-      courses: student.courses
-    });
-
-    // Method 1: If student has enrolled_courses as a string (comma-separated course codes/names)
-    if (student.enrolled_courses && typeof student.enrolled_courses === 'string') {
-      const enrolledCourseStrings = student.enrolled_courses.split(',').map(c => c.trim());
-      console.log('Enrolled course strings:', enrolledCourseStrings);
-      
-      courseInfo = enrolledCourseStrings.map(courseStr => {
-        // Try to find exact course code match first
-        let matchedCourse = courses.find(course => 
-          course.course_code.toLowerCase() === courseStr.toLowerCase()
-        );
-        
-        // If no exact match, try partial matching
-        if (!matchedCourse) {
-          matchedCourse = courses.find(course => 
-            course.course_name.toLowerCase().includes(courseStr.toLowerCase()) ||
-            courseStr.toLowerCase().includes(course.course_code.toLowerCase())
-          );
-        }
-        
-        if (matchedCourse) {
-          console.log('Found match for', courseStr, ':', matchedCourse);
-          return `${matchedCourse.course_code} - ${matchedCourse.course_name}`;
-        } else {
-          console.log('No match found for:', courseStr);
-          return courseStr; // Return original string if no match
-        }
-      });
-    }
-    
-    // Method 2: If student has course_id, find the matching course
-    else if (student.course_id) {
-      const matchedCourse = courses.find(course => 
-        course.course_id === parseInt(student.course_id)
-      );
-      
-      if (matchedCourse) {
-        console.log('Found course by ID:', matchedCourse);
-        courseInfo = [`${matchedCourse.course_code} - ${matchedCourse.course_name}`];
-      } else {
-        console.log('No course found for ID:', student.course_id);
-        courseInfo = [`Course ID: ${student.course_id}`];
-      }
-    }
-    
-    // Method 3: If student has course_code, find the matching course
-    else if (student.course_code) {
-      const matchedCourse = courses.find(course => 
-        course.course_code.toLowerCase() === student.course_code.toLowerCase()
-      );
-      
-      if (matchedCourse) {
-        console.log('Found course by code:', matchedCourse);
-        courseInfo = [`${matchedCourse.course_code} - ${matchedCourse.course_name}`];
-      } else {
-        console.log('No course found for code:', student.course_code);
-        courseInfo = [student.course_code];
-      }
-    }
-    
-    // Method 4: If student has an array of courses
-    else if (Array.isArray(student.courses)) {
-      courseInfo = student.courses.map(course => {
-        if (typeof course === 'object' && course.course_name) {
-          return `${course.course_code || 'N/A'} - ${course.course_name}`;
-        } else if (typeof course === 'object' && course.course_id) {
-          // Look up course by ID
-          const matchedCourse = courses.find(c => c.course_id === course.course_id);
-          if (matchedCourse) {
-            return `${matchedCourse.course_code} - ${matchedCourse.course_name}`;
-          }
-          return `Course ID: ${course.course_id}`;
-        }
-        return course.toString();
-      });
-    }
-    
-    // Method 5: Check if student has course_name directly
-    else if (student.course_name) {
-      courseInfo = [`${student.course_code || 'N/A'} - ${student.course_name}`];
-    }
-    
-    // Return formatted display text
-    if (courseInfo.length === 0) {
-      console.log('No course info found for student:', student.student_id);
-      return 'No active enrollments';
-    } else if (courseInfo.length === 1) {
-      return courseInfo[0];
-    } else {
-      return `${courseInfo.length} courses: ${courseInfo.slice(0, 2).join(', ')}${courseInfo.length > 2 ? '...' : ''}`;
-    }
-  };
 
   // Updated filter logic for courses
   const filteredStudents = useMemo(() => {
@@ -425,6 +873,22 @@ const DisplayAccount = () => {
     setModalType(null);
   };
 
+  // Function to close course application modal
+  const closeCourseApplication = () => {
+    setShowCourseApplication(false);
+    setSelectedStudent(null);
+    setSelectedCourses([]);
+    setApplicationError('');
+  };
+
+  // Function to close course management modal
+  const closeCourseManagement = () => {
+    setShowCourseManagement(false);
+    setSelectedStudent(null);
+    setCurrentEnrollments([]);
+    setManagementError('');
+  };
+
   const renderModalContent = () => {
     if (!modalData || !modalType) return null;
 
@@ -445,27 +909,6 @@ const DisplayAccount = () => {
         </div>
         
         <div style={styles.modalBody}>
-          {/* Special handling for student courses */}
-          {modalType === 'student' && (
-            <div style={{ marginBottom: '20px', padding: '16px', backgroundColor: '#f8f9fa', borderRadius: '8px' }}>
-              <h4 style={{ margin: '0 0 12px 0', color: colors.darkGreen }}>Course Information</h4>
-              <div style={styles.expandedRow}>
-                <span style={styles.expandedLabel}>Enrolled Courses:</span>
-                <span style={styles.expandedValue}>
-                  {getStudentCoursesDisplay(modalData)}
-                </span>
-              </div>
-              {modalData.enrolled_courses && (
-                <div style={styles.expandedRow}>
-                  <span style={styles.expandedLabel}>Raw Course Data:</span>
-                  <span style={styles.expandedValue}>
-                    {modalData.enrolled_courses}
-                  </span>
-                </div>
-              )}
-            </div>
-          )}
-          
           <div style={styles.expandedGrid}>
             {allFields.map(([key, value]) => (
               <div key={key} style={styles.expandedRow}>
@@ -492,6 +935,277 @@ const DisplayAccount = () => {
               </pre>
             </div>
           )}
+        </div>
+      </div>
+    );
+  };
+
+  // Render course application modal (for adding new courses)
+  const renderCourseApplicationModal = () => {
+    if (!showCourseApplication || !selectedStudent) return null;
+
+    return (
+      <div style={styles.modalOverlay} onClick={closeCourseApplication}>
+        <div onClick={(e) => e.stopPropagation()} style={styles.modalContent}>
+          <div style={styles.modalHeader}>
+            <h3 style={styles.modalTitle}>
+              <Plus size={20} style={{ marginRight: '8px' }} />
+              Enroll in Additional Courses
+            </h3>
+            <button style={styles.closeButton} onClick={closeCourseApplication}>
+              ×
+            </button>
+          </div>
+          
+          <div style={styles.modalBody}>
+            <div style={styles.courseApplicationContainer}>
+              <div style={styles.studentInfo}>
+                <h4 style={styles.sectionTitle}>Student Information</h4>
+                <p><strong>Name:</strong> {selectedStudent.first_name} {selectedStudent.last_name}</p>
+                <p><strong>Student ID:</strong> {selectedStudent.student_id}</p>
+                <p><strong>Current Courses:</strong> {getStudentCoursesDisplay(selectedStudent)}</p>
+              </div>
+
+              <div style={styles.courseSelection}>
+                <h4 style={styles.sectionTitle}>Available Courses</h4>
+                {availableCourses.length === 0 ? (
+                  <div style={styles.noCourses}>
+                    <p>No additional courses available for enrollment.</p>
+                    <p style={{ fontSize: '14px', marginTop: '8px', color: colors.olive }}>
+                      This could be because:
+                    </p>
+                    <ul style={{ fontSize: '14px', color: colors.olive, marginLeft: '20px' }}>
+                      <li>The student is already enrolled in all available courses</li>
+                      <li>No course offerings are currently open for enrollment</li>
+                      <li>All available offerings are at maximum capacity</li>
+                    </ul>
+                  </div>
+                ) : (
+                  <>
+                    <div style={styles.courseGrid}>
+                      {availableCourses.map(course => {
+                        const isSelected = selectedCourses.includes(course.course_id);
+                        return (
+                          <div
+                            key={course.course_id}
+                            style={{
+                              ...styles.courseCard,
+                              ...(isSelected ? styles.courseCardSelected : {})
+                            }}
+                            onClick={() => handleCourseSelectionToggle(course.course_id)}
+                          >
+                            <div style={styles.courseCardHeader}>
+                              <input
+                                type="checkbox"
+                                style={styles.courseCheckbox}
+                                checked={isSelected}
+                                onChange={(e) => handleCourseSelectionToggle(course.course_id)}
+                              />
+                              <div style={styles.courseInfo}>
+                                <div style={styles.courseTitle}>
+                                  {course.course_code} - {course.course_name}
+                                </div>
+                                <div style={styles.courseDescription}>
+                                  {course.course_description && (
+                                    <div>{course.course_description}</div>
+                                  )}
+                                  {course.duration_weeks && (
+                                    <div>Duration: {course.duration_weeks} weeks</div>
+                                  )}
+                                  {course.credits && (
+                                    <div>Credits: {course.credits}</div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {selectedCourses.length > 0 && (
+                      <div style={styles.selectedCoursesInfo}>
+                        <strong>Selected Courses ({selectedCourses.length}):</strong>
+                        <ul style={{ margin: '8px 0 0 20px', fontSize: '14px' }}>
+                          {selectedCourses.map(courseId => {
+                            const course = availableCourses.find(c => c.course_id === courseId);
+                            return (
+                              <li key={courseId}>
+                                {course ? `${course.course_code} - ${course.course_name}` : `Course ID: ${courseId}`}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {applicationError && (
+                <div style={styles.errorMessage}>
+                  {applicationError}
+                </div>
+              )}
+
+              <div style={styles.modalActions}>
+                <button
+                  style={styles.cancelButton}
+                  onClick={closeCourseApplication}
+                  disabled={applicationLoading}
+                >
+                  Cancel
+                </button>
+                <button
+                  style={{
+                    ...styles.submitButton,
+                    opacity: (selectedCourses.length === 0 || applicationLoading) ? 0.6 : 1
+                  }}
+                  onClick={submitCourseApplication}
+                  disabled={selectedCourses.length === 0 || applicationLoading || availableCourses.length === 0}
+                >
+                  {applicationLoading ? 'Enrolling...' : `Enroll in ${selectedCourses.length} Course(s)`}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Render course management modal (for viewing and editing existing enrollments)
+  const renderCourseManagementModal = () => {
+    if (!showCourseManagement || !selectedStudent) return null;
+
+    return (
+      <div style={styles.modalOverlay} onClick={closeCourseManagement}>
+        <div onClick={(e) => e.stopPropagation()} style={{...styles.modalContent, maxWidth: '900px'}}>
+          <div style={styles.modalHeader}>
+            <h3 style={styles.modalTitle}>
+              <Edit3 size={20} style={{ marginRight: '8px' }} />
+              Manage Course Enrollments
+            </h3>
+            <button style={styles.closeButton} onClick={closeCourseManagement}>
+              ×
+            </button>
+          </div>
+          
+          <div style={styles.modalBody}>
+            <div style={styles.courseApplicationContainer}>
+              <div style={styles.studentInfo}>
+                <h4 style={styles.sectionTitle}>Student Information</h4>
+                <p><strong>Name:</strong> {selectedStudent.first_name} {selectedStudent.last_name}</p>
+                <p><strong>Student ID:</strong> {selectedStudent.student_id}</p>
+                <p><strong>Email:</strong> {selectedStudent.email}</p>
+              </div>
+
+              <div style={styles.courseSelection}>
+                <h4 style={styles.sectionTitle}>Current Enrollments</h4>
+                {managementLoading ? (
+                  <div style={styles.loadingContainer}>Loading enrollments...</div>
+                ) : currentEnrollments.length === 0 ? (
+                  <div style={styles.noCourses}>
+                    <p>No active enrollments found.</p>
+                  </div>
+                ) : (
+                  <div style={styles.enrollmentsList}>
+                    {currentEnrollments.map((enrollment, index) => (
+                      <div key={enrollment.enrollment_id || index} style={styles.enrollmentCard}>
+                        <div style={styles.enrollmentInfo}>
+                          <div style={styles.courseTitle}>
+                            {enrollment.course_code} - {enrollment.course_name}
+                          </div>
+                          <div style={styles.enrollmentDetails}>
+                            <span style={styles.enrollmentBadge}>
+                              Status: {enrollment.enrollment_status}
+                            </span>
+                            {enrollment.batch_identifier && (
+                              <span style={styles.enrollmentBadge}>
+                                Batch: {enrollment.batch_identifier}
+                              </span>
+                            )}
+                            {enrollment.enrollment_date && (
+                              <span style={styles.enrollmentDetail}>
+                                Enrolled: {formatDate(enrollment.enrollment_date)}
+                              </span>
+                            )}
+                            {enrollment.start_date && (
+                              <span style={styles.enrollmentDetail}>
+                                Start: {formatDate(enrollment.start_date)}
+                              </span>
+                            )}
+                            {enrollment.end_date && (
+                              <span style={styles.enrollmentDetail}>
+                                End: {formatDate(enrollment.end_date)}
+                              </span>
+                            )}
+                          </div>
+                          {enrollment.completion_percentage !== undefined && (
+                            <div style={styles.progressBar}>
+                              <div style={styles.progressLabel}>
+                                Progress: {enrollment.completion_percentage}%
+                              </div>
+                              <div style={styles.progressTrack}>
+                                <div 
+                                  style={{
+                                    ...styles.progressFill,
+                                    width: `${Math.max(0, Math.min(100, enrollment.completion_percentage))}%`
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        <div style={styles.enrollmentActions}>
+                          {enrollment.enrollment_status === 'enrolled' && (
+                            <button
+                              style={styles.withdrawButton}
+                              onClick={() => withdrawFromCourse(
+                                enrollment.enrollment_id, 
+                                `${enrollment.course_code} - ${enrollment.course_name}`
+                              )}
+                              disabled={managementLoading}
+                            >
+                              <Trash2 size={14} />
+                              Withdraw
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {managementError && (
+                <div style={styles.errorMessage}>
+                  {managementError}
+                </div>
+              )}
+
+              <div style={styles.modalActions}>
+                <button
+                  style={styles.cancelButton}
+                  onClick={closeCourseManagement}
+                  disabled={managementLoading}
+                >
+                  Close
+                </button>
+                <button
+                  style={styles.submitButton}
+                  onClick={() => {
+                    closeCourseManagement();
+                    handleCourseApplication(selectedStudent.student_id);
+                  }}
+                  disabled={managementLoading}
+                >
+                  <Plus size={14} style={{ marginRight: '4px' }} />
+                  Add More Courses
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -624,41 +1338,6 @@ const DisplayAccount = () => {
       transition: 'background-color 0.2s'
     },
 
-    // Stats Card
-    statsCard: {
-      backgroundColor: '#ffffff',
-      borderRadius: '12px',
-      padding: '20px',
-      marginBottom: '24px',
-      border: '1px solid #e2e8f0'
-    },
-
-    statsGrid: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-      gap: '16px'
-    },
-
-    statItem: {
-      textAlign: 'center',
-      padding: '16px',
-      backgroundColor: colors.cream,
-      borderRadius: '8px'
-    },
-
-    statValue: {
-      fontSize: '24px',
-      fontWeight: 'bold',
-      color: colors.darkGreen,
-      margin: 0
-    },
-
-    statLabel: {
-      fontSize: '14px',
-      color: colors.olive,
-      margin: 0
-    },
-
     // Tab Container
     tabContainer: {
       backgroundColor: '#ffffff',
@@ -767,6 +1446,13 @@ const DisplayAccount = () => {
       fontSize: '14px',
     },
 
+    // Updated button styles for multiple buttons
+    buttonContainer: {
+      display: 'flex',
+      gap: '8px',
+      marginTop: '15px',
+    },
+
     viewMoreButton: {
       backgroundColor: colors.lightGreen,
       color: 'white',
@@ -775,9 +1461,41 @@ const DisplayAccount = () => {
       borderRadius: '5px',
       cursor: 'pointer',
       fontSize: '12px',
-      marginTop: '15px',
       transition: 'background-color 0.2s ease',
-      width: '100%',
+      flex: 1,
+    },
+
+    applyCourseButton: {
+      backgroundColor: colors.coral,
+      color: 'white',
+      border: 'none',
+      padding: '8px 16px',
+      borderRadius: '5px',
+      cursor: 'pointer',
+      fontSize: '12px',
+      transition: 'background-color 0.2s ease',
+      flex: 1,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: '4px',
+    },
+
+    // New button for course management
+    manageCourseButton: {
+      backgroundColor: colors.olive,
+      color: 'white',
+      border: 'none',
+      padding: '8px 16px',
+      borderRadius: '5px',
+      cursor: 'pointer',
+      fontSize: '12px',
+      transition: 'background-color 0.2s ease',
+      flex: 1,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: '4px',
     },
 
     // Error and Loading States
@@ -845,7 +1563,7 @@ const DisplayAccount = () => {
       fontWeight: '500'
     },
 
-    // Modal styles (kept as is)
+    // Modal styles
     modalOverlay: {
       position: 'fixed',
       top: 0,
@@ -881,6 +1599,8 @@ const DisplayAccount = () => {
       color: colors.darkGreen,
       fontSize: '20px',
       fontWeight: 'bold',
+      display: 'flex',
+      alignItems: 'center',
     },
     closeButton: {
       background: 'none',
@@ -948,7 +1668,228 @@ const DisplayAccount = () => {
       overflow: 'auto',
       border: '1px solid #dee2e6',
       margin: 0,
-    }
+    },
+
+    // Course Application Modal Styles
+    courseApplicationContainer: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '20px',
+    },
+
+    studentInfo: {
+      backgroundColor: '#f8f9fa',
+      padding: '16px',
+      borderRadius: '8px',
+      border: '1px solid #e9ecef',
+    },
+
+    courseSelection: {
+      backgroundColor: '#ffffff',
+      padding: '16px',
+      borderRadius: '8px',
+      border: '1px solid #e9ecef',
+    },
+
+    // Course grid for multiple selection
+    courseGrid: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+      gap: '12px',
+      marginBottom: '16px',
+    },
+
+    courseCard: {
+      border: '2px solid #e5e7eb',
+      borderRadius: '8px',
+      padding: '12px',
+      cursor: 'pointer',
+      transition: 'all 0.2s ease',
+      backgroundColor: '#fff',
+    },
+
+    courseCardSelected: {
+      border: '2px solid #4F46E5',
+      backgroundColor: '#EEF2FF',
+    },
+
+    courseCardHeader: {
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: '8px',
+      marginBottom: '8px',
+    },
+
+    courseCheckbox: {
+      marginTop: '2px',
+    },
+
+    courseInfo: {
+      flex: 1,
+    },
+
+    courseTitle: {
+      fontWeight: 'bold',
+      color: colors.black,
+      fontSize: '14px',
+      marginBottom: '4px',
+    },
+
+    courseDescription: {
+      fontSize: '12px',
+      color: colors.olive,
+      lineHeight: '1.4',
+    },
+
+    selectedCoursesInfo: {
+      marginTop: '12px',
+      padding: '12px',
+      backgroundColor: '#EEF2FF',
+      borderRadius: '6px',
+      border: '1px solid #4F46E5',
+    },
+
+    noCourses: {
+      color: colors.olive,
+      fontStyle: 'italic',
+      textAlign: 'center',
+      padding: '20px',
+    },
+
+    errorMessage: {
+      backgroundColor: '#f8d7da',
+      color: '#721c24',
+      padding: '12px',
+      borderRadius: '6px',
+      border: '1px solid #f5c6cb',
+    },
+
+    modalActions: {
+      display: 'flex',
+      gap: '12px',
+      justifyContent: 'flex-end',
+      paddingTop: '16px',
+      borderTop: '1px solid #e9ecef',
+    },
+
+    cancelButton: {
+      padding: '10px 20px',
+      backgroundColor: '#6c757d',
+      color: 'white',
+      border: 'none',
+      borderRadius: '6px',
+      cursor: 'pointer',
+      fontSize: '14px',
+      transition: 'background-color 0.2s ease',
+    },
+
+    submitButton: {
+      padding: '10px 20px',
+      backgroundColor: colors.darkGreen,
+      color: 'white',
+      border: 'none',
+      borderRadius: '6px',
+      cursor: 'pointer',
+      fontSize: '14px',
+      transition: 'background-color 0.2s ease',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '4px',
+    },
+
+    // Course Management Modal Styles
+    enrollmentsList: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '12px',
+    },
+
+    enrollmentCard: {
+      border: '1px solid #e9ecef',
+      borderRadius: '8px',
+      padding: '16px',
+      backgroundColor: '#f8f9fa',
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'flex-start',
+    },
+
+    enrollmentInfo: {
+      flex: 1,
+    },
+
+    enrollmentDetails: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: '8px',
+      marginTop: '8px',
+      marginBottom: '8px',
+    },
+
+    enrollmentBadge: {
+      backgroundColor: colors.lightGreen,
+      color: 'white',
+      padding: '2px 8px',
+      borderRadius: '12px',
+      fontSize: '11px',
+      fontWeight: 'bold',
+    },
+
+    enrollmentDetail: {
+      fontSize: '12px',
+      color: colors.olive,
+    },
+
+    progressBar: {
+      marginTop: '8px',
+    },
+
+    progressLabel: {
+      fontSize: '12px',
+      color: colors.olive,
+      marginBottom: '4px',
+    },
+
+    progressTrack: {
+      width: '100%',
+      height: '8px',
+      backgroundColor: '#e9ecef',
+      borderRadius: '4px',
+      overflow: 'hidden',
+    },
+
+    progressFill: {
+      height: '100%',
+      backgroundColor: colors.darkGreen,
+      transition: 'width 0.3s ease',
+    },
+
+    enrollmentActions: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '8px',
+      marginLeft: '16px',
+    },
+
+    withdrawButton: {
+      padding: '6px 12px',
+      backgroundColor: colors.red,
+      color: 'white',
+      border: 'none',
+      borderRadius: '4px',
+      cursor: 'pointer',
+      fontSize: '12px',
+      transition: 'background-color 0.2s ease',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '4px',
+    },
+
+    loadingContainer: {
+      padding: '20px',
+      textAlign: 'center',
+      color: colors.olive,
+    },
   };
 
   if (loading) {
@@ -1139,7 +2080,7 @@ const DisplayAccount = () => {
             Students
             {filteredStudents.length !== students.length && (
               <span style={{...styles.count, backgroundColor: colors.olive}}>
-                of {students.length}
+                {filteredStudents.length} of {students.length}
               </span>
             )}
           </div>
@@ -1214,14 +2155,37 @@ const DisplayAccount = () => {
                       </div>
                     </div>
 
-                    <button
-                      style={styles.viewMoreButton}
-                      onClick={() => openModal(student, 'student')}
-                      onMouseOver={(e) => e.target.style.backgroundColor = colors.darkGreen}
-                      onMouseOut={(e) => e.target.style.backgroundColor = colors.lightGreen}
-                    >
-                      View More Info
-                    </button>
+                    {/* Updated button container with three buttons */}
+                    <div style={styles.buttonContainer}>
+                      <button
+                        style={styles.viewMoreButton}
+                        onClick={() => openModal(student, 'student')}
+                        onMouseOver={(e) => e.target.style.backgroundColor = colors.darkGreen}
+                        onMouseOut={(e) => e.target.style.backgroundColor = colors.lightGreen}
+                      >
+                        View More
+                      </button>
+                      
+                      <button
+                        style={styles.manageCourseButton}
+                        onClick={() => handleCourseManagement(student.student_id)}
+                        onMouseOver={(e) => e.target.style.backgroundColor = '#5a6b4d'}
+                        onMouseOut={(e) => e.target.style.backgroundColor = colors.olive}
+                      >
+                        <Edit3 size={12} />
+                        Manage
+                      </button>
+                      
+                      <button
+                        style={styles.applyCourseButton}
+                        onClick={() => handleCourseApplication(student.student_id)}
+                        onMouseOver={(e) => e.target.style.backgroundColor = colors.red}
+                        onMouseOut={(e) => e.target.style.backgroundColor = colors.coral}
+                      >
+                        <Plus size={12} />
+                        Add
+                      </button>
+                    </div>
                   </div>
                 );
               })}
@@ -1337,14 +2301,20 @@ const DisplayAccount = () => {
         </div>
       )}
 
-      {/* Modal */}
-      {modalData && (
+      {/* Original Modal for viewing detailed info */}
+      {modalData && modalType !== 'course-application' && modalType !== 'course-management' && (
         <div style={styles.modalOverlay} onClick={closeModal}>
           <div onClick={(e) => e.stopPropagation()}>
             {renderModalContent()}
           </div>
         </div>
       )}
+
+      {/* Course Application Modal (for adding new courses) */}
+      {showCourseApplication && renderCourseApplicationModal()}
+
+      {/* Course Management Modal (for viewing and editing existing enrollments) */}
+      {showCourseManagement && renderCourseManagementModal()}
     </div>
   );
 };

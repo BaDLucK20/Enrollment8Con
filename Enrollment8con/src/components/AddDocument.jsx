@@ -478,7 +478,7 @@ const AddDocument = () => {
       pointerEvents: 'none',
     },
     input: {
-      width: '100%',
+      width: '94%',
       padding: '8px 12px 8px 40px',
       border: `1px solid ${colors.gray[300]}`,
       borderRadius: '6px',
