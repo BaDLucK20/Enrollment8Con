@@ -512,7 +512,6 @@ const CompletedPayments = () => {
     modalDetailRow: {
       display: "flex",
       justifyContent: "space-between",
-      alignItems: "center",
       padding: isMobile ? "0.5rem 0" : "0.75rem 0",
       borderBottom: "1px solid #f3f4f6",
       flexDirection: isMobile ? "column" : "row",

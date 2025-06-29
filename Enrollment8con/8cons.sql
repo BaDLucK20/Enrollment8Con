@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Jun 22, 2025 at 07:56 AM
+-- Generation Time: Jun 29, 2025 at 09:04 AM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -25,141 +25,273 @@ DELIMITER $$
 --
 -- Procedures
 --
-CREATE DEFINER=`root`@`localhost` PROCEDURE `sp_calculate_student_eligibility` (IN `p_student_id` VARCHAR(20), IN `p_course_id` INT, OUT `p_eligibility_status` VARCHAR(20), OUT `p_eligibility_score` DECIMAL(5,2))   BEGIN
-    DECLARE v_total_weight DECIMAL(5,2) DEFAULT 0;
-    DECLARE v_achieved_weight DECIMAL(5,2) DEFAULT 0;
-    DECLARE v_mandatory_failed BOOLEAN DEFAULT FALSE;
-    
-    -- Calculate weighted eligibility score
-    SELECT 
-        SUM(cer.weight_override) as total_weight,
-        SUM(CASE 
-            WHEN sea.assessment_status = 'meets_criteria' THEN cer.weight_override
-            WHEN sea.assessment_status = 'exempted' THEN cer.weight_override
-            ELSE 0 
-        END) as achieved_weight,
-        MAX(CASE 
-            WHEN cer.is_required = TRUE AND sea.assessment_status NOT IN ('meets_criteria', 'exempted') THEN TRUE
-            ELSE FALSE 
-        END) as mandatory_failed
-    INTO v_total_weight, v_achieved_weight, v_mandatory_failed
-    FROM course_eligibility_requirements cer
-    LEFT JOIN student_eligibility_assessments sea ON cer.criteria_id = sea.criteria_id AND sea.student_id = p_student_id
-    WHERE cer.course_id = p_course_id;
-    
-    -- Calculate percentage score
-    IF v_total_weight > 0 THEN
-        SET p_eligibility_score = (v_achieved_weight / v_total_weight) * 100;
-    ELSE
-        SET p_eligibility_score = 100.00;
-    END IF;
-    
-    -- Determine eligibility status
-    IF v_mandatory_failed = TRUE THEN
-        SET p_eligibility_status = 'not_eligible';
-    ELSEIF p_eligibility_score >= 80.00 THEN
-        SET p_eligibility_status = 'eligible';
-    ELSE
-        SET p_eligibility_status = 'pending';
-    END IF;
-END$$
+CREATE DEFINER=`root`@`localhost` PROCEDURE `sp_enroll_student` (IN `p_student_id` VARCHAR(20), IN `p_offering_id` INT, IN `p_pricing_type` VARCHAR(20), OUT `p_result` VARCHAR(200))   BEGIN
+  DECLARE v_offering_count INT;
+  DECLARE v_existing_enrollment INT;
+  DECLARE v_max_enrollees INT;
+  DECLARE v_current_enrollees INT;
+  DECLARE v_offering_status VARCHAR(20);
+  DECLARE v_pricing_amount DECIMAL(10,2);
+  DECLARE v_duration_weeks INT;
+  DECLARE v_completion_date DATE;
+  DECLARE v_start_date DATE;
+  
+  DECLARE EXIT HANDLER FOR SQLEXCEPTION
+  BEGIN
+    ROLLBACK;
+    SET p_result = 'ERROR: Enrollment failed due to database error';
+  END;
 
-CREATE DEFINER=`root`@`localhost` PROCEDURE `sp_enroll_student` (IN `p_student_id` VARCHAR(20), IN `p_offering_id` INT, IN `p_pricing_type` ENUM('regular','early_bird','group','scholarship','special'), OUT `p_result` VARCHAR(100))   BEGIN
-    DECLARE v_max_enrollees INT;
-    DECLARE v_current_enrollees INT;
-    DECLARE v_pricing_amount DECIMAL(10,2);
-    DECLARE v_account_id INT;
-    DECLARE v_enrollment_id INT;
+  START TRANSACTION;
+
+  -- Check if student exists
+  SELECT COUNT(*) INTO v_offering_count FROM students WHERE student_id = p_student_id;
+  IF v_offering_count = 0 THEN
+    SET p_result = 'ERROR: Student not found';
+    ROLLBACK;
+  ELSE
+    -- Check if offering exists and get details
+    SELECT 
+      max_enrollees, current_enrollees, status, start_date,
+      (SELECT duration_weeks FROM courses WHERE course_id = co.course_id) as duration_weeks
+    INTO v_max_enrollees, v_current_enrollees, v_offering_status, v_start_date, v_duration_weeks
+    FROM course_offerings co
+    WHERE offering_id = p_offering_id;
     
-    DECLARE EXIT HANDLER FOR SQLEXCEPTION
-    BEGIN
-        ROLLBACK;
-        SET p_result = 'ERROR: Enrollment failed due to database error';
-    END;
-    
-    START TRANSACTION;
-    
-    -- Check if offering has available slots
-    SELECT max_enrollees, current_enrollees 
-    INTO v_max_enrollees, v_current_enrollees
-    FROM course_offerings 
-    WHERE offering_id = p_offering_id AND status = 'active';
-    
-    IF v_current_enrollees >= v_max_enrollees THEN
-        SET p_result = 'ERROR: Course offering is full';
-        ROLLBACK;
+    IF v_max_enrollees IS NULL THEN
+      SET p_result = 'ERROR: Course offering not found';
+      ROLLBACK;
     ELSE
-        -- Get pricing
-        SELECT amount INTO v_pricing_amount
-        FROM course_pricing 
-        WHERE offering_id = p_offering_id 
-        AND pricing_type = p_pricing_type 
-        AND is_active = TRUE
-        AND (expiry_date IS NULL OR expiry_date > NOW())
-        LIMIT 1;
-        
-        IF v_pricing_amount IS NULL THEN
-            SET p_result = 'ERROR: Pricing not found for selected type';
-            ROLLBACK;
+      -- Check if already enrolled
+      SELECT COUNT(*) INTO v_existing_enrollment 
+      FROM student_enrollments 
+      WHERE student_id = p_student_id AND offering_id = p_offering_id;
+      
+      IF v_existing_enrollment > 0 THEN
+        SET p_result = 'ERROR: Student already enrolled in this offering';
+        ROLLBACK;
+      ELSE
+        -- Check capacity
+        IF v_current_enrollees >= v_max_enrollees THEN
+          SET p_result = 'ERROR: Course offering is full';
+          ROLLBACK;
         ELSE
+          -- Check offering status
+          IF v_offering_status NOT IN ('planned', 'active') THEN
+            SET p_result = 'ERROR: Course offering is not available for enrollment';
+            ROLLBACK;
+          ELSE
+            -- Get pricing
+            SELECT amount INTO v_pricing_amount
+            FROM course_pricing
+            WHERE offering_id = p_offering_id 
+              AND pricing_type = p_pricing_type 
+              AND is_active = TRUE
+              AND (expiry_date IS NULL OR expiry_date > NOW())
+            LIMIT 1;
+            
+            IF v_pricing_amount IS NULL THEN
+              SET v_pricing_amount = 0;
+            END IF;
+            
+            -- Calculate completion date
+            SET v_completion_date = DATE_ADD(v_start_date, INTERVAL v_duration_weeks WEEK);
+            
             -- Create enrollment
-            INSERT INTO student_enrollments (student_id, offering_id)
-            VALUES (p_student_id, p_offering_id);
+            INSERT INTO student_enrollments (
+              student_id, offering_id, enrollment_date, enrollment_status,
+              completion_date, completion_percentage
+            ) VALUES (
+              p_student_id, p_offering_id, NOW(), 'enrolled',
+              v_completion_date, 0.00
+            );
             
-            SET v_enrollment_id = LAST_INSERT_ID();
+            -- Create student account if pricing > 0
+            IF v_pricing_amount > 0 THEN
+              INSERT INTO student_accounts (
+                student_id, offering_id, total_due, amount_paid, balance,
+                account_status, due_date
+              ) VALUES (
+                p_student_id, p_offering_id, v_pricing_amount, 0.00, v_pricing_amount,
+                'active', DATE_ADD(NOW(), INTERVAL 30 DAY)
+              );
+            END IF;
             
-            -- Create student account
-            INSERT INTO student_accounts (student_id, offering_id, total_due)
-            VALUES (p_student_id, p_offering_id, v_pricing_amount);
-            
-            -- Update current enrollees count
+            -- Update offering enrollment count
             UPDATE course_offerings 
             SET current_enrollees = current_enrollees + 1
             WHERE offering_id = p_offering_id;
             
-            SET p_result = CONCAT('SUCCESS: Student enrolled with enrollment ID ', v_enrollment_id);
+            SET p_result = 'SUCCESS: Student enrolled successfully';
             COMMIT;
+          END IF;
         END IF;
+      END IF;
     END IF;
+  END IF;
 END$$
 
-CREATE DEFINER=`root`@`localhost` PROCEDURE `sp_process_payment` (IN `p_account_id` INT, IN `p_method_id` INT, IN `p_payment_amount` DECIMAL(10,2), IN `p_reference_number` VARCHAR(50), IN `p_processed_by` INT, OUT `p_result` VARCHAR(100))   BEGIN
-    DECLARE v_balance DECIMAL(10,2);
-    DECLARE v_payment_id INT;
-    
-    DECLARE EXIT HANDLER FOR SQLEXCEPTION
-    BEGIN
-        ROLLBACK;
-        SET p_result = 'ERROR: Payment processing failed';
-    END;
-    
-    START TRANSACTION;
-    
-    -- Check account balance
-    SELECT balance INTO v_balance
-    FROM student_accounts 
-    WHERE account_id = p_account_id;
-    
-    IF p_payment_amount > v_balance THEN
-        SET p_result = 'ERROR: Payment amount exceeds outstanding balance';
-        ROLLBACK;
-    ELSE
-        -- Insert payment record
-        INSERT INTO payments (account_id, method_id, payment_amount, reference_number, processed_by, payment_status)
-        VALUES (p_account_id, p_method_id, p_payment_amount, p_reference_number, p_processed_by, 'confirmed');
+CREATE DEFINER=`root`@`localhost` PROCEDURE `sp_get_dashboard_kpi_data` ()   BEGIN
+        -- KPI Metrics
+        SELECT 
+          (SELECT COUNT(*) FROM students WHERE graduation_status != 'expelled') as total_enrollees,
+          (SELECT SUM(payment_amount) FROM payments WHERE payment_status = 'confirmed') as total_revenue,
+          (SELECT COUNT(*) FROM students WHERE graduation_status = 'graduated') as total_graduates,
+          (SELECT SUM(payment_amount) FROM payments WHERE payment_status = 'pending') as pending_receivables;
         
-        SET v_payment_id = LAST_INSERT_ID();
+        -- Revenue Analysis (Monthly)
+        SELECT 
+          MONTHNAME(p.payment_date) as month,
+          SUM(CASE WHEN p.payment_status = 'confirmed' THEN p.payment_amount ELSE 0 END) as payment_received,
+          SUM(CASE WHEN p.payment_status = 'pending' THEN p.payment_amount ELSE 0 END) as accounts_receivable
+        FROM payments p
+        WHERE p.payment_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+        GROUP BY YEAR(p.payment_date), MONTH(p.payment_date), MONTHNAME(p.payment_date)
+        ORDER BY YEAR(p.payment_date), MONTH(p.payment_date);
         
-        -- Update student account
-        UPDATE student_accounts 
-        SET amount_paid = amount_paid + p_payment_amount,
-            last_payment_date = CURRENT_DATE,
-            account_status = CASE WHEN (amount_paid + p_payment_amount) >= total_due THEN 'paid' ELSE 'active' END
-        WHERE account_id = p_account_id;
+        -- Status Distribution
+        SELECT 
+          CASE 
+            WHEN tl.level_name = 'Beginner' THEN 'Basic'
+            WHEN tl.level_name = 'Intermediate' THEN 'Common' 
+            WHEN tl.level_name = 'Advanced' THEN 'Core'
+            ELSE 'Basic'
+          END as name,
+          COUNT(*) as value
+        FROM students s
+        LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
+        LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
+        WHERE s.graduation_status != 'expelled'
+        GROUP BY CASE 
+          WHEN tl.level_name = 'Beginner' THEN 'Basic'
+          WHEN tl.level_name = 'Intermediate' THEN 'Common' 
+          WHEN tl.level_name = 'Advanced' THEN 'Core'
+          ELSE 'Basic'
+        END;
         
-        SET p_result = CONCAT('SUCCESS: Payment processed with ID ', v_payment_id);
-        COMMIT;
+        -- Monthly Enrollment Trend
+        SELECT 
+          MONTHNAME(s.registration_date) as month,
+          COUNT(*) as enrollees
+        FROM students s
+        WHERE s.registration_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+        GROUP BY YEAR(s.registration_date), MONTH(s.registration_date), MONTHNAME(s.registration_date)
+        ORDER BY YEAR(s.registration_date), MONTH(s.registration_date);
+        
+        -- Batch Performance Data
+        SELECT 
+          co.batch_identifier as batch,
+          COUNT(DISTINCT se.student_id) as enrollees,
+          COUNT(DISTINCT CASE WHEN s.graduation_status = 'graduated' THEN s.student_id END) as graduates,
+          COUNT(DISTINCT CASE WHEN tl.level_name = 'Beginner' THEN s.student_id END) as basic,
+          COUNT(DISTINCT CASE WHEN tl.level_name = 'Intermediate' THEN s.student_id END) as common,
+          COUNT(DISTINCT CASE WHEN tl.level_name = 'Advanced' THEN s.student_id END) as core
+        FROM course_offerings co
+        LEFT JOIN student_enrollments se ON co.offering_id = se.offering_id
+        LEFT JOIN students s ON se.student_id = s.student_id
+        LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
+        LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
+        WHERE co.start_date >= DATE_SUB(CURDATE(), INTERVAL 2 YEAR)
+        GROUP BY co.offering_id, co.batch_identifier
+        ORDER BY co.start_date DESC;
+      END$$
+
+CREATE DEFINER=`root`@`localhost` PROCEDURE `sp_register_user_complete` (IN `p_password_hash` VARCHAR(255), IN `p_first_name` VARCHAR(50), IN `p_middle_name` VARCHAR(50), IN `p_last_name` VARCHAR(50), IN `p_birth_date` DATE, IN `p_birth_place` VARCHAR(100), IN `p_gender` ENUM('Male','Female','Other'), IN `p_email` VARCHAR(100), IN `p_education` VARCHAR(100), IN `p_phone_no` VARCHAR(15), IN `p_address` TEXT, IN `p_role_name` VARCHAR(50), IN `p_trading_level` VARCHAR(50), IN `p_device_type` VARCHAR(100), IN `p_learning_style` VARCHAR(100), IN `p_delivery_preference` VARCHAR(50), OUT `p_account_id` INT, OUT `p_student_id` VARCHAR(20), OUT `p_result` VARCHAR(100))   BEGIN
+  DECLARE v_role_id INT;
+  DECLARE v_level_id INT;
+  DECLARE v_six_digit_number VARCHAR(6);
+  DECLARE EXIT HANDLER FOR SQLEXCEPTION
+  BEGIN
+    ROLLBACK;
+    SET p_result = 'ERROR: Complete registration failed';
+    SET p_account_id = NULL;
+    SET p_student_id = NULL;
+  END;
+  START TRANSACTION;
+  -- Create account first
+  INSERT INTO accounts (password_hash, token, account_status)
+  VALUES (p_password_hash, '', 'active');
+  
+  SET p_account_id = LAST_INSERT_ID();
+  
+  -- Generate 6-digit number (using timestamp modulo + account_id for uniqueness)
+  SET v_six_digit_number = LPAD((UNIX_TIMESTAMP(NOW()) % 900000) + 100000 + p_account_id % 1000, 6, '0');
+  
+  -- Create person with matching ID
+  INSERT INTO persons (person_id, first_name, middle_name, last_name, birth_date, birth_place, gender, email, education)
+  VALUES (p_account_id, p_first_name, p_middle_name, p_last_name, p_birth_date, p_birth_place, p_gender, p_email, p_education);
+  -- Get role_id
+  SELECT role_id INTO v_role_id FROM roles WHERE role_name = p_role_name;
+  
+  IF v_role_id IS NULL THEN
+    SET p_result = 'ERROR: Invalid role specified';
+    ROLLBACK;
+  ELSE
+    -- Assign role
+    INSERT INTO account_roles (account_id, role_id) VALUES (p_account_id, v_role_id);
+    
+    -- If student role, create student record with complete details
+    IF p_role_name = 'student' THEN
+      SET p_student_id = CONCAT('8Con-', YEAR(NOW()), '-', v_six_digit_number);
+      
+      INSERT INTO students (student_id, person_id, account_id)
+      VALUES (p_student_id, p_account_id, p_account_id);
+      
+      -- Add contact information
+      IF p_phone_no IS NOT NULL THEN
+        INSERT INTO contact_info (person_id, student_id, contact_type, contact_value, is_primary)
+        VALUES (p_account_id, p_student_id, 'phone', p_phone_no, 1);
+      END IF;
+      
+      IF p_address IS NOT NULL THEN
+        INSERT INTO contact_info (person_id, student_id, contact_type, contact_value, is_primary)
+        VALUES (p_account_id, p_student_id, 'address', p_address, 1);
+      END IF;
+      
+      INSERT INTO contact_info (person_id, student_id, contact_type, contact_value, is_primary)
+      VALUES (p_account_id, p_student_id, 'email', p_email, 1);
+      
+      -- Set trading level based on parameter
+      IF p_trading_level IS NOT NULL THEN
+        SELECT level_id INTO v_level_id FROM trading_levels WHERE level_name = p_trading_level LIMIT 1;
+        IF v_level_id IS NULL THEN
+          SET v_level_id = 1; -- Default to Beginner
+        END IF;
+      ELSE
+        SET v_level_id = 1; -- Default to Beginner
+      END IF;
+      
+      INSERT INTO student_trading_levels (student_id, level_id, is_current)
+      VALUES (p_student_id, v_level_id, 1);
+      
+      -- Set learning preferences with provided details
+      INSERT INTO learning_preferences (
+        student_id, 
+        delivery_preference, 
+        device_type, 
+        learning_style
+      ) VALUES (
+        p_student_id, 
+        COALESCE(p_delivery_preference, 'hybrid'),
+        p_device_type,
+        p_learning_style
+      );
+      
+      -- Create student background record
+      INSERT INTO student_backgrounds (student_id, education_level)
+      VALUES (p_student_id, 'college');
+      
     END IF;
+    
+    -- If staff role, create staff record
+    IF p_role_name = 'staff' THEN
+      INSERT INTO staff (person_id, account_id, employee_id, hire_date, employment_status)
+      VALUES (p_account_id, p_account_id, CONCAT('Staff-', YEAR(NOW()), '-', v_six_digit_number), CURDATE(), 'active');
+    END IF;
+    
+    SET p_result = 'SUCCESS: Complete user registration successful';
+    COMMIT;
+  END IF;
 END$$
 
 CREATE DEFINER=`root`@`localhost` PROCEDURE `sp_register_user_with_synced_ids` (IN `p_password_hash` VARCHAR(255), IN `p_first_name` VARCHAR(50), IN `p_middle_name` VARCHAR(50), IN `p_last_name` VARCHAR(50), IN `p_birth_date` DATE, IN `p_birth_place` VARCHAR(100), IN `p_gender` ENUM('Male','Female','Other'), IN `p_email` VARCHAR(100), IN `p_education` VARCHAR(100), IN `p_phone_no` VARCHAR(15), IN `p_address` TEXT, IN `p_role_name` VARCHAR(50), OUT `p_account_id` INT, OUT `p_result` VARCHAR(100))   BEGIN
@@ -196,7 +328,7 @@ CREATE DEFINER=`root`@`localhost` PROCEDURE `sp_register_user_with_synced_ids` (
             
             -- If student role, create student record
             IF p_role_name = 'student' THEN
-              SET v_student_id = CONCAT('S', UNIX_TIMESTAMP(NOW()) * 1000, '_', p_account_id);
+              SET v_student_id = CONCAT('8Con-', YEAR(NOW()), '-', v_six_digit_number);
               
               INSERT INTO students (student_id, person_id, account_id)
               VALUES (v_student_id, p_account_id, p_account_id);
@@ -227,13 +359,154 @@ CREATE DEFINER=`root`@`localhost` PROCEDURE `sp_register_user_with_synced_ids` (
             -- If staff role, create staff record
             IF p_role_name = 'staff' THEN
               INSERT INTO staff (person_id, account_id, employee_id, hire_date, employment_status)
-              VALUES (p_account_id, p_account_id, CONCAT('EMP', UNIX_TIMESTAMP(NOW()) * 1000), CURDATE(), 'active');
-            END IF;
+              VALUES (p_account_id, p_account_id, CONCAT('Staff-', YEAR(NOW()), '-', v_six_digit_number), CURDATE(), 'active');
+    		END IF;
             
             SET p_result = 'SUCCESS: User registered successfully';
             COMMIT;
           END IF;
         END$$
+
+CREATE DEFINER=`root`@`localhost` PROCEDURE `UpdatePaymentStatus` (IN `p_payment_id` INT, IN `p_status` VARCHAR(20), IN `p_processed_by` INT, IN `p_notes` TEXT)   BEGIN
+  DECLARE v_payment_amount DECIMAL(10,2);
+  DECLARE v_account_id INT;
+  DECLARE v_old_status VARCHAR(20);
+  
+  DECLARE EXIT HANDLER FOR SQLEXCEPTION
+  BEGIN
+    ROLLBACK;
+  END;
+
+  START TRANSACTION;
+
+  -- Get current payment details
+  SELECT payment_amount, account_id, payment_status
+  INTO v_payment_amount, v_account_id, v_old_status
+  FROM payments 
+  WHERE payment_id = p_payment_id;
+  
+  -- Update payment status
+  UPDATE payments 
+  SET payment_status = p_status,
+      processed_by = p_processed_by,
+      notes = COALESCE(p_notes, notes),
+      updated_at = NOW()
+  WHERE payment_id = p_payment_id;
+  
+  -- If confirming payment, update student account
+  IF p_status = 'confirmed' AND v_old_status != 'confirmed' THEN
+    UPDATE student_accounts
+    SET amount_paid = amount_paid + v_payment_amount,
+        balance = total_due - (amount_paid + v_payment_amount),
+        last_payment_date = CURDATE(),
+        updated_at = NOW()
+    WHERE account_id = v_account_id;
+  END IF;
+  
+  -- If rejecting previously confirmed payment, reverse the amount
+  IF p_status IN ('failed', 'cancelled') AND v_old_status = 'confirmed' THEN
+    UPDATE student_accounts
+    SET amount_paid = amount_paid - v_payment_amount,
+        balance = total_due - (amount_paid - v_payment_amount),
+        updated_at = NOW()
+    WHERE account_id = v_account_id;
+  END IF;
+  
+  -- Log the activity
+  INSERT INTO payment_activity_logs (
+    payment_id, action, old_status, new_status, 
+    performed_by, notes, created_at
+  ) VALUES (
+    p_payment_id, 'status_update', v_old_status, p_status,
+    p_processed_by, p_notes, NOW()
+  );
+  
+  COMMIT;
+END$$
+
+CREATE DEFINER=`root`@`localhost` PROCEDURE `UpdatePaymentStatusWithAmount` (IN `p_payment_id` INT, IN `p_status` VARCHAR(20), IN `p_notes` TEXT, IN `p_amount` DECIMAL(10,2), OUT `p_result` VARCHAR(200))   BEGIN
+  DECLARE v_old_amount DECIMAL(10,2);
+  DECLARE v_account_id INT;
+  DECLARE v_old_status VARCHAR(20);
+  DECLARE v_amount_difference DECIMAL(10,2);
+  
+  DECLARE EXIT HANDLER FOR SQLEXCEPTION
+  BEGIN
+    ROLLBACK;
+    SET p_result = 'ERROR: Payment update failed due to database error';
+  END;
+
+  START TRANSACTION;
+
+  -- Get current payment details
+  SELECT payment_amount, account_id, payment_status
+  INTO v_old_amount, v_account_id, v_old_status
+  FROM payments 
+  WHERE payment_id = p_payment_id;
+  
+  IF v_old_amount IS NULL THEN
+    SET p_result = 'ERROR: Payment not found';
+    ROLLBACK;
+  ELSE
+    -- Calculate amount difference if amount is being updated
+    IF p_amount IS NOT NULL AND p_amount != v_old_amount THEN
+      SET v_amount_difference = p_amount - v_old_amount;
+      
+      -- Update payment amount
+      UPDATE payments 
+      SET payment_amount = p_amount,
+          payment_status = p_status,
+          notes = COALESCE(p_notes, notes),
+          updated_at = NOW()
+      WHERE payment_id = p_payment_id;
+      
+      -- Update student account if payment is confirmed
+      IF p_status = 'confirmed' THEN
+        UPDATE student_accounts
+        SET amount_paid = amount_paid + v_amount_difference,
+            balance = total_due - (amount_paid + v_amount_difference),
+            last_payment_date = CURDATE(),
+            updated_at = NOW()
+        WHERE account_id = v_account_id;
+      END IF;
+    ELSE
+      -- Only update status and notes
+      UPDATE payments 
+      SET payment_status = p_status,
+          notes = COALESCE(p_notes, notes),
+          updated_at = NOW()
+      WHERE payment_id = p_payment_id;
+      
+      -- Handle status change effects on student account
+      IF p_status = 'confirmed' AND v_old_status != 'confirmed' THEN
+        UPDATE student_accounts
+        SET amount_paid = amount_paid + v_old_amount,
+            balance = total_due - (amount_paid + v_old_amount),
+            last_payment_date = CURDATE(),
+            updated_at = NOW()
+        WHERE account_id = v_account_id;
+      ELSEIF p_status IN ('failed', 'cancelled') AND v_old_status = 'confirmed' THEN
+        UPDATE student_accounts
+        SET amount_paid = amount_paid - v_old_amount,
+            balance = total_due - (amount_paid - v_old_amount),
+            updated_at = NOW()
+        WHERE account_id = v_account_id;
+      END IF;
+    END IF;
+    
+    -- Log the activity
+    INSERT INTO payment_activity_logs (
+      payment_id, action, old_status, new_status, 
+      notes, created_at
+    ) VALUES (
+      p_payment_id, 'status_and_amount_update', v_old_status, p_status,
+      CONCAT('Amount: ', COALESCE(p_amount, v_old_amount), '. ', COALESCE(p_notes, '')), NOW()
+    );
+    
+    SET p_result = 'SUCCESS: Payment updated successfully';
+    COMMIT;
+  END IF;
+END$$
 
 DELIMITER ;
 
@@ -266,7 +539,7 @@ INSERT INTO `accounts` (`account_id`, `password_hash`, `token`, `account_status`
 (13, '$2b$12$WKbua14t/EIfUOhWgG3vA.nEZfZCyC0RONabHe/0ecJFFqMKwbT7O', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEzLCJ1c2VybmFtZSI6ImpvaG5kb2UxMjMiLCJyb2xlIjoic3R1ZGVudCIsImlhdCI6MTc1MDEzMjQzOCwiZXhwIjoxNzUwMjE4ODM4fQ.VtQea8KITM11m9Mj78ndD7x7g-bP0RRtTSV0yYW2WAU', 'active', '2025-06-17 03:53:58', 0, NULL, '2025-06-13 04:50:42', '2025-06-17 03:53:58', NULL, NULL),
 (16, '$2a$10$/F70GT9SOORjVQ.4AAAlVenOR6L/I0RA.Yb58wVYInT2dEShsZUp6', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjE2LCJ1c2VybmFtZSI6ImFkbWluIiwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwMjE2NzUwLCJleHAiOjE3NTAyNDU1NTB9.u3qxvNw84XBsEoEqnkXbm966kQ__Dj2KiU1ot7QWxA8', 'active', '2025-06-18 03:19:10', 1, NULL, '2025-06-17 10:09:13', '2025-06-22 03:58:15', NULL, NULL),
 (39, 'dmin<$2a$10$2Au7F.6TM/C5EjosMG7v3egACwDJhEDrImQs/sMyFuq97CJ.1iGpK\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjM5LCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTAyNDAxNzQsImV4cCI6MTc1MTUzNjE3NH0.EPaECrVKsrJ6f6d40dFZIbWqmekcCIf5yu4-NZCcMTg', 'active', NULL, 1, NULL, '2025-06-18 09:49:34', '2025-06-18 14:06:06', NULL, NULL),
-(40, 'dmin<$2a$10$J9bCwQS275Aroa0McptniOQc0Yf2yRp/zULh2ddn.ngAXzRPCtnv2\0\'\',', '', 'active', '2025-06-18 09:52:24', 0, NULL, '2025-06-18 09:52:24', '2025-06-18 09:56:45', NULL, NULL),
+(40, 'dmin<$2a$10$J9bCwQS275Aroa0McptniOQc0Yf2yRp/zULh2ddn.ngAXzRPCtnv2\0\'\',', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjQwLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTExNjkwOTQsImV4cCI6MTc1MTE5Nzg5NH0.3JaOCSFwsZMoxTgKWbB5JQ1bnGNCPHK30dn833MioKo', 'active', '2025-06-29 05:58:49', 0, NULL, '2025-06-18 09:52:24', '2025-06-29 05:58:49', NULL, NULL),
 (41, 'dmin<$2a$10$NIZ4IjzmxVW/WSCf1UrFy.kJ3lxffgOIxATb8Jorn683t8YlE2BvG\0\'\',', '', 'active', '2025-06-18 09:56:48', 0, NULL, '2025-06-18 09:56:48', '2025-06-18 09:58:02', NULL, NULL),
 (42, 'dmin<$2a$10$SByKB4anMwqN0OBUHEj31eJHwIce1gI4t/qxOK0agugTfQ9FqHxh.\0ers', '', 'active', '2025-06-18 09:58:03', 0, NULL, '2025-06-18 09:58:03', '2025-06-18 10:50:23', NULL, NULL),
 (43, '$2a$12$tdom3.AwPWMPBSe82BnbX.ERE0eUYted7tWJAu40aoWH5rTZIcFje', '', 'active', NULL, 0, NULL, '2025-06-18 10:29:05', '2025-06-18 10:29:05', NULL, NULL),
@@ -283,13 +556,9 @@ INSERT INTO `accounts` (`account_id`, `password_hash`, `token`, `account_status`
 (54, '$2a$12$nvgEXiB2dIvWWXVBTYA8se/zpGcm4Fp9ek2gzIkpkHI8NUl0rH/0S', '', 'active', NULL, 0, NULL, '2025-06-19 10:11:52', '2025-06-19 10:11:52', NULL, NULL),
 (58, 'dmin<$2a$10$RshJWnCmmEjKIlgGK/StOeKkBFzTvr8eCI1Gujlg1i0T0UolFCYJm\0\'\',', '', 'active', '2025-06-19 11:25:33', 0, NULL, '2025-06-19 11:25:33', '2025-06-19 11:33:58', NULL, NULL),
 (59, 'dmin<$2a$10$0sicBwCDgFtRZYh95o/9Pev/.1BhyngjC53j5ilKmO2T93PAaY84O\0\'\',', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjU5LCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTAzMzI4MzksImV4cCI6MTc1MDM2MTYzOX0.0tFvkuz7YVq1KbPPAcqce4gSjIcew8b2PiqrmWoD4YA', 'active', '2025-06-19 11:33:59', 0, NULL, '2025-06-19 11:33:59', '2025-06-19 11:33:59', NULL, NULL),
-(60, '$2a$10$v6PM8/QntleyNJ52rc4z2uoKWWcaUVwXxbbSliE0TCqM7wjpiXk3W', '', 'active', NULL, 0, NULL, '2025-06-19 11:42:16', '2025-06-19 11:42:16', NULL, NULL),
-(61, 'dmin<$2a$10$ESIYMypHmk/M8YFPLV28xOJ6LMNJX3dhjL5ohBHpxcRgrj2M2ygGy\0\'\',', '', 'active', '2025-06-19 14:41:40', 0, NULL, '2025-06-19 14:41:39', '2025-06-19 14:45:06', NULL, NULL),
 (62, 'dmin<$2a$10$O8mug9aKZJ3waggAq7TvG.CE5.puu4s/663YU5b4sSbGdVgeahBpK\0\'\',', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjYyLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTA0Nzc5MjksImV4cCI6MTc1MDUwNjcyOX0.2W8GcA8uVrMqf8FBID9Xc8PeEI-lFaiwLbcACKnM9CI', 'active', '2025-06-21 03:52:10', 0, NULL, '2025-06-21 03:52:09', '2025-06-21 03:52:10', NULL, NULL),
-(63, 'dmin<$2a$10$nhqOmaSRdun6hzB5uphmZ.oGWzgfB3HOYRfmz7f1V0.ssVvrbdDf6\0\'\',', '', 'active', '2025-06-21 07:45:07', 0, NULL, '2025-06-21 07:45:06', '2025-06-21 08:26:51', NULL, NULL),
 (64, 'dmin<$2a$10$Gyn7LDvDYQjhnznMCOS9Oefhk5P.ixK.zezjhZvfD9MZYrFrXcZmm\0\'\',', '', 'active', '2025-06-21 08:28:25', 0, NULL, '2025-06-21 08:28:25', '2025-06-21 08:39:32', NULL, NULL),
 (69, 'dmin<$2a$10$CCwaq5AwG2cT180Aww2sLebKwiFUcJ/JKHCOLPKJR4Hl.s08lGSNO\0\'\',', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjY5LCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTA0OTUxNzQsImV4cCI6MTc1MDUyMzk3NH0.AQKUhIj21k3BtnYyUNlmo2nfuCOng3rMkdwgIqYOH2E', 'active', '2025-06-21 08:39:34', 0, NULL, '2025-06-21 08:39:34', '2025-06-21 08:39:34', NULL, NULL),
-(85, '$2a$10$wowLsMtuyvoQs2M3Z2tVRuhUgdnjS6wcNUQKSsQqbnc0qrXf.wG5K', '', 'active', NULL, 0, NULL, '2025-06-21 09:06:04', '2025-06-21 09:06:04', NULL, NULL),
 (88, '$2a$10$28LwhcNOFfZEwSY5WmpRFeevxhrKYTs3DfntLbuVR8puvjPyrsPzy', '', 'active', NULL, 0, NULL, '2025-06-21 09:10:42', '2025-06-21 09:10:42', NULL, NULL),
 (89, 'dmin<$2a$10$L/ATbjjvaOK/P2XWmxaS2e.zFEUiTUlKw/0qqB6pS/a2/MLvAgs2q\0\'\',', '', 'active', '2025-06-22 03:25:38', 0, NULL, '2025-06-22 03:25:38', '2025-06-22 03:52:13', NULL, NULL),
 (90, 'dmin<$2a$10$qHavUF7ik1QYwUeOIUNiF.vcnzy8kX597IiNtyaQYe8LQV3wQbnda\0\'\',', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjkwLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTA1NjQ3MDksImV4cCI6MTc1MDU5MzUwOX0.0WbWab6j-gNPcU3JqmMBGtucZPs1-vZt8hLaD_eH5ko', 'active', '2025-06-22 03:58:29', 0, NULL, '2025-06-22 03:58:29', '2025-06-22 03:58:29', NULL, NULL),
@@ -320,19 +589,64 @@ INSERT INTO `accounts` (`account_id`, `password_hash`, `token`, `account_status`
 (115, 'dmin<$2a$10$8i0PastNdXAgVx.r835l/.A/p.8Tcu5COVSSDAU3O1pflQCTNnWqy\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjExNSwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY1NDE4LCJleHAiOjE3NTA1OTQyMTh9.UKdni0yHkvLSyq5OuD-_hbABTBih8hXHNbQeDXsanfM', 'active', '2025-06-22 04:10:18', 0, NULL, '2025-06-22 04:10:18', '2025-06-22 04:10:18', NULL, NULL),
 (116, 'dmin<$2a$10$uJfpcAsW6lLrCvQYhTH/zOng.Zf3tOWF7qxK2TrJoleBPedtI8DlC\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjExNiwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY1NDE4LCJleHAiOjE3NTA1OTQyMTh9.4L-4QwoESbf0FfWErSJiMDZw-mJAybkeSdcek9OA3Uc', 'active', '2025-06-22 04:10:18', 0, NULL, '2025-06-22 04:10:18', '2025-06-22 04:10:18', NULL, NULL),
 (117, 'dmin<$2a$10$O6hT8NForS0Op9K4wPfqXeIeqWq1XY8BoFnfstBeay5q95nvR4wGG\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjExNywicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY1NDE4LCJleHAiOjE3NTA1OTQyMTh9.hSM9_84Q_1X0JbdfrIeRREvwu5svV9rXhY-PmEYZ9eE', 'active', '2025-06-22 04:10:18', 0, NULL, '2025-06-22 04:10:18', '2025-06-22 04:10:18', NULL, NULL),
-(118, 'dmin<$2a$10$2LvYTDltQaLxsmbN3bRyA.IadrTe3vXHXsQ4FrqpXpJDJ1IKinzdy\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjExOCwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY1NDQ1LCJleHAiOjE3NTA1OTQyNDV9.B9udnsk-0qvqJVVKtCwjPbGActtxpkxriFIeiShggqA', 'active', '2025-06-22 04:10:45', 0, NULL, '2025-06-22 04:10:45', '2025-06-22 04:10:45', NULL, NULL),
-(119, 'dmin<$2a$10$TDgHl8CKtHR2d72aSaLMNu.FCt4T8BAd5.9QhKDzYIHiifK0SSrvC\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjExOSwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY3NDcwLCJleHAiOjE3NTA1OTYyNzB9.fKa0oC6RcKE6TCkWfyLywTSA8kQbjd3VAysAQ2Ai0RE', 'active', '2025-06-22 04:44:30', 0, NULL, '2025-06-22 04:44:30', '2025-06-22 04:44:30', NULL, NULL),
-(120, 'dmin<$2a$10$yNqC4LpE/qhVdYyHZPIoFeWDKKFPSmntw8UM3maotJtbpsFXu/ybe\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEyMCwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY3NDcxLCJleHAiOjE3NTA1OTYyNzF9.1EBl9_eU0ROCSjXI2vO2MIJFiQlTpoTbpWEPDa7zTJg', 'active', '2025-06-22 04:44:31', 0, NULL, '2025-06-22 04:44:31', '2025-06-22 04:44:31', NULL, NULL),
-(121, 'dmin<$2a$10$fUrUtlMW1Ljr8m.LakR59uZ8xT05Zd9idvMTlWHHvG9MU5nV2P9I6\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEyMSwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY3NTAyLCJleHAiOjE3NTA1OTYzMDJ9.jrXy3_jInFV54DY4Wp95MbRbl7bL2lnJfRb0BWvaVg4', 'active', '2025-06-22 04:45:02', 0, NULL, '2025-06-22 04:45:02', '2025-06-22 04:45:02', NULL, NULL),
-(122, 'dmin<$2a$10$jeLTwcXQXNNoVhHsd2gXIO4v9t6Wse9UcmZVmA9gZsLoQ9K/8N6l2\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEyMiwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY4MTQwLCJleHAiOjE3NTA1OTY5NDB9.2jcBFM6gfBSG9P3VSdpyIisuAaswWGvFXAugYMdBW10', 'active', '2025-06-22 04:55:40', 0, NULL, '2025-06-22 04:55:40', '2025-06-22 04:55:40', NULL, NULL),
-(123, 'dmin<$2a$10$/ac5D3iQaQ6kEok8PKnGmux.r4eSZST5OlmmykNKuGKa5uv9QNa9O\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEyMywicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY4MTQyLCJleHAiOjE3NTA1OTY5NDJ9.e_fX90dy626xxtkT8QhiBjV2WVa1jZJNRM9R-n4B5rI', 'active', '2025-06-22 04:55:42', 0, NULL, '2025-06-22 04:55:42', '2025-06-22 04:55:42', NULL, NULL),
-(124, 'dmin<$2a$10$a.LsZfZ8ntyfOYFQedlefu.sM5M7tsB0f7KC/uwdFCMJ7kU2yP9BW\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEyNCwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY4MjE4LCJleHAiOjE3NTA1OTcwMTh9.Ph2Qf1opYBgza9kvAy0qQJUXDN6uQn-TYaTboHPKACc', 'active', '2025-06-22 04:56:58', 0, NULL, '2025-06-22 04:56:58', '2025-06-22 04:56:58', NULL, NULL),
-(125, 'dmin<$2a$10$0tz69wBNsvEjIex7E0DGreDNXbXO2UlsUqkx.uumdFQPDsLDLy0Sy\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEyNSwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY4MzA4LCJleHAiOjE3NTA1OTcxMDh9.s8lWDYIKQZk_zLTFa_p-WRguSE7GV99e9xyCqvlFdgg', 'active', '2025-06-22 04:58:28', 0, NULL, '2025-06-22 04:58:28', '2025-06-22 04:58:28', NULL, NULL),
-(126, 'dmin<$2a$10$gXtadimLf06yatC6zkR.4.LAUCcwZmCGJCHxtzLgjJHn0cwDZggDy\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEyNiwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY4MzA5LCJleHAiOjE3NTA1OTcxMDl9.Vn1sdeNXlfuhBYjiYegT8Sd3NJQxmFYxGi08z0eilfs', 'active', '2025-06-22 04:58:29', 0, NULL, '2025-06-22 04:58:29', '2025-06-22 04:58:29', NULL, NULL),
-(127, 'dmin<$2a$10$0HmPum5LL27hfk4wy/vXMuGHb/YVu72XpydTTiLNuCNveNUuGb8qG\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEyNywicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY4MzE2LCJleHAiOjE3NTA1OTcxMTZ9.3DFBUHSRbv-r9Amts0Qg_9eWvKrxtIgNdj8TJxjFm_8', 'active', '2025-06-22 04:58:36', 0, NULL, '2025-06-22 04:58:36', '2025-06-22 04:58:36', NULL, NULL),
-(128, 'dmin<$2a$10$9aLliLSESwfuzXxxTy8oD.VM3/G5bcdeAPbIrNXZfuyvOmvfIHnZ.\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEyOCwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY4Mzg5LCJleHAiOjE3NTA1OTcxODl9.VplcDIfKUL3S4SYgDjXH0euIAI-Q8-uaATRMfs_gp7U', 'active', '2025-06-22 04:59:49', 0, NULL, '2025-06-22 04:59:49', '2025-06-22 04:59:49', NULL, NULL),
-(129, 'dmin<$2a$10$2wDLKbz4a4mJkTWicTjiie/DM73WdRl1AmmXpLwoVs30pEAE2MobO\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEyOSwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY4NjA5LCJleHAiOjE3NTA1OTc0MDl9.DwMRfX-ruSUBZ2laVi77L3me5yvcGKAN8ZFNVTjGKlE', 'active', '2025-06-22 05:03:29', 0, NULL, '2025-06-22 05:03:29', '2025-06-22 05:03:29', NULL, NULL),
-(130, 'dmin<$2a$10$0QxGtTN5L5LVXB6PotB5L.eV14LV7c6uYRiK/xTEvfdNxELheAEmC\0ers', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjEzMCwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzUwNTY4OTA0LCJleHAiOjE3NTA1OTc3MDR9.XGcZG1sa_PNX12y8AFU61934KFNbeUlviJCXGyma11A', 'active', '2025-06-22 05:08:24', 0, NULL, '2025-06-22 05:08:24', '2025-06-22 05:08:24', NULL, NULL);
+(141, '$2a$10$XER1Q/kV8Q47OiKImW4z4uv3NhPififneY3o6K70ktmA4TOhF4DSO', '', 'active', NULL, 0, NULL, '2025-06-23 05:59:05', '2025-06-23 05:59:05', NULL, NULL),
+(143, '$2a$10$Fy3w7U1N7UbSw.I8MjY7HOwXy.q07E1wnVyJcdYVg52OhE6X0FFTe', '', 'active', NULL, 0, NULL, '2025-06-23 08:46:49', '2025-06-23 08:46:49', NULL, NULL),
+(150, '$2a$12$sampleHash1234567890abcdef', '', 'active', NULL, 0, NULL, '2025-06-23 08:56:27', '2025-06-23 08:56:27', NULL, NULL),
+(151, '$2a$12$sampleHash1234567890abcdef', '', 'active', NULL, 0, NULL, '2025-06-23 08:56:27', '2025-06-23 08:56:27', NULL, NULL),
+(152, '$2a$12$sampleHash1234567890abcdef', '', 'active', NULL, 0, NULL, '2025-06-23 08:56:27', '2025-06-23 08:56:27', NULL, NULL),
+(153, '$2a$12$sampleHash1234567890abcdef', '', 'active', NULL, 0, NULL, '2025-06-23 08:56:27', '2025-06-23 08:56:27', NULL, NULL),
+(154, '$2a$12$sampleHash1234567890abcdef', '', 'active', NULL, 0, NULL, '2025-06-23 08:56:27', '2025-06-23 08:56:27', NULL, NULL),
+(155, '$2a$12$sampleHash1234567890abcdef', '', 'active', NULL, 0, NULL, '2025-06-23 08:56:27', '2025-06-23 08:56:27', NULL, NULL),
+(156, '$2a$12$sampleHash1234567890abcdef', '', 'active', NULL, 0, NULL, '2025-06-23 08:56:27', '2025-06-23 08:56:27', NULL, NULL),
+(157, '$2a$12$sampleHash1234567890abcdef', '', 'active', NULL, 0, NULL, '2025-06-23 08:56:27', '2025-06-23 08:56:27', NULL, NULL),
+(158, '$2a$12$sampleHash1234567890abcdef', '', 'active', NULL, 0, NULL, '2025-06-23 08:56:27', '2025-06-23 08:56:27', NULL, NULL),
+(159, '$2a$12$sampleHash1234567890abcdef', '', 'active', NULL, 0, NULL, '2025-06-23 08:56:27', '2025-06-23 08:56:27', NULL, NULL),
+(160, '$2a$10$RUFrByDqAORC1/WC4yH5PufaG4c7F31o71f1Lo4wyOacNOtKlItCG', '', 'active', NULL, 0, NULL, '2025-06-23 09:34:01', '2025-06-23 09:34:01', NULL, NULL),
+(161, '$2a$10$d7XbbJkqTnrIEw0YVtzd8eE4Zo.RcYTdrG24Ax0XzOSpaLtnPUCqe', '', 'active', NULL, 0, NULL, '2025-06-23 10:12:53', '2025-06-23 10:12:53', NULL, NULL),
+(162, '$2a$10$VyZ671ZKYaB5o6pySmoYUeEtSFxFJ11HZgRQoZCJpQ0er63HKb.62', '', 'active', NULL, 0, NULL, '2025-06-23 10:24:35', '2025-06-23 10:24:35', NULL, NULL),
+(163, '$2a$10$a667OBtYkFIHRJrzL00PXeETDGfKZ9t9JfLGQSdogtQdTEO.m4T7.', '', 'active', NULL, 0, NULL, '2025-06-23 10:25:52', '2025-06-23 10:25:52', NULL, NULL),
+(164, '$2a$10$EQJzCMMhqs2Avhq6z93JRerbbjRo.V0PqCEQljvXml6rK5IS.dm5G', '', 'active', NULL, 0, NULL, '2025-06-23 10:27:54', '2025-06-23 10:27:54', NULL, NULL),
+(165, '$2a$10$rn638JujOn3V0X76BD7nReyJzfgZKjdzj9OglwnBMxqE5HBGB3A42', '', 'active', NULL, 0, NULL, '2025-06-23 10:35:13', '2025-06-23 10:35:13', NULL, NULL),
+(166, '$2a$10$LSiXJu53ZiUF2tzwF5IZV.fzlIgme8Tnohxgpzw0jYUapcH6iBnxW', '', 'active', NULL, 0, NULL, '2025-06-24 08:40:15', '2025-06-24 08:40:15', NULL, NULL),
+(168, '$2a$10$xa2QkEfXHaCswMZ9Da.jiewnKHIK3i0b384HF4f.dKIJ.eaZ/8JbO', '', 'active', NULL, 0, NULL, '2025-06-25 04:42:04', '2025-06-25 04:42:04', NULL, NULL),
+(169, '$2a$10$PONTBUcHxdt/8aMJQrNS3OqiE63868m.7Rlsskg5Ibt8WOx44AbJ.', '', 'active', NULL, 0, NULL, '2025-06-25 04:58:18', '2025-06-25 04:58:18', NULL, NULL),
+(170, '$2a$10$PJYB6Qq8RKLaPGsw4PcQzeoZ3GzXadI64M8lqzVpakX5kMI..T3fi', '', 'active', NULL, 0, NULL, '2025-06-25 08:26:12', '2025-06-25 08:26:12', NULL, NULL),
+(171, '$2a$10$KT/rlBbvNv.4ZbtGx9lm2u8zOaML4PLHq5TGq2cfsJmZpv33gjRce', '', 'active', NULL, 0, NULL, '2025-06-25 09:06:02', '2025-06-25 09:06:02', NULL, NULL),
+(172, '$2a$10$7RkaMT7d9HlYU9GN.nWO3uJ.aLedONeVzk0mREWnL9ISwlAYVwUN.', '', 'active', NULL, 0, NULL, '2025-06-25 09:24:14', '2025-06-25 09:24:14', NULL, NULL),
+(173, '$2a$10$DbPXQv6XQg3D76RKsXAHN.tobukypdOA2m03v.Ub..3YFGJD37eDe', '', 'active', NULL, 0, NULL, '2025-06-25 09:34:47', '2025-06-25 09:34:47', NULL, NULL),
+(174, '$2a$10$A9asOwQlsbeaaXWIYg0aiu9iCA5S/weq6nOBezF35S5HOXGP1RTQy', '', 'active', NULL, 0, NULL, '2025-06-25 13:51:36', '2025-06-25 13:51:36', NULL, NULL),
+(175, '$2a$10$d/QeJcRLXfrrKVxa9qWwI.lS1kydvkAZLoqBhiM3g2lqTf8H7PZCO', '', 'active', NULL, 0, NULL, '2025-06-27 04:37:36', '2025-06-27 04:37:36', NULL, NULL),
+(176, '$2a$10$qsjtjLfHfZZA1SexrWS9B.U3oA.byyBuZQQ3FX3pKmvcOqZTBA5O.', '', 'active', NULL, 0, NULL, '2025-06-27 04:38:50', '2025-06-27 04:38:50', NULL, NULL),
+(177, '$2a$10$8uUKSO7ctvEY/C4YzSisse2hdcyF468IMzwcUJXOXYkbfKfezVVg2', '', 'active', NULL, 0, NULL, '2025-06-27 04:39:38', '2025-06-27 04:39:38', NULL, NULL),
+(178, '$2a$10$oNpBRDsls33d5QcK82DKguFQk8wMGjoJTK4BXJt15kCokbgvAuoYS', '', 'active', NULL, 0, NULL, '2025-06-27 04:41:23', '2025-06-27 04:41:23', NULL, NULL),
+(179, '$2a$10$YitPHUC5eSuVv2RyJfnZn.yeLVgGlESC..e8Q/jc6e7o6F1xGndmS', '', 'active', NULL, 0, NULL, '2025-06-27 04:42:47', '2025-06-27 04:42:47', NULL, NULL),
+(180, '$2a$10$EaPIbbBVefsRhh8f5i0BW..EI7BqY6SBPEeCvX7CRWVqXPnSEnDwC', '', 'active', NULL, 0, NULL, '2025-06-27 04:43:54', '2025-06-27 04:43:54', NULL, NULL),
+(181, '$2a$10$GQQdgHsh4TjsHab4qnzQrenHv5jEV86LS9Y/2R/AwzGzRXdD47WWu', '', 'active', NULL, 0, NULL, '2025-06-27 04:44:51', '2025-06-27 04:44:51', NULL, NULL),
+(182, '$2a$10$E8ixN.hhman.x4wg5qz5HO.h0i6piWfhwkrHDwF6xTbQPnUIqIdZu', '', 'active', NULL, 0, NULL, '2025-06-27 04:46:11', '2025-06-27 04:46:11', NULL, NULL),
+(183, '$2a$10$TMNM6eojsaIjuaiZ0T6JdeLDmFrdaR3S.PprPL/4dhhRpj2FjrE7W', '', 'active', NULL, 0, NULL, '2025-06-27 04:48:01', '2025-06-27 04:48:01', NULL, NULL),
+(184, '$2a$10$Er4mCvf64eC18QlctcLks.e8ZdjtiJsfkoBLiGw/UzXKnp42nYYpi', '', 'active', NULL, 0, NULL, '2025-06-27 04:49:10', '2025-06-27 04:49:10', NULL, NULL),
+(185, '$2a$10$uGUtYowhYN766DNcqPa7D.oQ3NLjzRsckFMg1bSjGZwkfKtMfxn0.', '', 'active', NULL, 0, NULL, '2025-06-27 04:50:15', '2025-06-27 04:50:15', NULL, NULL),
+(186, '$2a$10$0RupRsxhJLBbROKw3mEYFO3/bi5ylmKoO3Gw52hwgIfh/58Lr5so.', '', 'active', NULL, 0, NULL, '2025-06-27 04:51:35', '2025-06-27 04:51:35', NULL, NULL),
+(187, '$2a$10$mDLhvE0aUm7gLOVGL9yqJeklDFfnxogfffZsdKlY0cSn8G.suk.5G', '', 'active', NULL, 0, NULL, '2025-06-27 04:52:57', '2025-06-27 04:52:57', NULL, NULL),
+(188, '$2a$10$thhBG9.SgEBkyE8YLkadxuia2BJSViIyMAvSzF0m3sHlTlxD7kXVu', '', 'active', NULL, 0, NULL, '2025-06-27 04:53:49', '2025-06-27 04:53:49', NULL, NULL),
+(189, '$2a$10$N8Ekcljwq1cxqDx7IqzzVOHGu1UP5o98uWwyX.CVZwntJZjTwYV3C', '', 'active', NULL, 0, NULL, '2025-06-27 04:54:59', '2025-06-27 04:54:59', NULL, NULL),
+(190, '$2a$10$t.5Eu52NaYqEuv7/HKNl.eEObGW1SIvC/ueBfVCWoWzrZxbM7MYyK', '', 'active', NULL, 0, NULL, '2025-06-27 04:56:05', '2025-06-27 04:56:05', NULL, NULL),
+(191, '$2a$10$rpNcvRiOOJa6aqQw5Q5gbu.kAEWDTUgp0.p51PWwp7/EWOm.VqdYa', '', 'active', NULL, 0, NULL, '2025-06-27 04:57:19', '2025-06-27 04:57:19', NULL, NULL),
+(192, '$2a$10$BJZOTJg9eKjC4xlXZuj1Fe0S2FgwLZpeKgrVsC3Z9KYRjT0qwteQq', '', 'active', NULL, 0, NULL, '2025-06-27 04:58:14', '2025-06-27 04:58:14', NULL, NULL),
+(193, '$2a$10$NAG4XIl6FPafBx/m4Ur8rOVqKSSk575BPETG00K81a9VyNu3DrR3O', '', 'active', NULL, 0, NULL, '2025-06-27 04:59:04', '2025-06-27 04:59:04', NULL, NULL),
+(194, '$2a$10$qFhFZuwNRdYpPOh3pc60eeL/5QVRI1LEM5wG/Id7nV1QvXuKlApcq', '', 'active', NULL, 0, NULL, '2025-06-27 05:01:37', '2025-06-27 05:01:37', NULL, NULL),
+(195, '$2a$10$KVlLnFuaisWAXChEHuidouBjpX70hMO7pIlj5n270KghBqGHxpnKC', '', 'active', NULL, 0, NULL, '2025-06-27 05:02:45', '2025-06-27 05:02:45', NULL, NULL),
+(196, '$2a$10$FoQeJdKczpS08B4RNR/w9u5JIMP0Jp/Mr08bfPy6ptKWHYxXmXKY.', '', 'active', NULL, 0, NULL, '2025-06-27 05:03:48', '2025-06-27 05:03:48', NULL, NULL),
+(197, '$2a$10$Ry60hF0gsAitUluJqN8Ry.y5N5gZ6Tsk2sZtgnkgi0U3uZ/nNxdk2', '', 'active', NULL, 0, NULL, '2025-06-27 05:05:42', '2025-06-27 05:05:42', NULL, NULL),
+(198, '$2a$10$g0Szi4g1X37KJt/rkzOND..tg0yu9Dfw07Lh3utO9UueELsrDQLia', '', 'active', NULL, 0, NULL, '2025-06-27 05:06:36', '2025-06-27 05:06:36', NULL, NULL),
+(199, '$2a$10$dvGujqIX8mMjM4TDYS3B/uDNrRT6VCdvNV1iUQwNRQw61T0NH3Ize', '', 'active', NULL, 0, NULL, '2025-06-27 05:07:45', '2025-06-27 05:07:45', NULL, NULL),
+(200, '$2a$10$FbfC1/Q3ECFs0WgdLRUzPeVQPhFFLyI.sXNrXejO7JdcAl7/8ZhBi', '', 'active', NULL, 0, NULL, '2025-06-27 05:08:37', '2025-06-27 05:08:37', NULL, NULL),
+(201, '$2a$10$RFuhn6eWW544hXNxwOVRDe4EA1CNTo2CERuYz3P6VYd0xgC3OdQIS', '', 'active', NULL, 0, NULL, '2025-06-27 06:45:33', '2025-06-27 06:45:33', NULL, NULL),
+(202, '$2a$10$Qzm5BaFI520qYKZBHzuPvu.THoJqKOLA8I1jwrtBxrrtCtcl/daFe', '', 'active', NULL, 0, NULL, '2025-06-27 07:58:08', '2025-06-27 07:58:08', NULL, NULL),
+(203, '$2a$12$nEleknprrS/BbwEZfgceDuqnMKVwhm8rD9Gv6m9KQBiMivlJGvEHm', '', 'active', NULL, 0, NULL, '2025-06-27 09:43:48', '2025-06-27 09:43:48', NULL, NULL),
+(204, '$2a$12$s5qefVGvUE5YGjjCq5YmnegNEdCMk8AnqDSKfp46NGTqOHfVQtKVy', '', 'active', NULL, 0, NULL, '2025-06-29 05:33:20', '2025-06-29 05:33:20', NULL, NULL),
+(205, '$2a$10$mhn91gp1qSNUuQX0ze4Q2e3yVBahzVkv/C3xl0jUr7d1r7/IIY6wW', '', 'active', NULL, 0, NULL, '2025-06-29 06:18:42', '2025-06-29 06:18:42', NULL, NULL),
+(206, '$2a$10$HOqJY59TfP3aTHR69ySvTunN8qYbTzRslGLcU3AbWItEY9dmxTj6e', '', 'active', NULL, 0, NULL, '2025-06-29 06:21:05', '2025-06-29 06:21:05', NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -375,13 +689,9 @@ INSERT INTO `account_roles` (`account_id`, `role_id`, `assigned_date`, `assigned
 (54, 3, '2025-06-19 10:11:53', NULL, 1, NULL),
 (58, 1, '2025-06-19 11:25:33', NULL, 1, NULL),
 (59, 1, '2025-06-19 11:33:59', NULL, 1, NULL),
-(60, 3, '2025-06-19 11:42:16', NULL, 1, NULL),
-(61, 1, '2025-06-19 14:41:39', NULL, 1, NULL),
 (62, 1, '2025-06-21 03:52:09', NULL, 1, NULL),
-(63, 1, '2025-06-21 07:45:06', NULL, 1, NULL),
 (64, 1, '2025-06-21 08:28:25', NULL, 1, NULL),
 (69, 1, '2025-06-21 08:39:34', NULL, 1, NULL),
-(85, 3, '2025-06-21 09:06:04', NULL, 1, NULL),
 (88, 3, '2025-06-21 09:10:42', NULL, 1, NULL),
 (89, 1, '2025-06-22 03:25:38', NULL, 1, NULL),
 (90, 1, '2025-06-22 03:58:29', NULL, 1, NULL),
@@ -412,19 +722,54 @@ INSERT INTO `account_roles` (`account_id`, `role_id`, `assigned_date`, `assigned
 (115, 1, '2025-06-22 04:10:18', NULL, 1, NULL),
 (116, 1, '2025-06-22 04:10:18', NULL, 1, NULL),
 (117, 1, '2025-06-22 04:10:18', NULL, 1, NULL),
-(118, 1, '2025-06-22 04:10:45', NULL, 1, NULL),
-(119, 1, '2025-06-22 04:44:30', NULL, 1, NULL),
-(120, 1, '2025-06-22 04:44:31', NULL, 1, NULL),
-(121, 1, '2025-06-22 04:45:02', NULL, 1, NULL),
-(122, 1, '2025-06-22 04:55:40', NULL, 1, NULL),
-(123, 1, '2025-06-22 04:55:42', NULL, 1, NULL),
-(124, 1, '2025-06-22 04:56:58', NULL, 1, NULL),
-(125, 1, '2025-06-22 04:58:28', NULL, 1, NULL),
-(126, 1, '2025-06-22 04:58:29', NULL, 1, NULL),
-(127, 1, '2025-06-22 04:58:36', NULL, 1, NULL),
-(128, 1, '2025-06-22 04:59:49', NULL, 1, NULL),
-(129, 1, '2025-06-22 05:03:29', NULL, 1, NULL),
-(130, 1, '2025-06-22 05:08:24', NULL, 1, NULL);
+(141, 3, '2025-06-23 05:59:05', NULL, 1, NULL),
+(143, 3, '2025-06-23 08:46:49', NULL, 1, NULL),
+(160, 3, '2025-06-23 09:34:01', NULL, 1, NULL),
+(161, 3, '2025-06-23 10:12:53', NULL, 1, NULL),
+(162, 3, '2025-06-23 10:24:35', NULL, 1, NULL),
+(163, 3, '2025-06-23 10:25:52', NULL, 1, NULL),
+(164, 3, '2025-06-23 10:27:54', NULL, 1, NULL),
+(165, 3, '2025-06-23 10:35:13', NULL, 1, NULL),
+(166, 3, '2025-06-24 08:40:15', NULL, 1, NULL),
+(168, 3, '2025-06-25 04:42:04', NULL, 1, NULL),
+(169, 3, '2025-06-25 04:58:18', NULL, 1, NULL),
+(170, 3, '2025-06-25 08:26:12', NULL, 1, NULL),
+(171, 3, '2025-06-25 09:06:02', NULL, 1, NULL),
+(172, 3, '2025-06-25 09:24:14', NULL, 1, NULL),
+(173, 3, '2025-06-25 09:34:47', NULL, 1, NULL),
+(174, 3, '2025-06-25 13:51:36', NULL, 1, NULL),
+(175, 3, '2025-06-27 04:37:36', NULL, 1, NULL),
+(176, 3, '2025-06-27 04:38:50', NULL, 1, NULL),
+(177, 3, '2025-06-27 04:39:38', NULL, 1, NULL),
+(178, 3, '2025-06-27 04:41:23', NULL, 1, NULL),
+(179, 3, '2025-06-27 04:42:47', NULL, 1, NULL),
+(180, 3, '2025-06-27 04:43:54', NULL, 1, NULL),
+(181, 3, '2025-06-27 04:44:51', NULL, 1, NULL),
+(182, 3, '2025-06-27 04:46:11', NULL, 1, NULL),
+(183, 3, '2025-06-27 04:48:01', NULL, 1, NULL),
+(184, 3, '2025-06-27 04:49:10', NULL, 1, NULL),
+(185, 3, '2025-06-27 04:50:15', NULL, 1, NULL),
+(186, 3, '2025-06-27 04:51:35', NULL, 1, NULL),
+(187, 3, '2025-06-27 04:52:57', NULL, 1, NULL),
+(188, 3, '2025-06-27 04:53:49', NULL, 1, NULL),
+(189, 3, '2025-06-27 04:54:59', NULL, 1, NULL),
+(190, 3, '2025-06-27 04:56:05', NULL, 1, NULL),
+(191, 3, '2025-06-27 04:57:19', NULL, 1, NULL),
+(192, 3, '2025-06-27 04:58:14', NULL, 1, NULL),
+(193, 3, '2025-06-27 04:59:04', NULL, 1, NULL),
+(194, 3, '2025-06-27 05:01:37', NULL, 1, NULL),
+(195, 3, '2025-06-27 05:02:45', NULL, 1, NULL),
+(196, 3, '2025-06-27 05:03:48', NULL, 1, NULL),
+(197, 3, '2025-06-27 05:05:42', NULL, 1, NULL),
+(198, 3, '2025-06-27 05:06:36', NULL, 1, NULL),
+(199, 3, '2025-06-27 05:07:45', NULL, 1, NULL),
+(200, 3, '2025-06-27 05:08:37', NULL, 1, NULL),
+(201, 3, '2025-06-27 06:45:33', NULL, 1, NULL),
+(202, 3, '2025-06-27 07:58:08', NULL, 1, NULL),
+(203, 3, '2025-06-27 09:43:48', NULL, 1, NULL),
+(204, 3, '2025-06-29 05:33:20', NULL, 1, NULL),
+(205, 3, '2025-06-29 06:18:42', NULL, 1, NULL),
+(206, 3, '2025-06-29 06:21:05', NULL, 1, NULL);
 
 -- --------------------------------------------------------
 
@@ -476,8 +821,7 @@ INSERT INTO `activity_logs` (`id`, `account_id`, `action`, `description`, `ip_ad
 (6, 13, 'profile_updated', 'User profile was updated', NULL, NULL, NULL, '2025-06-16 09:01:43'),
 (7, 52, 'account_created', 'New student account created', NULL, NULL, '{\"role\": \"student\", \"email\": \"albertbgonzaga8con@gmail.com\", \"created_by\": \"system\"}', '2025-06-19 03:17:25'),
 (8, 53, 'account_created', 'New student account created', NULL, NULL, '{\"role\": \"student\", \"email\": \"buenaventurapatrickian@gmail.com\", \"created_by\": \"system\"}', '2025-06-19 07:45:41'),
-(9, 54, 'account_created', 'New student account created', NULL, NULL, '{\"role\": \"student\", \"email\": \"navalesmarkrennier8con@gmail.com\", \"created_by\": \"system\"}', '2025-06-19 10:11:53'),
-(10, 60, 'account_created', 'New student account created', NULL, NULL, '{\"role\": \"student\", \"email\": \"crajeextremeyt@gmail.com\", \"created_by\": \"system\"}', '2025-06-19 11:42:16');
+(9, 54, 'account_created', 'New student account created', NULL, NULL, '{\"role\": \"student\", \"email\": \"navalesmarkrennier8con@gmail.com\", \"created_by\": \"system\"}', '2025-06-19 10:11:53');
 
 -- --------------------------------------------------------
 
@@ -519,7 +863,71 @@ INSERT INTO `audit_log` (`log_id`, `table_name`, `operation_type`, `primary_key_
 (13, 'students', 'INSERT', '8Con-1750327913000_5', NULL, '{\"student_id\": \"8Con-1750327913000_5\", \"person_id\": 54, \"account_id\": 54, \"graduation_status\": \"enrolled\"}', 54, NULL, NULL, NULL, '2025-06-19 10:11:53'),
 (22, 'students', 'INSERT', '8Con-1750333336000_6', NULL, '{\"student_id\": \"8Con-1750333336000_6\", \"person_id\": 60, \"account_id\": 60, \"graduation_status\": \"enrolled\"}', 60, NULL, NULL, NULL, '2025-06-19 11:42:16'),
 (23, 'students', 'INSERT', 'S1750496764000_85', NULL, '{\"student_id\": \"S1750496764000_85\", \"person_id\": 85, \"account_id\": 85, \"graduation_status\": \"enrolled\"}', 85, NULL, NULL, NULL, '2025-06-21 09:06:04'),
-(24, 'students', 'INSERT', 'S1750497042000_88', NULL, '{\"student_id\": \"S1750497042000_88\", \"person_id\": 88, \"account_id\": 88, \"graduation_status\": \"enrolled\"}', 88, NULL, NULL, NULL, '2025-06-21 09:10:42');
+(24, 'students', 'INSERT', 'S1750497042000_88', NULL, '{\"student_id\": \"S1750497042000_88\", \"person_id\": 88, \"account_id\": 88, \"graduation_status\": \"enrolled\"}', 88, NULL, NULL, NULL, '2025-06-21 09:10:42'),
+(25, 'students', 'INSERT', 'S1750573548000_134', NULL, '{\"student_id\": \"S1750573548000_134\", \"person_id\": 134, \"account_id\": 134, \"graduation_status\": \"enrolled\"}', 134, NULL, NULL, NULL, '2025-06-22 06:25:48'),
+(26, 'students', 'INSERT', 'S1750647862000_138', NULL, '{\"student_id\": \"S1750647862000_138\", \"person_id\": 138, \"account_id\": 138, \"graduation_status\": \"enrolled\"}', 138, NULL, NULL, NULL, '2025-06-23 03:04:22'),
+(27, 'students', 'INSERT', 'S1750658345000_141', NULL, '{\"student_id\": \"S1750658345000_141\", \"person_id\": 141, \"account_id\": 141, \"graduation_status\": \"enrolled\"}', 141, NULL, NULL, NULL, '2025-06-23 05:59:05'),
+(28, 'students', 'INSERT', 'S1750668409000_143', NULL, '{\"student_id\": \"S1750668409000_143\", \"person_id\": 143, \"account_id\": 143, \"graduation_status\": \"enrolled\"}', 143, NULL, NULL, NULL, '2025-06-23 08:46:49'),
+(29, 'students', 'INSERT', 'S1750671241000_160', NULL, '{\"student_id\": \"S1750671241000_160\", \"person_id\": 160, \"account_id\": 160, \"graduation_status\": \"enrolled\"}', 160, NULL, NULL, NULL, '2025-06-23 09:34:01'),
+(30, 'students', 'INSERT', 'S1750673573000_161', NULL, '{\"student_id\": \"S1750673573000_161\", \"person_id\": 161, \"account_id\": 161, \"graduation_status\": \"enrolled\"}', 161, NULL, NULL, NULL, '2025-06-23 10:12:53'),
+(31, 'students', 'INSERT', 'S1750674275000_162', NULL, '{\"student_id\": \"S1750674275000_162\", \"person_id\": 162, \"account_id\": 162, \"graduation_status\": \"enrolled\"}', 162, NULL, NULL, NULL, '2025-06-23 10:24:35'),
+(32, 'students', 'INSERT', 'S1750674352000_163', NULL, '{\"student_id\": \"S1750674352000_163\", \"person_id\": 163, \"account_id\": 163, \"graduation_status\": \"enrolled\"}', 163, NULL, NULL, NULL, '2025-06-23 10:25:52'),
+(33, 'students', 'INSERT', 'S1750674474000_164', NULL, '{\"student_id\": \"S1750674474000_164\", \"person_id\": 164, \"account_id\": 164, \"graduation_status\": \"enrolled\"}', 164, NULL, NULL, NULL, '2025-06-23 10:27:54'),
+(34, 'students', 'INSERT', 'S1750674913000_165', NULL, '{\"student_id\": \"S1750674913000_165\", \"person_id\": 165, \"account_id\": 165, \"graduation_status\": \"enrolled\"}', 165, NULL, NULL, NULL, '2025-06-23 10:35:13'),
+(35, 'students', 'INSERT', '8Con1750754415000_16', NULL, '{\"student_id\": \"8Con1750754415000_16\", \"person_id\": 166, \"account_id\": 166, \"graduation_status\": \"enrolled\"}', 166, NULL, NULL, NULL, '2025-06-24 08:40:15'),
+(36, 'students', 'INSERT', '8Con1750754536000_16', NULL, '{\"student_id\": \"8Con1750754536000_16\", \"person_id\": 167, \"account_id\": 167, \"graduation_status\": \"enrolled\"}', 167, NULL, NULL, NULL, '2025-06-24 08:42:16'),
+(37, 'students', 'INSERT', '8Con-2025-000168', NULL, '{\"student_id\": \"8Con-2025-000168\", \"person_id\": 168, \"account_id\": 168, \"graduation_status\": \"enrolled\"}', 168, NULL, NULL, NULL, '2025-06-25 04:42:04'),
+(38, 'students', 'INSERT', '8Con-2025-000169', NULL, '{\"student_id\": \"8Con-2025-000169\", \"person_id\": 169, \"account_id\": 169, \"graduation_status\": \"enrolled\"}', 169, NULL, NULL, NULL, '2025-06-25 04:58:18'),
+(39, 'students', 'INSERT', '8Con-2025-000170', NULL, '{\"student_id\": \"8Con-2025-000170\", \"person_id\": 170, \"account_id\": 170, \"graduation_status\": \"enrolled\"}', 170, NULL, NULL, NULL, '2025-06-25 08:26:12'),
+(40, 'students', 'INSERT', '8Con-2025-000171', NULL, '{\"student_id\": \"8Con-2025-000171\", \"person_id\": 171, \"account_id\": 171, \"graduation_status\": \"enrolled\"}', 171, NULL, NULL, NULL, '2025-06-25 09:06:02'),
+(41, 'students', 'INSERT', '8Con-2025-000172', NULL, '{\"student_id\": \"8Con-2025-000172\", \"person_id\": 172, \"account_id\": 172, \"graduation_status\": \"enrolled\"}', 172, NULL, NULL, NULL, '2025-06-25 09:24:14'),
+(42, 'students', 'INSERT', '8Con-2025-000173', NULL, '{\"student_id\": \"8Con-2025-000173\", \"person_id\": 173, \"account_id\": 173, \"graduation_status\": \"enrolled\"}', 173, NULL, NULL, NULL, '2025-06-25 09:34:47'),
+(43, 'students', 'INSERT', '8Con-2025-000174', NULL, '{\"student_id\": \"8Con-2025-000174\", \"person_id\": 174, \"account_id\": 174, \"graduation_status\": \"enrolled\"}', 174, NULL, NULL, NULL, '2025-06-25 13:51:36'),
+(44, 'payments', 'INSERT', '1', NULL, '{\"payment_id\": 1, \"account_id\": 26, \"payment_amount\": 10000.00, \"payment_status\": \"pending\"}', NULL, NULL, NULL, NULL, '2025-06-26 03:31:47'),
+(45, 'payments', 'INSERT', '2', NULL, '{\"payment_id\": 2, \"account_id\": 25, \"payment_amount\": 10000.00, \"payment_status\": \"pending\"}', NULL, NULL, NULL, NULL, '2025-06-26 03:37:36'),
+(46, 'payments', 'INSERT', '3', NULL, '{\"payment_id\": 3, \"account_id\": 26, \"payment_amount\": 10000.00, \"payment_status\": \"pending\"}', NULL, NULL, NULL, NULL, '2025-06-26 03:42:19'),
+(47, 'payments', 'INSERT', '4', NULL, '{\"payment_id\": 4, \"account_id\": 19, \"payment_amount\": 10000.00, \"payment_status\": \"pending\"}', NULL, NULL, NULL, NULL, '2025-06-26 03:59:26'),
+(48, 'payments', 'INSERT', '5', NULL, '{\"payment_id\": 5, \"account_id\": 26, \"payment_amount\": 5000.00, \"payment_status\": \"pending\"}', NULL, NULL, NULL, NULL, '2025-06-26 04:02:28'),
+(49, 'payments', 'INSERT', '6', NULL, '{\"payment_id\": 6, \"account_id\": 19, \"payment_amount\": 1000.00, \"payment_status\": \"pending\"}', NULL, NULL, NULL, NULL, '2025-06-26 04:08:13'),
+(50, 'payments', 'INSERT', '7', NULL, '{\"payment_id\": 7, \"account_id\": 19, \"payment_amount\": 100.00, \"payment_status\": \"pending\"}', NULL, NULL, NULL, NULL, '2025-06-26 04:11:17'),
+(51, 'payments', 'INSERT', '8', NULL, '{\"payment_id\": 8, \"account_id\": 26, \"payment_amount\": 100.00, \"payment_status\": \"pending\"}', NULL, NULL, NULL, NULL, '2025-06-26 04:51:33'),
+(52, 'payments', 'INSERT', '9', NULL, '{\"payment_id\": 9, \"account_id\": 22, \"payment_amount\": 2000.00, \"payment_status\": \"pending\"}', NULL, NULL, NULL, NULL, '2025-06-26 10:51:19'),
+(53, 'payments', 'INSERT', '10', NULL, '{\"payment_id\": 10, \"account_id\": 21, \"payment_amount\": 1000.00, \"payment_status\": \"pending\"}', NULL, NULL, NULL, NULL, '2025-06-26 10:51:54'),
+(54, 'students', 'INSERT', '8Con-2025-000175', NULL, '{\"student_id\": \"8Con-2025-000175\", \"person_id\": 175, \"account_id\": 175, \"graduation_status\": \"enrolled\"}', 175, NULL, NULL, NULL, '2025-06-27 04:37:36'),
+(55, 'students', 'INSERT', '8Con-2025-000176', NULL, '{\"student_id\": \"8Con-2025-000176\", \"person_id\": 176, \"account_id\": 176, \"graduation_status\": \"enrolled\"}', 176, NULL, NULL, NULL, '2025-06-27 04:38:50'),
+(56, 'students', 'INSERT', '8Con-2025-000177', NULL, '{\"student_id\": \"8Con-2025-000177\", \"person_id\": 177, \"account_id\": 177, \"graduation_status\": \"enrolled\"}', 177, NULL, NULL, NULL, '2025-06-27 04:39:38'),
+(57, 'students', 'INSERT', '8Con-2025-000178', NULL, '{\"student_id\": \"8Con-2025-000178\", \"person_id\": 178, \"account_id\": 178, \"graduation_status\": \"enrolled\"}', 178, NULL, NULL, NULL, '2025-06-27 04:41:23'),
+(58, 'students', 'INSERT', '8Con-2025-000179', NULL, '{\"student_id\": \"8Con-2025-000179\", \"person_id\": 179, \"account_id\": 179, \"graduation_status\": \"enrolled\"}', 179, NULL, NULL, NULL, '2025-06-27 04:42:47'),
+(59, 'students', 'INSERT', '8Con-2025-000180', NULL, '{\"student_id\": \"8Con-2025-000180\", \"person_id\": 180, \"account_id\": 180, \"graduation_status\": \"enrolled\"}', 180, NULL, NULL, NULL, '2025-06-27 04:43:54'),
+(60, 'students', 'INSERT', '8Con-2025-000181', NULL, '{\"student_id\": \"8Con-2025-000181\", \"person_id\": 181, \"account_id\": 181, \"graduation_status\": \"enrolled\"}', 181, NULL, NULL, NULL, '2025-06-27 04:44:51'),
+(61, 'students', 'INSERT', '8Con-2025-000182', NULL, '{\"student_id\": \"8Con-2025-000182\", \"person_id\": 182, \"account_id\": 182, \"graduation_status\": \"enrolled\"}', 182, NULL, NULL, NULL, '2025-06-27 04:46:11'),
+(62, 'students', 'INSERT', '8Con-2025-000183', NULL, '{\"student_id\": \"8Con-2025-000183\", \"person_id\": 183, \"account_id\": 183, \"graduation_status\": \"enrolled\"}', 183, NULL, NULL, NULL, '2025-06-27 04:48:01'),
+(63, 'students', 'INSERT', '8Con-2025-000184', NULL, '{\"student_id\": \"8Con-2025-000184\", \"person_id\": 184, \"account_id\": 184, \"graduation_status\": \"enrolled\"}', 184, NULL, NULL, NULL, '2025-06-27 04:49:10'),
+(64, 'students', 'INSERT', '8Con-2025-000185', NULL, '{\"student_id\": \"8Con-2025-000185\", \"person_id\": 185, \"account_id\": 185, \"graduation_status\": \"enrolled\"}', 185, NULL, NULL, NULL, '2025-06-27 04:50:15'),
+(65, 'students', 'INSERT', '8Con-2025-000186', NULL, '{\"student_id\": \"8Con-2025-000186\", \"person_id\": 186, \"account_id\": 186, \"graduation_status\": \"enrolled\"}', 186, NULL, NULL, NULL, '2025-06-27 04:51:35'),
+(66, 'students', 'INSERT', '8Con-2025-000187', NULL, '{\"student_id\": \"8Con-2025-000187\", \"person_id\": 187, \"account_id\": 187, \"graduation_status\": \"enrolled\"}', 187, NULL, NULL, NULL, '2025-06-27 04:52:57'),
+(67, 'students', 'INSERT', '8Con-2025-000188', NULL, '{\"student_id\": \"8Con-2025-000188\", \"person_id\": 188, \"account_id\": 188, \"graduation_status\": \"enrolled\"}', 188, NULL, NULL, NULL, '2025-06-27 04:53:49'),
+(68, 'students', 'INSERT', '8Con-2025-000189', NULL, '{\"student_id\": \"8Con-2025-000189\", \"person_id\": 189, \"account_id\": 189, \"graduation_status\": \"enrolled\"}', 189, NULL, NULL, NULL, '2025-06-27 04:54:59'),
+(69, 'students', 'INSERT', '8Con-2025-000190', NULL, '{\"student_id\": \"8Con-2025-000190\", \"person_id\": 190, \"account_id\": 190, \"graduation_status\": \"enrolled\"}', 190, NULL, NULL, NULL, '2025-06-27 04:56:05'),
+(70, 'students', 'INSERT', '8Con-2025-000191', NULL, '{\"student_id\": \"8Con-2025-000191\", \"person_id\": 191, \"account_id\": 191, \"graduation_status\": \"enrolled\"}', 191, NULL, NULL, NULL, '2025-06-27 04:57:19'),
+(71, 'students', 'INSERT', '8Con-2025-000192', NULL, '{\"student_id\": \"8Con-2025-000192\", \"person_id\": 192, \"account_id\": 192, \"graduation_status\": \"enrolled\"}', 192, NULL, NULL, NULL, '2025-06-27 04:58:14'),
+(72, 'students', 'INSERT', '8Con-2025-000193', NULL, '{\"student_id\": \"8Con-2025-000193\", \"person_id\": 193, \"account_id\": 193, \"graduation_status\": \"enrolled\"}', 193, NULL, NULL, NULL, '2025-06-27 04:59:04'),
+(73, 'students', 'INSERT', '8Con-2025-000194', NULL, '{\"student_id\": \"8Con-2025-000194\", \"person_id\": 194, \"account_id\": 194, \"graduation_status\": \"enrolled\"}', 194, NULL, NULL, NULL, '2025-06-27 05:01:37'),
+(74, 'students', 'INSERT', '8Con-2025-000195', NULL, '{\"student_id\": \"8Con-2025-000195\", \"person_id\": 195, \"account_id\": 195, \"graduation_status\": \"enrolled\"}', 195, NULL, NULL, NULL, '2025-06-27 05:02:45'),
+(75, 'students', 'INSERT', '8Con-2025-000196', NULL, '{\"student_id\": \"8Con-2025-000196\", \"person_id\": 196, \"account_id\": 196, \"graduation_status\": \"enrolled\"}', 196, NULL, NULL, NULL, '2025-06-27 05:03:48'),
+(76, 'students', 'INSERT', '8Con-2025-000197', NULL, '{\"student_id\": \"8Con-2025-000197\", \"person_id\": 197, \"account_id\": 197, \"graduation_status\": \"enrolled\"}', 197, NULL, NULL, NULL, '2025-06-27 05:05:42'),
+(77, 'students', 'INSERT', '8Con-2025-000198', NULL, '{\"student_id\": \"8Con-2025-000198\", \"person_id\": 198, \"account_id\": 198, \"graduation_status\": \"enrolled\"}', 198, NULL, NULL, NULL, '2025-06-27 05:06:36'),
+(78, 'students', 'INSERT', '8Con-2025-000199', NULL, '{\"student_id\": \"8Con-2025-000199\", \"person_id\": 199, \"account_id\": 199, \"graduation_status\": \"enrolled\"}', 199, NULL, NULL, NULL, '2025-06-27 05:07:45'),
+(79, 'students', 'INSERT', '8Con-2025-000200', NULL, '{\"student_id\": \"8Con-2025-000200\", \"person_id\": 200, \"account_id\": 200, \"graduation_status\": \"enrolled\"}', 200, NULL, NULL, NULL, '2025-06-27 05:08:37'),
+(80, 'students', 'INSERT', '8Con-2025-000201', NULL, '{\"student_id\": \"8Con-2025-000201\", \"person_id\": 201, \"account_id\": 201, \"graduation_status\": \"enrolled\"}', 201, NULL, NULL, NULL, '2025-06-27 06:45:33'),
+(81, 'students', 'INSERT', '8Con-2025-000202', NULL, '{\"student_id\": \"8Con-2025-000202\", \"person_id\": 202, \"account_id\": 202, \"graduation_status\": \"enrolled\"}', 202, NULL, NULL, NULL, '2025-06-27 07:58:08'),
+(82, 'students', 'INSERT', '8Con-2025-000203', NULL, '{\"student_id\": \"8Con-2025-000203\", \"person_id\": 203, \"account_id\": 203, \"graduation_status\": \"enrolled\"}', 203, NULL, NULL, NULL, '2025-06-27 09:43:48'),
+(83, 'payments', 'INSERT', '11', NULL, '{\"payment_id\": 11, \"account_id\": 29, \"payment_amount\": 10000.00, \"payment_status\": \"pending\"}', NULL, NULL, NULL, NULL, '2025-06-27 10:31:34'),
+(84, 'students', 'INSERT', 'S1751175200000_204', NULL, '{\"student_id\": \"S1751175200000_204\", \"person_id\": 204, \"account_id\": 204, \"graduation_status\": \"enrolled\"}', 204, NULL, NULL, NULL, '2025-06-29 05:33:20'),
+(85, 'students', 'INSERT', 'S1751177922000_205', NULL, '{\"student_id\": \"S1751177922000_205\", \"person_id\": 205, \"account_id\": 205, \"graduation_status\": \"enrolled\"}', 205, NULL, NULL, NULL, '2025-06-29 06:18:42'),
+(86, 'students', 'INSERT', 'S1751178065000_206', NULL, '{\"student_id\": \"S1751178065000_206\", \"person_id\": 206, \"account_id\": 206, \"graduation_status\": \"enrolled\"}', 206, NULL, NULL, NULL, '2025-06-29 06:21:05'),
+(87, 'payments', 'INSERT', '12', NULL, '{\"payment_id\": 12, \"account_id\": 58, \"payment_amount\": 3400.00, \"payment_status\": \"pending\"}', NULL, NULL, NULL, NULL, '2025-06-29 06:28:32'),
+(88, 'payments', 'INSERT', '13', NULL, '{\"payment_id\": 13, \"account_id\": 30, \"payment_amount\": 1000.00, \"payment_status\": \"pending\"}', NULL, NULL, NULL, NULL, '2025-06-29 07:02:24');
 
 -- --------------------------------------------------------
 
@@ -545,12 +953,19 @@ CREATE TABLE `competencies` (
 --
 
 INSERT INTO `competencies` (`competency_id`, `competency_type_id`, `competency_code`, `competency_name`, `competency_description`, `learning_objectives`, `assessment_criteria`, `weight`, `prerequisite_competency_id`, `is_active`) VALUES
-(1, 1, 'BASIC001', 'Trading Fundamentals', 'Understanding basic trading concepts and terminology', NULL, NULL, 1.00, NULL, 1),
-(2, 1, 'BASIC002', 'Market Analysis', 'Introduction to technical and fundamental analysis', NULL, NULL, 1.00, NULL, 1),
-(3, 2, 'COMM001', 'Risk Management', 'Understanding and implementing risk management strategies', NULL, NULL, 1.00, NULL, 1),
-(4, 2, 'COMM002', 'Portfolio Construction', 'Building and managing investment portfolios', NULL, NULL, 1.00, NULL, 1),
+(1, 1, 'BASIC001', 'Trading Fundamentals', 'Understanding basic trading concepts and terminology', NULL, NULL, 1.00, NULL, 0),
+(2, 1, 'BASIC002', 'Market Analysis', 'Introduction to technical and fundamental analysis', NULL, NULL, 1.00, NULL, 0),
+(3, 2, 'COMM001', 'Risk Management', 'Understanding and implementing risk management strategies', NULL, NULL, 1.00, NULL, 0),
+(4, 2, 'COMM002', 'Portfolio Construction', 'Building and managing investment portfolios', NULL, NULL, 1.00, NULL, 0),
 (5, 3, 'CORE001', 'Advanced Strategies', 'Complex trading strategies and execution', NULL, NULL, 1.00, NULL, 0),
-(6, 3, 'CORE002', 'Quantitative Analysis', 'Statistical and mathematical analysis methods', NULL, NULL, 1.00, NULL, 0);
+(6, 3, 'CORE002', 'Quantitative Analysis', 'Statistical and mathematical analysis methods', NULL, NULL, 1.00, NULL, 0),
+(11, 1, 'BASIC003', 'Market Psychology', 'Understanding market sentiment and psychology', 'Recognize psychological factors in trading', 'Behavioral analysis and emotional control', 1.00, 1, 0),
+(12, 1, 'COMP001', 'Analysis', 'Analysis', NULL, NULL, 1.00, NULL, 0),
+(13, 2, 'BSC1', 'Analysis', 'Analysis', NULL, NULL, 1.00, NULL, 1),
+(14, 1, 'BAO-01', 'Business', 'adasaa', NULL, NULL, 1.00, NULL, 1),
+(15, 1, 'BSC01', 'Basic Course', 'Introduction to Forex Trading and Market Analysis', NULL, NULL, 1.00, NULL, 1),
+(16, 2, 'COM02', 'Common Course', 'Start Trading and Conducting Market Analysis', NULL, NULL, 1.00, NULL, 1),
+(17, 3, 'COR3', 'Core Course', 'Trading', NULL, NULL, 1.00, NULL, 1);
 
 -- --------------------------------------------------------
 
@@ -615,36 +1030,144 @@ CREATE TABLE `contact_info` (
 --
 
 INSERT INTO `contact_info` (`contact_id`, `person_id`, `student_id`, `contact_type`, `contact_value`, `is_primary`, `is_verified`, `created_at`, `updated_at`) VALUES
-(1, 13, 'S1749790242780_13', 'phone', '09234567890', 1, 0, '2025-06-13 04:50:42', '2025-06-16 09:01:43'),
-(2, 13, 'S1749790242780_13', 'address', '123 Main Street, New York, NY', 1, 0, '2025-06-13 04:50:42', '2025-06-16 09:01:43'),
-(3, 13, 'S1749790242780_13', 'email', 'johndoe@gmail.com', 1, 0, '2025-06-13 04:50:42', '2025-06-16 09:01:43'),
-(10, 16, 'S1750170945832', 'phone', '09704918693', 1, 0, '2025-06-17 14:35:45', '2025-06-17 14:35:45'),
-(11, 16, 'S1750170945832', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-17 14:35:45', '2025-06-17 14:35:45'),
-(12, 16, 'S1750170945832', 'email', 'gonzagaalbertbpdm@gmail.com', 1, 0, '2025-06-17 14:35:45', '2025-06-17 14:35:45'),
-(13, 18, 'S1750171298927', 'phone', '09207866094', 1, 0, '2025-06-17 14:41:38', '2025-06-18 03:18:47'),
-(14, 18, 'S1750171298927', 'address', 'esteban north', 1, 0, '2025-06-17 14:41:38', '2025-06-18 03:18:47'),
-(15, 18, 'S1750171298927', 'email', 'macabatajhamesandrew8con@gmail.com', 1, 0, '2025-06-17 14:41:38', '2025-06-18 03:18:47'),
-(22, 43, 'S1750242545000_43', 'phone', '09562500033', 1, 0, '2025-06-18 10:29:05', '2025-06-18 10:29:05'),
-(23, 43, 'S1750242545000_43', 'address', 'Megalodon, Marilao, Bulacan', 1, 0, '2025-06-18 10:29:05', '2025-06-18 10:29:05'),
-(24, 43, 'S1750242545000_43', 'email', 'starvadermaelstrom@gmail.com', 1, 0, '2025-06-18 10:29:05', '2025-06-18 10:29:05'),
-(25, 52, 'S1750303045000_52', 'phone', '09704918693', 1, 0, '2025-06-19 03:17:25', '2025-06-19 03:17:25'),
-(26, 52, 'S1750303045000_52', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-19 03:17:25', '2025-06-19 03:17:25'),
-(27, 52, 'S1750303045000_52', 'email', 'albertbgonzaga8con@gmail.com', 1, 0, '2025-06-19 03:17:25', '2025-06-19 03:17:25'),
-(28, 53, '8Con1750319141000_53', 'phone', '09776279849', 1, 0, '2025-06-19 07:45:41', '2025-06-19 07:45:41'),
-(29, 53, '8Con1750319141000_53', 'address', 'Blk 12 Lot 31 Urban Deca Homes, Magnolia St., Brgy. Abangan Norte, Marilao, Bulacan', 1, 0, '2025-06-19 07:45:41', '2025-06-19 07:45:41'),
-(30, 53, '8Con1750319141000_53', 'email', 'buenaventurapatrickian@gmail.com', 1, 0, '2025-06-19 07:45:41', '2025-06-19 07:45:41'),
-(31, 54, '8Con-1750327913000_5', 'phone', '0970671784', 1, 0, '2025-06-19 10:11:53', '2025-06-19 10:11:53'),
-(32, 54, '8Con-1750327913000_5', 'address', '173 Zinya St., Sta. Rosa 2, Marilao, Bulacan', 1, 0, '2025-06-19 10:11:53', '2025-06-19 10:11:53'),
-(33, 54, '8Con-1750327913000_5', 'email', 'navalesmarkrennier8con@gmail.com', 1, 0, '2025-06-19 10:11:53', '2025-06-19 10:11:53'),
-(34, 60, '8Con-1750333336000_60', 'phone', '09427184388', 1, 0, '2025-06-19 11:42:16', '2025-06-19 11:42:16'),
-(35, 60, '8Con-1750333336000_60', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-19 11:42:16', '2025-06-19 11:42:16'),
-(36, 60, '8Con-1750333336000_60', 'email', 'crajeextremeyt@gmail.com', 1, 0, '2025-06-19 11:42:16', '2025-06-19 11:42:16'),
-(37, 85, 'S1750496764000_85', 'phone', '09452548712', 1, 0, '2025-06-21 09:06:04', '2025-06-21 09:06:04'),
-(38, 85, 'S1750496764000_85', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-21 09:06:04', '2025-06-21 09:06:04'),
-(39, 85, 'S1750496764000_85', 'email', 'manzanojoshuaphilip8consss@gmail.com', 1, 0, '2025-06-21 09:06:04', '2025-06-21 09:06:04'),
-(40, 88, 'S1750497042000_88', 'phone', '09207866094', 1, 0, '2025-06-21 09:10:42', '2025-06-21 09:10:42'),
-(41, 88, 'S1750497042000_88', 'address', 'esteban north', 1, 0, '2025-06-21 09:10:42', '2025-06-21 09:10:42'),
-(42, 88, 'S1750497042000_88', 'email', 'macabatajhamesandrew8conss@gmail.com', 1, 0, '2025-06-21 09:10:42', '2025-06-21 09:10:42');
+(55, 160, 'S1750671241000_160', 'phone', '09704918692', 1, 0, '2025-06-23 09:34:01', '2025-06-23 09:34:01'),
+(56, 160, 'S1750671241000_160', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-23 09:34:01', '2025-06-23 09:34:01'),
+(57, 160, 'S1750671241000_160', 'email', 'gonzagaalbertpdm@gmail.com', 1, 0, '2025-06-23 09:34:01', '2025-06-23 09:34:01'),
+(58, 161, 'S1750673573000_161', 'phone', '09207866094', 1, 0, '2025-06-23 10:12:54', '2025-06-23 10:12:54'),
+(59, 161, 'S1750673573000_161', 'address', 'Marilao', 1, 0, '2025-06-23 10:12:54', '2025-06-23 10:12:54'),
+(60, 161, 'S1750673573000_161', 'email', 'macabatajhamesandrew8con@gmail.com', 1, 0, '2025-06-23 10:12:54', '2025-06-23 10:12:54'),
+(61, 162, 'S1750674275000_162', 'phone', '09704918693', 1, 0, '2025-06-23 10:24:35', '2025-06-23 10:24:35'),
+(62, 162, 'S1750674275000_162', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-23 10:24:35', '2025-06-23 10:24:35'),
+(63, 162, 'S1750674275000_162', 'email', 'gonzagaalbertb8con@gmail.com', 1, 0, '2025-06-23 10:24:35', '2025-06-23 10:24:35'),
+(64, 163, 'S1750674352000_163', 'phone', '09704918693', 1, 0, '2025-06-23 10:25:52', '2025-06-23 10:25:52'),
+(65, 163, 'S1750674352000_163', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-23 10:25:52', '2025-06-23 10:25:52'),
+(66, 163, 'S1750674352000_163', 'email', 'cj123@gmail.com', 1, 0, '2025-06-23 10:25:52', '2025-06-23 10:25:52'),
+(67, 164, 'S1750674474000_164', 'phone', '09704918693', 1, 0, '2025-06-23 10:27:54', '2025-06-23 10:27:54'),
+(68, 164, 'S1750674474000_164', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-23 10:27:54', '2025-06-23 10:27:54'),
+(69, 164, 'S1750674474000_164', 'email', 'cj1233@gmail.com', 1, 0, '2025-06-23 10:27:54', '2025-06-23 10:27:54'),
+(70, 165, 'S1750674913000_165', 'phone', '09704918693', 1, 0, '2025-06-23 10:35:13', '2025-06-23 10:35:13'),
+(71, 165, 'S1750674913000_165', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-23 10:35:13', '2025-06-23 10:35:13'),
+(72, 165, 'S1750674913000_165', 'email', 'cj1233s@gmail.com', 1, 0, '2025-06-23 10:35:13', '2025-06-23 10:35:13'),
+(73, 166, '8Con1750754415000_16', 'phone', '09704918693', 1, 0, '2025-06-24 08:40:15', '2025-06-24 08:40:15'),
+(74, 166, '8Con1750754415000_16', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-24 08:40:15', '2025-06-24 08:40:15'),
+(75, 166, '8Con1750754415000_16', 'email', 'gonzagaalbertbpdm@gmail.com', 1, 0, '2025-06-24 08:40:15', '2025-06-24 08:40:15'),
+(79, 168, '8Con-2025-000168', 'phone', '09704918693', 1, 0, '2025-06-25 04:42:04', '2025-06-25 04:42:04'),
+(80, 168, '8Con-2025-000168', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-25 04:42:04', '2025-06-25 04:42:04'),
+(81, 168, '8Con-2025-000168', 'email', 'manzanojoshuaphilip8con@gmail.com', 1, 0, '2025-06-25 04:42:04', '2025-06-25 04:42:04'),
+(82, 169, '8Con-2025-000169', 'phone', '09704918693', 1, 0, '2025-06-25 04:58:18', '2025-06-25 04:58:18'),
+(83, 169, '8Con-2025-000169', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-25 04:58:18', '2025-06-25 04:58:18'),
+(84, 169, '8Con-2025-000169', 'email', 'albertgonzaga8con@gmail.com', 1, 0, '2025-06-25 04:58:18', '2025-06-25 04:58:18'),
+(85, 170, '8Con-2025-000170', 'phone', '09704918693', 1, 0, '2025-06-25 08:26:12', '2025-06-25 08:26:12'),
+(86, 170, '8Con-2025-000170', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-25 08:26:12', '2025-06-25 08:26:12'),
+(87, 170, '8Con-2025-000170', 'email', 'marksaa@gmail.com', 1, 0, '2025-06-25 08:26:12', '2025-06-25 08:26:12'),
+(88, 171, '8Con-2025-000171', 'phone', '09704918693', 1, 0, '2025-06-25 09:06:02', '2025-06-25 09:06:02'),
+(89, 171, '8Con-2025-000171', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-25 09:06:02', '2025-06-25 09:06:02'),
+(90, 171, '8Con-2025-000171', 'email', 'emnacenjohnmathew8con@gmail.com', 1, 0, '2025-06-25 09:06:02', '2025-06-25 09:06:02'),
+(91, 172, '8Con-2025-000172', 'phone', '09704918693', 1, 0, '2025-06-25 09:24:14', '2025-06-25 09:24:14'),
+(92, 172, '8Con-2025-000172', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-25 09:24:14', '2025-06-25 09:24:14'),
+(93, 172, '8Con-2025-000172', 'email', 'gonzagaalbertbpdm@gmail.com', 1, 0, '2025-06-25 09:24:14', '2025-06-25 09:24:14'),
+(94, 173, '8Con-2025-000173', 'phone', '09704918693', 1, 0, '2025-06-25 09:34:47', '2025-06-25 09:34:47'),
+(95, 173, '8Con-2025-000173', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-25 09:34:47', '2025-06-25 09:34:47'),
+(96, 173, '8Con-2025-000173', 'email', 'gonzagaalbertbpdm@gmail.com', 1, 0, '2025-06-25 09:34:47', '2025-06-25 09:34:47'),
+(97, 174, '8Con-2025-000174', 'phone', '09704918693', 1, 0, '2025-06-25 13:51:37', '2025-06-25 13:51:37'),
+(98, 174, '8Con-2025-000174', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-25 13:51:37', '2025-06-25 13:51:37'),
+(99, 174, '8Con-2025-000174', 'email', 'emnacenjohnmathewcon@gmail.com', 1, 0, '2025-06-25 13:51:37', '2025-06-25 13:51:37'),
+(100, 175, '8Con-2025-000175', 'phone', '09965678907', 1, 0, '2025-06-27 04:37:36', '2025-06-27 04:37:36'),
+(101, 175, '8Con-2025-000175', 'address', '173 Zinya St., Sta. Rosa 2, Marilao, Bulacan', 1, 0, '2025-06-27 04:37:36', '2025-06-27 04:37:36'),
+(102, 175, '8Con-2025-000175', 'email', 'aaa@gmail.com', 1, 0, '2025-06-27 04:37:36', '2025-06-27 04:37:36'),
+(103, 176, '8Con-2025-000176', 'phone', '09789674567', 1, 0, '2025-06-27 04:38:50', '2025-06-27 04:38:50'),
+(104, 176, '8Con-2025-000176', 'address', 'esteban north', 1, 0, '2025-06-27 04:38:50', '2025-06-27 04:38:50'),
+(105, 176, '8Con-2025-000176', 'email', 'bbb@gmail.com', 1, 0, '2025-06-27 04:38:50', '2025-06-27 04:38:50'),
+(106, 177, '8Con-2025-000177', 'phone', '09427184388', 1, 0, '2025-06-27 04:39:38', '2025-06-27 04:39:38'),
+(107, 177, '8Con-2025-000177', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-27 04:39:38', '2025-06-27 04:39:38'),
+(108, 177, '8Con-2025-000177', 'email', 'crajeextremeyt@gmail.com', 1, 0, '2025-06-27 04:39:38', '2025-06-27 04:39:38'),
+(109, 178, '8Con-2025-000178', 'phone', '09704918693', 1, 0, '2025-06-27 04:41:23', '2025-06-27 04:41:23'),
+(110, 178, '8Con-2025-000178', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-27 04:41:23', '2025-06-27 04:41:23'),
+(111, 178, '8Con-2025-000178', 'email', 'manzanojoshuaphilip@gmail.com', 1, 0, '2025-06-27 04:41:23', '2025-06-27 04:41:23'),
+(112, 179, '8Con-2025-000179', 'phone', '09789806543', 1, 0, '2025-06-27 04:42:47', '2025-06-27 04:42:47'),
+(113, 179, '8Con-2025-000179', 'address', 'Marilao', 1, 0, '2025-06-27 04:42:47', '2025-06-27 04:42:47'),
+(114, 179, '8Con-2025-000179', 'email', 'ryouki@gmail.com', 1, 0, '2025-06-27 04:42:47', '2025-06-27 04:42:47'),
+(115, 180, '8Con-2025-000180', 'phone', '09347656789', 1, 0, '2025-06-27 04:43:54', '2025-06-27 04:43:54'),
+(116, 180, '8Con-2025-000180', 'address', 'Blk 12 Lot 31 Urban Deca Homes, Magnolia St., Brgy. Abangan Norte, Marilao, Bulacan', 1, 0, '2025-06-27 04:43:54', '2025-06-27 04:43:54'),
+(117, 180, '8Con-2025-000180', 'email', 'sevilla@gmail.com', 1, 0, '2025-06-27 04:43:54', '2025-06-27 04:43:54'),
+(118, 181, '8Con-2025-000181', 'phone', '09786542345', 1, 0, '2025-06-27 04:44:51', '2025-06-27 04:44:51'),
+(119, 181, '8Con-2025-000181', 'address', 'Megalodon, Marilao, Bulacan', 1, 0, '2025-06-27 04:44:51', '2025-06-27 04:44:51'),
+(120, 181, '8Con-2025-000181', 'email', 'venus@gmail.com', 1, 0, '2025-06-27 04:44:51', '2025-06-27 04:44:51'),
+(121, 182, '8Con-2025-000182', 'phone', '09907864567', 1, 0, '2025-06-27 04:46:11', '2025-06-27 04:46:11'),
+(122, 182, '8Con-2025-000182', 'address', '173 Zinya St., Sta. Rosa 2, Marilao, Bulacan', 1, 0, '2025-06-27 04:46:11', '2025-06-27 04:46:11'),
+(123, 182, '8Con-2025-000182', 'email', 'bene@gmail.com', 1, 0, '2025-06-27 04:46:11', '2025-06-27 04:46:11'),
+(124, 183, '8Con-2025-000183', 'phone', '09896781234', 1, 0, '2025-06-27 04:48:01', '2025-06-27 04:48:01'),
+(125, 183, '8Con-2025-000183', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-27 04:48:01', '2025-06-27 04:48:01'),
+(126, 183, '8Con-2025-000183', 'email', 'ray@gmail.com', 1, 0, '2025-06-27 04:48:01', '2025-06-27 04:48:01'),
+(127, 184, '8Con-2025-000184', 'phone', '09097864567', 1, 0, '2025-06-27 04:49:10', '2025-06-27 04:49:10'),
+(128, 184, '8Con-2025-000184', 'address', 'esteban north', 1, 0, '2025-06-27 04:49:10', '2025-06-27 04:49:10'),
+(129, 184, '8Con-2025-000184', 'email', 'katen@gmail.com', 1, 0, '2025-06-27 04:49:10', '2025-06-27 04:49:10'),
+(130, 185, '8Con-2025-000185', 'phone', '09346542345', 1, 0, '2025-06-27 04:50:15', '2025-06-27 04:50:15'),
+(131, 185, '8Con-2025-000185', 'address', 'Megalodon, Marilao, Bulacan', 1, 0, '2025-06-27 04:50:15', '2025-06-27 04:50:15'),
+(132, 185, '8Con-2025-000185', 'email', 'sena@gmail.com', 1, 0, '2025-06-27 04:50:15', '2025-06-27 04:50:15'),
+(133, 186, '8Con-2025-000186', 'phone', '09785679876', 1, 0, '2025-06-27 04:51:35', '2025-06-27 04:51:35'),
+(134, 186, '8Con-2025-000186', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-27 04:51:35', '2025-06-27 04:51:35'),
+(135, 186, '8Con-2025-000186', 'email', 'frost@gmail.com', 1, 0, '2025-06-27 04:51:35', '2025-06-27 04:51:35'),
+(136, 187, '8Con-2025-000187', 'phone', '09034546567', 1, 0, '2025-06-27 04:52:57', '2025-06-27 04:52:57'),
+(137, 187, '8Con-2025-000187', 'address', 'Megalodon, Marilao, Bulacan', 1, 0, '2025-06-27 04:52:57', '2025-06-27 04:52:57'),
+(138, 187, '8Con-2025-000187', 'email', 'flash@gmail.com', 1, 0, '2025-06-27 04:52:57', '2025-06-27 04:52:57'),
+(139, 188, '8Con-2025-000188', 'phone', '09907865647', 1, 0, '2025-06-27 04:53:49', '2025-06-27 04:53:49'),
+(140, 188, '8Con-2025-000188', 'address', '173 Zinya St., Sta. Rosa 2, Marilao, Bulacan', 1, 0, '2025-06-27 04:53:49', '2025-06-27 04:53:49'),
+(141, 188, '8Con-2025-000188', 'email', 'vibe@gmail.com', 1, 0, '2025-06-27 04:53:49', '2025-06-27 04:53:49'),
+(142, 189, '8Con-2025-000189', 'phone', '09789877980', 1, 0, '2025-06-27 04:54:59', '2025-06-27 04:54:59'),
+(143, 189, '8Con-2025-000189', 'address', 'esteban north', 1, 0, '2025-06-27 04:54:59', '2025-06-27 04:54:59'),
+(144, 189, '8Con-2025-000189', 'email', 'ame@gmail.com', 1, 0, '2025-06-27 04:54:59', '2025-06-27 04:54:59'),
+(145, 190, '8Con-2025-000190', 'phone', '09789783425', 1, 0, '2025-06-27 04:56:05', '2025-06-27 04:56:05'),
+(146, 190, '8Con-2025-000190', 'address', 'Marilao', 1, 0, '2025-06-27 04:56:05', '2025-06-27 04:56:05'),
+(147, 190, '8Con-2025-000190', 'email', 'killer@gmail.com', 1, 0, '2025-06-27 04:56:05', '2025-06-27 04:56:05'),
+(148, 191, '8Con-2025-000191', 'phone', '09896582345', 1, 0, '2025-06-27 04:57:19', '2025-06-27 04:57:19'),
+(149, 191, '8Con-2025-000191', 'address', 'Blk 12 Lot 31 Urban Deca Homes, Magnolia St., Brgy. Abangan Norte, Marilao, Bulacan', 1, 0, '2025-06-27 04:57:19', '2025-06-27 04:57:19'),
+(150, 191, '8Con-2025-000191', 'email', 'zoom@gmail.com', 1, 0, '2025-06-27 04:57:19', '2025-06-27 04:57:19'),
+(151, 192, '8Con-2025-000192', 'phone', '09984506750', 1, 0, '2025-06-27 04:58:14', '2025-06-27 04:58:14'),
+(152, 192, '8Con-2025-000192', 'address', 'Megalodon, Marilao, Bulacan', 1, 0, '2025-06-27 04:58:14', '2025-06-27 04:58:14'),
+(153, 192, '8Con-2025-000192', 'email', 'dem@gmail.com', 1, 0, '2025-06-27 04:58:14', '2025-06-27 04:58:14'),
+(154, 193, '8Con-2025-000193', 'phone', '09905434390', 1, 0, '2025-06-27 04:59:04', '2025-06-27 04:59:04'),
+(155, 193, '8Con-2025-000193', 'address', 'Megalodon, Marilao, Bulacan', 1, 0, '2025-06-27 04:59:04', '2025-06-27 04:59:04'),
+(156, 193, '8Con-2025-000193', 'email', 'luci@gmail.com', 1, 0, '2025-06-27 04:59:04', '2025-06-27 04:59:04'),
+(157, 194, '8Con-2025-000194', 'phone', '09562501033', 1, 0, '2025-06-27 05:01:37', '2025-06-27 05:01:37'),
+(158, 194, '8Con-2025-000194', 'address', 'esteban north', 1, 0, '2025-06-27 05:01:37', '2025-06-27 05:01:37'),
+(159, 194, '8Con-2025-000194', 'email', 'yeah@gmail.com', 1, 0, '2025-06-27 05:01:37', '2025-06-27 05:01:37'),
+(160, 195, '8Con-2025-000195', 'phone', '09890097069', 1, 0, '2025-06-27 05:02:45', '2025-06-27 05:02:45'),
+(161, 195, '8Con-2025-000195', 'address', 'Megalodon, Marilao, Bulacan', 1, 0, '2025-06-27 05:02:45', '2025-06-27 05:02:45'),
+(162, 195, '8Con-2025-000195', 'email', 'cap@gmail.com', 1, 0, '2025-06-27 05:02:45', '2025-06-27 05:02:45'),
+(163, 196, '8Con-2025-000196', 'phone', '09679097676', 1, 0, '2025-06-27 05:03:48', '2025-06-27 05:03:48'),
+(164, 196, '8Con-2025-000196', 'address', 'esteban north', 1, 0, '2025-06-27 05:03:48', '2025-06-27 05:03:48'),
+(165, 196, '8Con-2025-000196', 'email', 'it@gmail.com', 1, 0, '2025-06-27 05:03:48', '2025-06-27 05:03:48'),
+(166, 197, '8Con-2025-000197', 'phone', '09982223454', 1, 0, '2025-06-27 05:05:42', '2025-06-27 05:05:42'),
+(167, 197, '8Con-2025-000197', 'address', 'Marilao', 1, 0, '2025-06-27 05:05:42', '2025-06-27 05:05:42'),
+(168, 197, '8Con-2025-000197', 'email', 'jj@gmail.com', 1, 0, '2025-06-27 05:05:42', '2025-06-27 05:05:42'),
+(169, 198, '8Con-2025-000198', 'phone', '09677689807', 1, 0, '2025-06-27 05:06:36', '2025-06-27 05:06:36'),
+(170, 198, '8Con-2025-000198', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-27 05:06:36', '2025-06-27 05:06:36'),
+(171, 198, '8Con-2025-000198', 'email', 'bp@gmail.com', 1, 0, '2025-06-27 05:06:36', '2025-06-27 05:06:36'),
+(172, 199, '8Con-2025-000199', 'phone', '09090099809', 1, 0, '2025-06-27 05:07:45', '2025-06-27 05:07:45'),
+(173, 199, '8Con-2025-000199', 'address', 'Megalodon, Marilao, Bulacan', 1, 0, '2025-06-27 05:07:45', '2025-06-27 05:07:45'),
+(174, 199, '8Con-2025-000199', 'email', 'sw@gmail.com', 1, 0, '2025-06-27 05:07:45', '2025-06-27 05:07:45'),
+(175, 200, '8Con-2025-000200', 'phone', '09787687896', 1, 0, '2025-06-27 05:08:37', '2025-06-27 05:08:37'),
+(176, 200, '8Con-2025-000200', 'address', '173 Zinya St., Sta. Rosa 2, Marilao, Bulacan', 1, 0, '2025-06-27 05:08:37', '2025-06-27 05:08:37'),
+(177, 200, '8Con-2025-000200', 'email', 'qs@gmail.com', 1, 0, '2025-06-27 05:08:37', '2025-06-27 05:08:37'),
+(178, 201, '8Con-2025-000201', 'phone', '09092343234', 1, 0, '2025-06-27 06:45:33', '2025-06-27 06:45:33'),
+(179, 201, '8Con-2025-000201', 'address', 'esteban north', 1, 0, '2025-06-27 06:45:33', '2025-06-27 06:45:33'),
+(180, 201, '8Con-2025-000201', 'email', 'hulk12@gmail.com', 1, 0, '2025-06-27 06:45:33', '2025-06-27 06:45:33'),
+(181, 202, '8Con-2025-000202', 'phone', '09704918691', 1, 0, '2025-06-27 07:58:08', '2025-06-27 07:58:08'),
+(182, 202, '8Con-2025-000202', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-27 07:58:08', '2025-06-27 07:58:08'),
+(183, 202, '8Con-2025-000202', 'email', 'gonzalbertbpdm@gmail.com', 1, 0, '2025-06-27 07:58:08', '2025-06-27 07:58:08'),
+(184, 203, '8Con-2025-000203', 'phone', '09092343234', 1, 0, '2025-06-27 09:43:48', '2025-06-27 09:43:48'),
+(185, 203, '8Con-2025-000203', 'address', 'esteban north', 1, 0, '2025-06-27 09:43:48', '2025-06-27 09:43:48'),
+(186, 203, '8Con-2025-000203', 'email', 'hulkakosssasds@gmail.com', 1, 0, '2025-06-27 09:43:48', '2025-06-27 09:43:48'),
+(187, 204, 'S1751175200000_204', 'phone', '09092343234', 1, 0, '2025-06-29 05:33:20', '2025-06-29 05:33:20'),
+(188, 204, 'S1751175200000_204', 'address', 'esteban north', 1, 0, '2025-06-29 05:33:20', '2025-06-29 05:33:20'),
+(189, 204, 'S1751175200000_204', 'email', 'hulsds@gmail.com', 1, 0, '2025-06-29 05:33:20', '2025-06-29 05:33:20'),
+(190, 205, 'S1751177922000_205', 'phone', '09092343234', 1, 0, '2025-06-29 06:18:42', '2025-06-29 06:18:42'),
+(191, 205, 'S1751177922000_205', 'address', 'esteban north', 1, 0, '2025-06-29 06:18:42', '2025-06-29 06:18:42'),
+(192, 205, 'S1751177922000_205', 'email', 'hus@gmail.com', 1, 0, '2025-06-29 06:18:42', '2025-06-29 06:18:42'),
+(193, 206, 'S1751178065000_206', 'phone', '09704918693', 1, 0, '2025-06-29 06:21:05', '2025-06-29 06:21:05'),
+(194, 206, 'S1751178065000_206', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-06-29 06:21:05', '2025-06-29 06:21:05'),
+(195, 206, 'S1751178065000_206', 'email', 'manzano8con@gmail.com', 1, 0, '2025-06-29 06:21:05', '2025-06-29 06:21:05');
 
 -- --------------------------------------------------------
 
@@ -669,8 +1192,9 @@ CREATE TABLE `courses` (
 --
 
 INSERT INTO `courses` (`course_id`, `course_code`, `course_name`, `course_description`, `duration_weeks`, `credits`, `is_active`, `created_at`, `updated_at`) VALUES
-(1, '1', 'Forex Trading Derivatives', 'Teaching basic, common, and core competencies for Forex', 12, 3.0, 1, '2025-06-19 04:53:39', '2025-06-19 08:28:11'),
-(2, '2', 'Business Analytics', 'Analyzing business', 12, 3.0, 1, '2025-06-19 07:21:56', '2025-06-21 07:45:52');
+(3, 'BA001', 'Business Analytics', 'having to start a business', 12, 3.0, 1, '2025-06-23 05:55:01', '2025-06-24 06:24:54'),
+(4, 'FTD01', 'Forex Trading Derivates', 'Trading is the key', 12, 3.0, 1, '2025-06-23 06:38:35', '2025-06-25 08:24:17'),
+(8, 'FX101', 'Marketing', 'Marketing', 12, 3.0, 1, '2025-06-25 07:43:30', '2025-06-25 07:43:30');
 
 -- --------------------------------------------------------
 
@@ -685,6 +1209,17 @@ CREATE TABLE `course_competencies` (
   `order_sequence` int(11) DEFAULT NULL,
   `estimated_hours` decimal(5,2) DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `course_competencies`
+--
+
+INSERT INTO `course_competencies` (`course_id`, `competency_id`, `is_required`, `order_sequence`, `estimated_hours`) VALUES
+(3, 13, 1, 1, NULL),
+(3, 14, 1, 2, 0.00),
+(4, 15, 1, 1, 0.00),
+(4, 16, 1, 2, 0.00),
+(4, 17, 1, 3, 0.00);
 
 -- --------------------------------------------------------
 
@@ -728,7 +1263,11 @@ CREATE TABLE `course_offerings` (
 --
 
 INSERT INTO `course_offerings` (`offering_id`, `course_id`, `batch_identifier`, `start_date`, `end_date`, `max_enrollees`, `current_enrollees`, `status`, `instructor_id`, `location`, `created_at`, `updated_at`) VALUES
-(1, 2, 'BA001-2025-01', '2025-06-21 09:10:42', '2025-09-11 07:21:56', 30, 3, 'active', NULL, 'Online', '2025-06-19 07:21:56', '2025-06-21 09:10:42');
+(2, 3, 'BA001-2025-01', '2025-06-27 08:46:28', '2025-09-15 05:55:01', 30, 30, 'active', NULL, 'Online', '2025-06-23 05:55:01', '2025-06-27 08:46:28'),
+(3, 4, 'FTD01-2025-01', '2025-06-29 06:18:42', '2025-09-15 06:38:35', 30, 12, 'active', NULL, 'Online', '2025-06-23 06:38:35', '2025-06-29 06:18:42'),
+(7, 8, 'FX101-2025-01', '2025-06-27 06:45:33', '2025-09-17 07:43:30', 30, 5, 'active', NULL, 'Online', '2025-06-25 07:43:30', '2025-06-27 06:45:33'),
+(10, 3, 'BA001-2025-02', '2025-06-29 05:59:42', '2025-10-03 08:46:28', 30, 2, 'planned', NULL, 'Online', '2025-06-27 09:43:47', '2025-06-29 05:59:42'),
+(11, 3, 'BA001-2025-03', '2025-06-29 06:21:05', '2025-10-04 09:20:43', 30, 2, 'active', NULL, 'Online', '2025-06-29 05:33:20', '2025-06-29 06:21:05');
 
 -- --------------------------------------------------------
 
@@ -747,6 +1286,17 @@ CREATE TABLE `course_pricing` (
   `minimum_quantity` int(11) DEFAULT 1,
   `is_active` tinyint(1) DEFAULT 1
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `course_pricing`
+--
+
+INSERT INTO `course_pricing` (`pricing_id`, `offering_id`, `pricing_type`, `amount`, `currency`, `effective_date`, `expiry_date`, `minimum_quantity`, `is_active`) VALUES
+(24, 3, '', 65000.00, 'PHP', '2025-06-23 06:38:53', '2025-06-23 06:38:53', 1, 1),
+(25, 2, '', 650000.00, 'PHP', '2025-06-24 06:24:54', '2025-06-24 06:24:54', 1, 1),
+(29, 7, 'regular', 20000.00, 'PHP', '2025-06-25 07:43:30', '2025-06-25 07:43:30', 1, 1),
+(30, 10, 'regular', 0.00, 'PHP', '2025-06-27 09:43:47', '0000-00-00 00:00:00', 1, 1),
+(31, 11, 'regular', 0.00, 'PHP', '2025-06-29 05:33:20', '0000-00-00 00:00:00', 1, 1);
 
 -- --------------------------------------------------------
 
@@ -792,7 +1342,7 @@ CREATE TABLE `document_types` (
 
 INSERT INTO `document_types` (`document_type_id`, `type_name`, `type_description`, `category`, `is_required`, `required_for`, `max_file_size_mb`, `allowed_formats`, `retention_period_years`, `requires_verification`, `is_active`, `created_at`) VALUES
 (1, 'Resume', 'Professional resume or CV', 'academic', 1, 'enrollment', 10, 'pdf,jpg,jpeg,png,doc,docx', 7, 1, 1, '2025-06-12 01:17:29'),
-(2, 'Form 137', 'Official academic transcript', 'academic', 1, 'enrollment', 10, 'pdf,jpg,jpeg,png,doc,docx', 7, 1, 1, '2025-06-12 01:17:29'),
+(2, 'High School or College Diploma', 'Official academic transcript', 'academic', 1, 'enrollment', 10, 'pdf,jpg,jpeg,png,doc,docx', 7, 1, 1, '2025-06-12 01:17:29'),
 (3, 'Valid ID', 'Government-issued identification', 'identification', 1, 'enrollment', 10, 'pdf,jpg,jpeg,png,doc,docx', 7, 1, 1, '2025-06-12 01:17:29'),
 (4, 'Birth Certificate', 'Official birth certificate', 'legal', 0, 'enrollment', 10, 'pdf,jpg,jpeg,png,doc,docx', 7, 1, 1, '2025-06-12 01:17:29'),
 (5, 'Income Certificate', 'Proof of income for scholarship', 'financial', 0, 'scholarship', 10, 'pdf,jpg,jpeg,png,doc,docx', 7, 1, 1, '2025-06-12 01:17:29');
@@ -886,7 +1436,8 @@ INSERT INTO `fee_types` (`fee_type_id`, `fee_name`, `fee_description`, `fee_cate
 (1, 'Graduation Fee', 'Fee for graduation ceremony and certificate', 'graduation', 2500.00, 1, 0, 'all', 1, '2025-06-12 01:17:29'),
 (2, 'Certificate Fee', 'Additional certificate copies', 'certificate', 500.00, 0, 0, 'all', 1, '2025-06-12 01:17:29'),
 (3, 'Materials Fee', 'Training materials and resources', 'materials', 1000.00, 1, 0, 'all', 1, '2025-06-12 01:17:29'),
-(4, 'Technology Fee', 'Platform and software access', 'technology', 800.00, 1, 0, 'all', 1, '2025-06-12 01:17:29');
+(4, 'Technology Fee', 'Platform and software access', 'technology', 800.00, 1, 0, 'all', 1, '2025-06-12 01:17:29'),
+(5, 'Late Payment Fee', 'Fee for overdue payments', 'penalty', 500.00, 0, 0, 'all', 1, '2025-06-23 08:56:27');
 
 -- --------------------------------------------------------
 
@@ -925,14 +1476,35 @@ CREATE TABLE `learning_preferences` (
 --
 
 INSERT INTO `learning_preferences` (`preference_id`, `student_id`, `learning_style`, `delivery_preference`, `device_type`, `internet_speed`, `preferred_schedule`, `study_hours_per_week`, `accessibility_needs`, `created_at`, `updated_at`) VALUES
-(1, 'S1749790242780_13', '', 'hybrid', 'Desktop,Mobile', NULL, 'flexible', NULL, NULL, '2025-06-13 04:50:42', '2025-06-16 08:28:58'),
-(8, 'S1750242545000_43', 'mixed', 'hybrid', NULL, NULL, 'flexible', NULL, NULL, '2025-06-18 10:29:05', '2025-06-18 10:29:05'),
-(9, 'S1750303045000_52', 'mixed', 'hybrid', NULL, NULL, 'flexible', NULL, NULL, '2025-06-19 03:17:25', '2025-06-19 03:17:25'),
-(10, '8Con1750319141000_53', '', 'hybrid', 'Mobile Phone,Tablet,Laptop,Desktop', NULL, 'flexible', NULL, NULL, '2025-06-19 07:45:41', '2025-06-19 07:45:41'),
-(11, '8Con-1750327913000_5', '', 'hybrid', 'Laptop,Tablet,Desktop', NULL, 'flexible', NULL, NULL, '2025-06-19 10:11:53', '2025-06-19 10:11:53'),
-(12, '8Con-1750333336000_6', 'mixed', 'hybrid', NULL, NULL, 'flexible', NULL, NULL, '2025-06-19 11:42:16', '2025-06-19 11:42:16'),
-(13, 'S1750496764000_85', 'mixed', 'hybrid', 'Laptop', NULL, 'flexible', NULL, NULL, '2025-06-21 09:06:04', '2025-06-21 09:06:04'),
-(14, 'S1750497042000_88', '', 'hybrid', 'Mobile Phone', NULL, 'flexible', NULL, NULL, '2025-06-21 09:10:42', '2025-06-21 09:10:42');
+(27, '8Con-2025-000168', '', 'hybrid', 'Mobile Phone,Laptop', NULL, 'flexible', NULL, NULL, '2025-06-25 04:42:04', '2025-06-25 04:42:04'),
+(28, '8Con-2025-000169', '', 'hybrid', 'Mobile Phone,Laptop', NULL, 'flexible', NULL, NULL, '2025-06-25 04:58:18', '2025-06-25 04:58:18'),
+(29, '8Con-2025-000170', '', 'hybrid', 'Laptop,Mobile Phone', NULL, 'flexible', NULL, NULL, '2025-06-25 08:26:12', '2025-06-25 08:26:12'),
+(30, '8Con-2025-000171', '', 'hybrid', 'Mobile Phone,Laptop', NULL, 'flexible', NULL, NULL, '2025-06-25 09:06:02', '2025-06-25 09:06:02'),
+(31, '8Con-2025-000172', '', 'hybrid', 'Mobile Phone,Tablet', NULL, 'flexible', NULL, NULL, '2025-06-25 09:24:14', '2025-06-25 09:24:14'),
+(32, '8Con-2025-000173', '', 'hybrid', 'Mobile Phone', NULL, 'flexible', NULL, NULL, '2025-06-25 09:34:47', '2025-06-25 09:34:47'),
+(33, '8Con-2025-000174', '', 'hybrid', 'Mobile Phone,Tablet,Desktop', NULL, 'flexible', NULL, NULL, '2025-06-25 13:51:37', '2025-06-25 13:51:37'),
+(34, '8Con-2025-000175', '', 'hybrid', 'Mobile Phone,Tablet', NULL, 'flexible', NULL, NULL, '2025-06-27 04:37:36', '2025-06-27 04:37:36'),
+(35, '8Con-2025-000176', '', 'hybrid', 'Tablet', NULL, 'flexible', NULL, NULL, '2025-06-27 04:38:50', '2025-06-27 04:38:50'),
+(36, '8Con-2025-000177', '', 'hybrid', 'Mobile Phone', NULL, 'flexible', NULL, NULL, '2025-06-27 04:39:38', '2025-06-27 04:39:38'),
+(37, '8Con-2025-000178', '', 'hybrid', 'Tablet', NULL, 'flexible', NULL, NULL, '2025-06-27 04:41:23', '2025-06-27 04:41:23'),
+(38, '8Con-2025-000179', '', 'hybrid', 'Tablet', NULL, 'flexible', NULL, NULL, '2025-06-27 04:42:47', '2025-06-27 04:42:47'),
+(39, '8Con-2025-000180', '', 'hybrid', 'Tablet', NULL, 'flexible', NULL, NULL, '2025-06-27 04:43:54', '2025-06-27 04:43:54'),
+(40, '8Con-2025-000181', '', 'hybrid', 'Mobile Phone', NULL, 'flexible', NULL, NULL, '2025-06-27 04:44:51', '2025-06-27 04:44:51'),
+(41, '8Con-2025-000182', '', 'hybrid', 'Tablet', NULL, 'flexible', NULL, NULL, '2025-06-27 04:46:11', '2025-06-27 04:46:11'),
+(42, '8Con-2025-000183', '', 'hybrid', 'Laptop', NULL, 'flexible', NULL, NULL, '2025-06-27 04:48:01', '2025-06-27 04:48:01'),
+(43, '8Con-2025-000184', '', 'hybrid', 'Laptop', NULL, 'flexible', NULL, NULL, '2025-06-27 04:49:10', '2025-06-27 04:49:10'),
+(44, '8Con-2025-000185', '', 'hybrid', 'Mobile Phone,Desktop', NULL, 'flexible', NULL, NULL, '2025-06-27 04:50:15', '2025-06-27 04:50:15'),
+(45, '8Con-2025-000186', '', 'hybrid', 'Tablet', NULL, 'flexible', NULL, NULL, '2025-06-27 04:51:35', '2025-06-27 04:51:35'),
+(48, '8Con-2025-000189', '', 'hybrid', 'Laptop', NULL, 'flexible', NULL, NULL, '2025-06-27 04:54:59', '2025-06-27 04:54:59'),
+(49, '8Con-2025-000190', '', 'hybrid', 'Laptop', NULL, 'flexible', NULL, NULL, '2025-06-27 04:56:05', '2025-06-27 04:56:05'),
+(50, '8Con-2025-000191', '', 'hybrid', 'Laptop', NULL, 'flexible', NULL, NULL, '2025-06-27 04:57:19', '2025-06-27 04:57:19'),
+(54, '8Con-2025-000195', '', 'hybrid', 'Laptop', NULL, 'flexible', NULL, NULL, '2025-06-27 05:02:45', '2025-06-27 05:02:45'),
+(56, '8Con-2025-000197', '', 'hybrid', 'Mobile Phone', NULL, 'flexible', NULL, NULL, '2025-06-27 05:05:42', '2025-06-27 05:05:42'),
+(57, '8Con-2025-000198', '', 'hybrid', 'Tablet', NULL, 'flexible', NULL, NULL, '2025-06-27 05:06:36', '2025-06-27 05:06:36'),
+(58, '8Con-2025-000199', '', 'hybrid', 'Tablet,Laptop', NULL, 'flexible', NULL, NULL, '2025-06-27 05:07:45', '2025-06-27 05:07:45'),
+(59, '8Con-2025-000200', '', 'hybrid', 'Laptop', NULL, 'flexible', NULL, NULL, '2025-06-27 05:08:37', '2025-06-27 05:08:37'),
+(62, '8Con-2025-000203', '', 'hybrid', 'Laptop', NULL, 'flexible', NULL, NULL, '2025-06-27 09:43:48', '2025-06-27 09:43:48'),
+(65, 'S1751178065000_206', '', 'hybrid', 'Laptop,Desktop', NULL, 'flexible', NULL, NULL, '2025-06-29 06:21:05', '2025-06-29 06:21:05');
 
 -- --------------------------------------------------------
 
@@ -999,6 +1571,23 @@ CREATE TABLE `payments` (
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `payments`
+--
+
+INSERT INTO `payments` (`payment_id`, `account_id`, `method_id`, `payment_amount`, `processing_fee`, `reference_number`, `external_transaction_id`, `payment_date`, `due_date`, `payment_status`, `receipt_path`, `receipt_number`, `processed_by`, `verified_by`, `verification_date`, `refund_amount`, `refund_reason`, `notes`, `created_at`, `updated_at`) VALUES
+(3, 26, 2, 10000.00, 0.00, NULL, NULL, '2025-06-26 03:42:19', NULL, 'failed', 'uploads/documents/receipt-1750909339836-149854685-aldub.jpg', NULL, NULL, NULL, '0000-00-00 00:00:00', 0.00, NULL, 'Expired payment deadline: mahal', '2025-06-26 03:42:19', '2025-06-26 10:43:37'),
+(4, 19, 1, 10000.00, 0.00, NULL, NULL, '2025-06-26 03:59:26', NULL, 'failed', 'uploads/documents/receipt-1750910366382-880931729-aldub.jpg', NULL, NULL, NULL, '0000-00-00 00:00:00', 0.00, NULL, 'Duplicate payment: ', '2025-06-26 03:59:26', '2025-06-26 10:17:51'),
+(5, 26, 3, 5000.00, 100.00, NULL, NULL, '2025-06-26 04:02:28', NULL, 'confirmed', 'uploads/documents/receipt-1750910548364-625314275-aldub.jpg', NULL, NULL, NULL, '0000-00-00 00:00:00', 0.00, NULL, NULL, '2025-06-26 04:02:28', '2025-06-26 10:06:02'),
+(6, 19, 3, 1000.00, 20.00, NULL, NULL, '2025-06-26 04:08:13', NULL, 'confirmed', 'uploads/documents/receipt-1750910893295-925822219-aldub.jpg', NULL, NULL, NULL, '0000-00-00 00:00:00', 0.00, NULL, NULL, '2025-06-26 04:08:13', '2025-06-26 04:08:29'),
+(7, 19, 2, 100.00, 0.00, NULL, NULL, '2025-06-26 04:11:17', NULL, 'confirmed', 'uploads/documents/receipt-1750911077617-626265040-aldub.jpg', NULL, NULL, NULL, '0000-00-00 00:00:00', 0.00, NULL, NULL, '2025-06-26 04:11:17', '2025-06-26 10:05:50'),
+(8, 26, 1, 100.00, 0.00, NULL, NULL, '2025-06-26 04:51:33', NULL, 'confirmed', 'uploads/documents/receipt-1750913493758-841556591-aldub.jpg', NULL, NULL, NULL, '0000-00-00 00:00:00', 0.00, NULL, NULL, '2025-06-26 04:51:33', '2025-06-26 10:05:39'),
+(9, 22, 1, 2000.00, 0.00, NULL, NULL, '2025-06-26 10:51:19', NULL, 'failed', 'uploads/documents/receipt-1750935079380-314594996-vector-play-button-icon-design-illustration.jpg', NULL, NULL, NULL, '0000-00-00 00:00:00', 0.00, NULL, 'Duplicate payment: ', '2025-06-26 10:51:19', '2025-06-26 10:52:17'),
+(10, 21, 1, 1000.00, 0.00, NULL, NULL, '2025-06-26 10:51:54', NULL, 'confirmed', 'uploads/documents/receipt-1750935114122-690798520-pdm.png', NULL, NULL, NULL, '0000-00-00 00:00:00', 0.00, NULL, NULL, '2025-06-26 10:51:54', '2025-06-26 10:52:00'),
+(11, 29, 1, 10000.00, 0.00, NULL, NULL, '2025-06-27 10:31:34', NULL, 'pending', 'uploads/documents/receipt-1751020294792-739327709-IMG_7233.png', NULL, NULL, NULL, '0000-00-00 00:00:00', 0.00, NULL, NULL, '2025-06-27 10:31:34', '2025-06-27 10:31:34'),
+(12, 58, 1, 3400.00, 0.00, NULL, NULL, '2025-06-29 06:28:32', NULL, 'pending', 'uploads/documents/receipt-1751178512385-624595542-aldub.jpg', NULL, NULL, NULL, '0000-00-00 00:00:00', 0.00, NULL, NULL, '2025-06-29 06:28:32', '2025-06-29 06:28:32'),
+(13, 30, 1, 1000.00, 0.00, NULL, NULL, '2025-06-29 07:02:24', NULL, 'pending', 'uploads/documents/receipt-1751180544310-849035058-vector-play-button-icon-design-illustration.jpg', NULL, NULL, NULL, '0000-00-00 00:00:00', 0.00, NULL, NULL, '2025-06-29 07:02:24', '2025-06-29 07:02:24');
 
 --
 -- Triggers `payments`
@@ -1073,7 +1662,9 @@ CREATE TABLE `payment_schemes` (
 INSERT INTO `payment_schemes` (`scheme_id`, `scheme_name`, `scheme_description`, `installment_count`, `discount_percentage`, `processing_fee`, `late_fee_percentage`, `grace_period_days`, `is_active`, `created_at`) VALUES
 (1, 'Full Payment', 'Pay full amount upfront with discount', 1, 10.00, 0.00, 5.00, 7, 1, '2025-06-12 01:17:29'),
 (2, '4 Gives', 'Pay in 4 equal installments', 4, 0.00, 0.00, 5.00, 7, 1, '2025-06-12 01:17:29'),
-(3, 'Special Payment', 'Customized payment arrangement', 1, 5.00, 0.00, 5.00, 7, 1, '2025-06-12 01:17:29');
+(3, 'Special Payment', 'Customized payment arrangement', 1, 5.00, 0.00, 5.00, 7, 1, '2025-06-12 01:17:29'),
+(4, '6 Gives', 'Pay in 6 equal installments', 6, 0.00, 100.00, 5.00, 7, 1, '2025-06-23 08:56:27'),
+(5, 'Early Bird Special', 'Full payment with maximum discount', 1, 15.00, 0.00, 5.00, 14, 1, '2025-06-23 08:56:27');
 
 -- --------------------------------------------------------
 
@@ -1088,7 +1679,7 @@ CREATE TABLE `persons` (
   `last_name` varchar(50) NOT NULL,
   `birth_date` date NOT NULL,
   `birth_place` varchar(100) NOT NULL,
-  `gender` enum('Male','Female','Other') NOT NULL,
+  `gender` enum('Male','Female') NOT NULL,
   `email` varchar(100) NOT NULL,
   `education` varchar(100) NOT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
@@ -1100,28 +1691,53 @@ CREATE TABLE `persons` (
 --
 
 INSERT INTO `persons` (`person_id`, `first_name`, `middle_name`, `last_name`, `birth_date`, `birth_place`, `gender`, `email`, `education`, `created_at`, `updated_at`) VALUES
-(13, 'John', 'Michael Doja', 'Catering', '1990-05-04', 'Marilao Bulacan', 'Male', 'johndoe@gmail.com', 'Bachelor\'s Degree', '2025-06-13 04:50:42', '2025-06-16 09:01:43'),
-(16, 'Albert', 'Borromeo', 'Gonzaga', '2004-08-20', 'Masbate', 'Male', 'gonzagaalbertbpdm@gmail.com', 'College', '2025-06-17 14:35:45', '2025-06-17 14:35:45'),
-(18, 'Jhames Andrew', 'Reynoso', 'Macabata', '2002-06-25', 'Marilao', 'Male', 'macabatajhamesandrew8con@gmail.com', 'College', '2025-06-17 14:41:38', '2025-06-18 03:18:47'),
-(39, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-18 09:49:34', '2025-06-18 09:49:34'),
-(40, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-18 09:52:24', '2025-06-18 09:52:24'),
-(41, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-18 09:56:48', '2025-06-18 09:56:48'),
-(42, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-18 09:58:03', '2025-06-18 09:58:03'),
-(43, 'Vincent Benjamin', NULL, 'Bautista', '2004-05-07', 'Meycauayan, Bulacan', 'Male', 'starvadermaelstrom@gmail.com', 'College', '2025-06-18 10:29:05', '2025-06-18 10:29:05'),
-(44, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-18 10:50:27', '2025-06-18 10:50:27'),
-(45, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-18 13:59:03', '2025-06-18 13:59:03'),
-(46, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-18 13:59:05', '2025-06-18 13:59:05'),
-(47, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-18 13:59:20', '2025-06-18 13:59:20'),
-(48, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-18 14:04:12', '2025-06-18 14:04:12'),
-(49, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-18 14:08:03', '2025-06-18 14:08:03'),
-(50, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-18 14:08:19', '2025-06-18 14:08:19'),
-(51, 'System', NULL, 'Administrator', '0000-00-00', 'System', 'Other', 'admin@gmail.com', 'System Administrator', '2025-06-19 02:47:00', '2025-06-19 02:47:00'),
-(52, 'Albert', 'Borromeo', 'Gonzaga', '2004-08-20', 'Masbate', 'Male', 'albertbgonzaga8con@gmail.com', 'College', '2025-06-19 03:17:25', '2025-06-19 03:17:25'),
-(53, 'Patrick Ian', 'Vargas', 'Buenaventura', '2000-02-13', 'Caloocan', 'Male', 'buenaventurapatrickian@gmail.com', 'College', '2025-06-19 07:45:41', '2025-06-19 07:45:41'),
-(54, 'Mark Rennier', 'Sucandito', 'Navales', '2004-05-02', 'Valenzuela', 'Male', 'navalesmarkrennier8con@gmail.com', 'College', '2025-06-19 10:11:52', '2025-06-19 10:11:52'),
-(60, 'CJ', 'Pinalba', 'Napoles', '2025-06-12', 'Masbate', 'Male', 'crajeextremeyt@gmail.com', 'College', '2025-06-19 11:42:16', '2025-06-19 11:42:16'),
-(85, 'Jajajass', 'sfsdfsefsef', 'sefsf', '2004-08-23', 'Meycauayan, Bulacan', 'Male', 'manzanojoshuaphilip8consss@gmail.com', 'College', '2025-06-21 09:06:04', '2025-06-21 09:06:04'),
-(88, 'Jhames Andrew', 'Reynoso', 'Macabata', '2025-06-13', 'Caloocan', 'Male', 'macabatajhamesandrew8conss@gmail.com', 'College', '2025-06-21 09:10:42', '2025-06-21 09:10:42');
+(40, 'System', NULL, 'Administrator', '0000-00-00', 'System', '', 'admin@gmail.com', 'System Administrator', '2025-06-18 09:52:24', '2025-06-18 09:52:24'),
+(160, 'Jomari', 'albert', 'Encepto', '2002-04-23', 'Meycauayan, Bulacan', 'Male', 'gonzagaalbertpdm@gmail.com', 'College', '2025-06-23 09:34:01', '2025-06-23 09:34:01'),
+(161, 'Jhames Andrew', 'Reynoso', 'Macabata', '2002-06-25', 'Meycauayan, Bulacan', 'Male', 'macabatajhamesandrew8con@gmail.com', 'College', '2025-06-23 10:12:53', '2025-06-23 10:12:53'),
+(162, 'Alberto', 'Borromeo', 'Gonzaga', '2003-05-20', 'Meycauayan, Bulacan', 'Male', 'gonzagaalbertb8con@gmail.com', 'College', '2025-06-23 10:24:35', '2025-06-23 10:24:35'),
+(163, 'CJ', 'Borromeo', 'Kanino', '2000-03-12', 'Meycauayan, Bulacan', 'Male', 'cj123@gmail.com', 'College', '2025-06-23 10:25:52', '2025-06-23 10:25:52'),
+(164, 'CJ', 'Borromeo', 'Kanino', '2000-03-12', 'Meycauayan, Bulacan', 'Male', 'cj1233@gmail.com', 'College', '2025-06-23 10:27:54', '2025-06-23 10:27:54'),
+(165, 'CJs', 'Borromeos', 'Kaninos', '2000-03-12', 'Meycauayan, Bulacan', 'Female', 'cj1233s@gmail.com', 'College', '2025-06-23 10:35:13', '2025-06-23 10:35:13'),
+(166, 'Albert', 'Borromeo', 'Gonzaga', '2005-12-05', 'marilao', 'Male', 'gonzagaalbertbpdm@gmail.com', 'College', '2025-06-24 08:40:15', '2025-06-24 08:40:15'),
+(168, 'Joshua', 'Pinal', 'Manzano', '2003-08-30', 'marilao', 'Male', 'manzanojoshuaphilip8con@gmail.com', 'College', '2025-06-25 04:42:04', '2025-06-25 04:42:04'),
+(169, 'Student', 'Student', 'Ako', '2004-08-20', 'marilao', 'Male', 'albertgonzaga8con@gmail.com', 'College', '2025-06-25 04:58:18', '2025-06-25 04:58:18'),
+(170, 'Jomari', 'Pinal', 'Encepto', '2003-08-23', 'marilao', 'Male', 'marksaa@gmail.com', 'College', '2025-06-25 08:26:12', '2025-06-25 08:26:12'),
+(171, 'John Mathew', 'Pinal', 'Emnacen', '2003-04-20', 'marilao', 'Male', 'emnacenjohnmathew8con@gmail.com', 'College', '2025-06-25 09:06:02', '2025-06-25 09:06:02'),
+(172, 'Albert', 'Borromeo', 'Gonzaga', '2005-12-05', 'marilao', 'Male', 'gonzagaalbertbpdm@gmail.com', 'College', '2025-06-25 09:24:14', '2025-06-25 09:24:14'),
+(173, 'Albert', 'Borromeo', 'Gonzaga', '2005-12-05', 'marilao', 'Male', 'gonzagaalbertbpdm@gmail.com', 'College', '2025-06-25 09:34:47', '2025-06-25 09:34:47'),
+(174, 'John Mathew', 'Pinal', 'Emnacen', '2002-08-02', 'marilao', 'Male', 'emnacenjohnmathewcon@gmail.com', 'College', '2025-06-25 13:51:36', '2025-06-25 13:51:36'),
+(175, 'Paolo', 'Esp', 'Moreno', '2004-04-23', 'Meycauayan, Bulacan', 'Male', 'aaa@gmail.com', 'College', '2025-06-27 04:37:36', '2025-06-27 04:37:36'),
+(176, 'Grace', 'esp', 'Maguate', '2004-05-06', 'Meycauayan, Bulacan', 'Male', 'bbb@gmail.com', 'College', '2025-06-27 04:38:50', '2025-06-27 04:38:50'),
+(177, 'cj', 'e', 'Napoles', '2009-04-23', 'Caloocan', 'Male', 'crajeextremeyt@gmail.com', 'College', '2025-06-27 04:39:38', '2025-06-27 04:39:38'),
+(178, 'Zj', 'dd', 'Manzano', '2008-04-23', 'Masbate', 'Female', 'manzanojoshuaphilip@gmail.com', 'College', '2025-06-27 04:41:23', '2025-06-27 04:41:23'),
+(179, 'Jhames', 'f', 'Ryouki', '2005-04-05', 'Valenzuela', 'Male', 'ryouki@gmail.com', 'College', '2025-06-27 04:42:47', '2025-06-27 04:42:47'),
+(180, 'Andrew', 'E', 'Sevilla', '2004-05-04', 'Masbate', 'Male', 'sevilla@gmail.com', 'None', '2025-06-27 04:43:54', '2025-06-27 04:43:54'),
+(181, 'Jerome', 'w', 'Venus', '2007-05-06', 'Meycauayan, Bulacan', 'Male', 'venus@gmail.com', 'College', '2025-06-27 04:44:51', '2025-06-27 04:44:51'),
+(182, 'Louis', 'Ri', 'Benedicto', '2008-02-12', 'Valenzuela', 'Female', 'bene@gmail.com', 'College', '2025-06-27 04:46:11', '2025-06-27 04:46:11'),
+(183, 'Ray', 'sy', 'Reyes', '2009-04-03', 'Meycauayan, Bulacan', 'Female', 'ray@gmail.com', 'None', '2025-06-27 04:48:01', '2025-06-27 04:48:01'),
+(184, 'Shinju', 'Karamatsu', 'Katen', '2009-03-23', 'Valenzuela', 'Female', 'katen@gmail.com', 'College', '2025-06-27 04:49:10', '2025-06-27 04:49:10'),
+(185, 'Arata', 'Ty', 'Sena', '2009-05-31', 'Masbate', 'Male', 'sena@gmail.com', 'College', '2025-06-27 04:50:15', '2025-06-27 04:50:15'),
+(186, 'Jane', 'Reynoso', 'Frost', '2003-05-03', 'Valenzuela', 'Female', 'frost@gmail.com', 'College', '2025-06-27 04:51:35', '2025-06-27 04:51:35'),
+(187, 'Barry', 'Fl', 'Allen', '2003-04-23', 'Valenzuela', 'Male', 'flash@gmail.com', 'College', '2025-06-27 04:52:57', '2025-06-27 04:52:57'),
+(188, 'Cisco', 'De', 'Francisco', '2007-05-31', 'marilao', 'Male', 'vibe@gmail.com', 'College', '2025-06-27 04:53:49', '2025-06-27 04:53:49'),
+(189, 'Ame', 'No', 'Habakiri', '2004-03-12', 'Caloocan', 'Female', 'ame@gmail.com', 'College', '2025-06-27 04:54:59', '2025-06-27 04:54:59'),
+(190, 'Caitlin', 'Frost', 'Snow', '2009-05-04', 'Valenzuela', 'Female', 'killer@gmail.com', 'None', '2025-06-27 04:56:05', '2025-06-27 04:56:05'),
+(191, 'Hunter', 'Zoom', 'Solomon', '2001-02-25', 'Caloocan', 'Male', 'zoom@gmail.com', 'None', '2025-06-27 04:57:19', '2025-06-27 04:57:19'),
+(192, 'Dean', 'De', 'Winchester', '2001-05-10', 'Valenzuela', 'Male', 'dem@gmail.com', 'None', '2025-06-27 04:58:14', '2025-06-27 04:58:14'),
+(193, 'Sam', 'De', 'Winchester', '2008-05-04', 'Valenzuela', 'Male', 'luci@gmail.com', 'College', '2025-06-27 04:59:04', '2025-06-27 04:59:04'),
+(194, 'Tony', 'Se', 'Stark', '2009-03-23', 'Caloocan', 'Male', 'yeah@gmail.com', 'None', '2025-06-27 05:01:37', '2025-06-27 05:01:37'),
+(195, 'Steve', 'Cap', 'Rogers', '2009-03-31', 'Masbate', 'Male', 'cap@gmail.com', 'College', '2025-06-27 05:02:45', '2025-06-27 05:02:45'),
+(196, 'Penny', 'Sa', 'Wise', '2001-07-05', 'Valenzuela', 'Female', 'it@gmail.com', 'College', '2025-06-27 05:03:48', '2025-06-27 05:03:48'),
+(197, 'Jay', 'Ji', 'Jay', '2005-05-29', 'Masbate', 'Male', 'jj@gmail.com', 'College', '2025-06-27 05:05:42', '2025-06-27 05:05:42'),
+(198, 'Chadwick', 'Chala', 'Boseman', '2002-07-04', 'Masbate', 'Male', 'bp@gmail.com', 'College', '2025-06-27 05:06:36', '2025-06-27 05:06:36'),
+(199, 'Wanda', 'Sw', 'Maximoff', '2009-04-23', 'marilao', 'Female', 'sw@gmail.com', 'College', '2025-06-27 05:07:45', '2025-06-27 05:07:45'),
+(200, 'Pyetro', 'Reynoso', 'Maximoff', '2001-03-12', 'Masbate', 'Male', 'qs@gmail.com', 'None', '2025-06-27 05:08:37', '2025-06-27 05:08:37'),
+(201, 'Bruce', 'Hulk', 'Banner', '2003-04-23', 'manila', 'Male', 'hulk12@gmail.com', 'College', '2025-06-27 06:45:33', '2025-06-27 06:45:33'),
+(202, 'Alberta', 'Borromeoa', 'Gonzagaa', '2000-01-01', 'lias', 'Male', 'gonzalbertbpdm@gmail.com', 'College', '2025-06-27 07:58:08', '2025-06-27 07:58:08'),
+(203, 'Brucsax', 'Hulksax', 'Bannersax', '2000-01-01', 'marilao', 'Female', 'hulkakosssasds@gmail.com', 'College', '2025-06-27 09:43:48', '2025-06-27 09:43:48'),
+(204, 'Brucsax', 'Hulksax', 'Bannersax', '2000-04-20', 'marilao', 'Male', 'hulsds@gmail.com', 'College', '2025-06-29 05:33:20', '2025-06-29 05:33:20'),
+(205, 'Brucsw', 'Hulksax', 'Ba', '2000-04-20', 'marilao', 'Female', 'hus@gmail.com', 'College', '2025-06-29 06:18:42', '2025-06-29 06:18:42'),
+(206, 'Joshua', 'Pinal', 'Manzano', '2000-04-20', 'marilao', 'Female', 'manzano8con@gmail.com', 'College', '2025-06-29 06:21:05', '2025-06-29 06:21:05');
 
 --
 -- Triggers `persons`
@@ -1292,7 +1908,8 @@ INSERT INTO `roles` (`role_id`, `role_name`, `role_description`, `permissions`, 
 (1, 'admin', 'System Administrator', '{\"all\": true}', 1, '2025-06-12 01:17:28'),
 (2, 'staff', 'Staff Member', '{\"students\": \"read_write\", \"courses\": \"read\", \"payments\": \"read_write\"}', 1, '2025-06-12 01:17:28'),
 (3, 'student', 'Student', '{\"profile\": \"read_write\", \"courses\": \"read\", \"progress\": \"read\"}', 1, '2025-06-12 01:17:28'),
-(4, 'instructor', 'Course Instructor', '{\"students\": \"read\", \"courses\": \"read_write\", \"progress\": \"read_write\"}', 1, '2025-06-12 01:17:28');
+(4, 'instructor', 'Course Instructor', '{\"students\": \"read\", \"courses\": \"read_write\", \"progress\": \"read_write\"}', 1, '2025-06-12 01:17:28'),
+(5, 'mentor', 'Student Mentor', '{\"students\": \"read\", \"progress\": \"read_write\", \"courses\": \"read\"}', 1, '2025-06-23 08:56:27');
 
 -- --------------------------------------------------------
 
@@ -1364,7 +1981,8 @@ INSERT INTO `sponsor_types` (`sponsor_type_id`, `type_name`, `type_description`,
 (1, 'Individual', 'Individual person sponsoring a student', 100.00, NULL, 1, 'quarterly', 1, '2025-06-12 01:17:29'),
 (2, 'Corporate', 'Company or corporation sponsorship', 100.00, NULL, 1, 'quarterly', 1, '2025-06-12 01:17:29'),
 (3, 'Cooperative', 'Cooperative organization sponsorship', 50.00, NULL, 1, 'quarterly', 1, '2025-06-12 01:17:29'),
-(4, 'OJT Program', 'On-the-job training sponsorship', 75.00, NULL, 1, 'quarterly', 1, '2025-06-12 01:17:29');
+(4, 'OJT Program', 'On-the-job training sponsorship', 75.00, NULL, 1, 'quarterly', 1, '2025-06-12 01:17:29'),
+(5, 'Government Agency', 'Government-sponsored scholarships', 100.00, 50, 1, 'quarterly', 1, '2025-06-23 08:56:27');
 
 -- --------------------------------------------------------
 
@@ -1437,16 +2055,35 @@ CREATE TABLE `students` (
 --
 
 INSERT INTO `students` (`student_id`, `person_id`, `account_id`, `registration_date`, `graduation_status`, `graduation_date`, `gpa`, `academic_standing`, `notes`) VALUES
-('8Con-1750327913000_5', 54, 54, '2025-06-19', 'enrolled', NULL, NULL, 'good', NULL),
-('8Con-1750333336000_6', 60, 60, '2025-06-19', 'enrolled', NULL, NULL, 'good', NULL),
-('8Con1750319141000_53', 53, 53, '2025-06-19', 'enrolled', NULL, NULL, 'good', NULL),
-('S1749790242780_13', 13, 13, '2025-06-13', 'enrolled', NULL, NULL, 'good', NULL),
-('S1750170945832', 16, NULL, '2025-06-17', 'enrolled', NULL, NULL, 'good', NULL),
-('S1750171298927', 18, NULL, '2025-06-17', 'enrolled', NULL, NULL, 'good', NULL),
-('S1750242545000_43', 43, 43, '2025-06-18', 'enrolled', NULL, NULL, 'good', NULL),
-('S1750303045000_52', 52, 52, '2025-06-19', 'enrolled', NULL, NULL, 'good', NULL),
-('S1750496764000_85', 85, 85, '2025-06-21', 'enrolled', NULL, NULL, 'good', NULL),
-('S1750497042000_88', 88, 88, '2025-06-21', 'enrolled', NULL, NULL, 'good', NULL);
+('8Con-2025-000168', 168, 168, '2025-06-25', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000169', 169, 169, '2025-06-25', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000170', 170, 170, '2025-06-25', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000171', 171, 171, '2025-06-25', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000172', 172, 172, '2025-06-25', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000173', 173, 173, '2025-06-25', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000174', 174, 174, '2025-06-25', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000175', 175, 175, '2025-06-27', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000176', 176, 176, '2025-06-27', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000177', 177, 177, '2025-06-27', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000178', 178, 178, '2025-06-27', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000179', 179, 179, '2025-06-27', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000180', 180, 180, '2025-06-27', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000181', 181, 181, '2025-06-27', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000182', 182, 182, '2025-06-27', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000183', 183, 183, '2025-06-27', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000184', 184, 184, '2025-06-27', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000185', 185, 185, '2025-06-27', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000186', 186, 186, '2025-06-27', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000189', 189, 189, '2025-06-27', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000190', 190, 190, '2025-06-27', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000191', 191, 191, '2025-06-27', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000195', 195, 195, '2025-06-27', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000197', 197, 197, '2025-06-27', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000198', 198, 198, '2025-06-27', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000199', 199, 199, '2025-06-27', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000200', 200, 200, '2025-06-27', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000203', 203, 203, '2025-06-27', 'enrolled', NULL, NULL, 'good', NULL),
+('S1751178065000_206', 206, 206, '2025-06-29', 'enrolled', NULL, NULL, 'good', NULL);
 
 --
 -- Triggers `students`
@@ -1510,9 +2147,39 @@ CREATE TABLE `student_accounts` (
 --
 
 INSERT INTO `student_accounts` (`account_id`, `student_id`, `offering_id`, `total_due`, `amount_paid`, `scheme_id`, `account_status`, `due_date`, `last_payment_date`, `payment_reminder_count`, `notes`, `created_at`, `updated_at`) VALUES
-(4, '8Con-1750333336000_6', 1, 0.00, 0.00, NULL, 'paid', NULL, NULL, 0, NULL, '2025-06-19 11:42:16', '2025-06-19 11:42:16'),
-(5, 'S1750496764000_85', 1, 0.00, 0.00, NULL, 'paid', NULL, NULL, 0, NULL, '2025-06-21 09:06:04', '2025-06-21 09:06:04'),
-(6, 'S1750497042000_88', 1, 0.00, 0.00, NULL, 'paid', NULL, NULL, 0, NULL, '2025-06-21 09:10:42', '2025-06-21 09:10:42');
+(19, '8Con-2025-000168', 2, 0.00, 1100.00, NULL, 'active', NULL, '2025-06-26', 0, NULL, '2025-06-25 04:42:04', '2025-06-26 04:11:17'),
+(20, '8Con-2025-000169', 3, 0.00, 0.00, NULL, 'paid', NULL, NULL, 0, NULL, '2025-06-25 04:58:18', '2025-06-25 04:58:18'),
+(21, '8Con-2025-000170', 3, 0.00, 1000.00, NULL, 'paid', NULL, '2025-06-26', 0, NULL, '2025-06-25 08:26:12', '2025-06-26 10:51:54'),
+(22, '8Con-2025-000171', 7, 0.00, 2000.00, NULL, 'paid', NULL, '2025-06-26', 0, NULL, '2025-06-25 09:06:02', '2025-06-26 10:51:19'),
+(23, '8Con-2025-000172', 7, 0.00, 0.00, NULL, 'paid', NULL, NULL, 0, NULL, '2025-06-25 09:24:14', '2025-06-25 09:24:14'),
+(24, '8Con-2025-000173', 3, 0.00, 0.00, NULL, 'paid', NULL, NULL, 0, NULL, '2025-06-25 09:34:47', '2025-06-25 09:34:47'),
+(25, '8Con-2025-000174', 3, 65000.00, 0.00, NULL, '', '2025-07-25', '2025-06-26', 0, NULL, '2025-06-25 13:51:37', '2025-06-26 04:01:07'),
+(26, '8Con-2025-000168', 7, 20000.00, 5200.00, NULL, 'active', '2025-07-26', '2025-06-26', 0, NULL, '2025-06-26 03:29:18', '2025-06-26 10:06:02'),
+(27, '8Con-2025-000170', 2, 0.00, 0.00, NULL, 'active', '2025-07-26', NULL, 0, NULL, '2025-06-26 06:32:56', '2025-06-26 06:32:56'),
+(28, '8Con-2025-000169', 7, 20000.00, 0.00, NULL, 'active', '2025-07-27', NULL, 0, NULL, '2025-06-27 04:32:15', '2025-06-27 04:32:15'),
+(29, '8Con-2025-000175', 3, 65000.00, 10000.00, NULL, '', '2025-07-27', '2025-06-27', 0, NULL, '2025-06-27 04:37:36', '2025-06-27 10:31:34'),
+(30, '8Con-2025-000176', 2, 650000.00, 1000.00, NULL, '', '2025-07-27', '2025-06-29', 0, NULL, '2025-06-27 04:38:50', '2025-06-29 07:02:24'),
+(31, '8Con-2025-000177', 2, 650000.00, 0.00, NULL, '', '2025-07-27', NULL, 0, NULL, '2025-06-27 04:39:38', '2025-06-27 04:39:38'),
+(32, '8Con-2025-000178', 2, 650000.00, 0.00, NULL, '', '2025-07-27', NULL, 0, NULL, '2025-06-27 04:41:23', '2025-06-27 04:41:23'),
+(33, '8Con-2025-000179', 2, 650000.00, 0.00, NULL, '', '2025-07-27', NULL, 0, NULL, '2025-06-27 04:42:47', '2025-06-27 04:42:47'),
+(34, '8Con-2025-000180', 2, 650000.00, 0.00, NULL, '', '2025-07-27', NULL, 0, NULL, '2025-06-27 04:43:54', '2025-06-27 04:43:54'),
+(35, '8Con-2025-000181', 2, 650000.00, 0.00, NULL, '', '2025-07-27', NULL, 0, NULL, '2025-06-27 04:44:51', '2025-06-27 04:44:51'),
+(36, '8Con-2025-000182', 2, 650000.00, 0.00, NULL, '', '2025-07-27', NULL, 0, NULL, '2025-06-27 04:46:11', '2025-06-27 04:46:11'),
+(37, '8Con-2025-000183', 2, 650000.00, 0.00, NULL, '', '2025-07-27', NULL, 0, NULL, '2025-06-27 04:48:01', '2025-06-27 04:48:01'),
+(38, '8Con-2025-000184', 2, 650000.00, 0.00, NULL, '', '2025-07-27', NULL, 0, NULL, '2025-06-27 04:49:10', '2025-06-27 04:49:10'),
+(39, '8Con-2025-000185', 2, 650000.00, 0.00, NULL, '', '2025-07-27', NULL, 0, NULL, '2025-06-27 04:50:15', '2025-06-27 04:50:15'),
+(40, '8Con-2025-000186', 2, 650000.00, 0.00, NULL, '', '2025-07-27', NULL, 0, NULL, '2025-06-27 04:51:35', '2025-06-27 04:51:35'),
+(43, '8Con-2025-000189', 2, 650000.00, 0.00, NULL, '', '2025-07-27', NULL, 0, NULL, '2025-06-27 04:54:59', '2025-06-27 04:54:59'),
+(44, '8Con-2025-000190', 2, 650000.00, 0.00, NULL, '', '2025-07-27', NULL, 0, NULL, '2025-06-27 04:56:05', '2025-06-27 04:56:05'),
+(45, '8Con-2025-000191', 2, 650000.00, 0.00, NULL, '', '2025-07-27', NULL, 0, NULL, '2025-06-27 04:57:19', '2025-06-27 04:57:19'),
+(49, '8Con-2025-000195', 2, 650000.00, 0.00, NULL, '', '2025-07-27', NULL, 0, NULL, '2025-06-27 05:02:45', '2025-06-27 05:02:45'),
+(51, '8Con-2025-000197', 2, 650000.00, 0.00, NULL, '', '2025-07-27', NULL, 0, NULL, '2025-06-27 05:05:42', '2025-06-27 05:05:42'),
+(52, '8Con-2025-000198', 2, 650000.00, 0.00, NULL, '', '2025-07-27', NULL, 0, NULL, '2025-06-27 05:06:36', '2025-06-27 05:06:36'),
+(53, '8Con-2025-000199', 2, 650000.00, 0.00, NULL, '', '2025-07-27', NULL, 0, NULL, '2025-06-27 05:07:45', '2025-06-27 05:07:45'),
+(54, '8Con-2025-000200', 2, 650000.00, 0.00, NULL, '', '2025-07-27', NULL, 0, NULL, '2025-06-27 05:08:37', '2025-06-27 05:08:37'),
+(57, '8Con-2025-000203', 10, 650000.00, 0.00, NULL, 'active', NULL, NULL, 0, NULL, '2025-06-27 09:43:48', '2025-06-27 09:43:48'),
+(58, '8Con-2025-000175', 10, 0.00, 3400.00, NULL, 'active', '2025-07-28', '2025-06-29', 0, NULL, '2025-06-28 09:20:43', '2025-06-29 06:28:32'),
+(61, 'S1751178065000_206', 11, 0.00, 0.00, NULL, 'paid', NULL, NULL, 0, NULL, '2025-06-29 06:21:05', '2025-06-29 06:21:05');
 
 -- --------------------------------------------------------
 
@@ -1539,16 +2206,6 @@ CREATE TABLE `student_backgrounds` (
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-
---
--- Dumping data for table `student_backgrounds`
---
-
-INSERT INTO `student_backgrounds` (`background_id`, `student_id`, `education_level`, `highest_degree`, `institution`, `graduation_year`, `work_experience_years`, `current_occupation`, `industry`, `annual_income_range`, `financial_experience`, `prior_trading_experience`, `investment_portfolio_value`, `relevant_skills`, `certifications`, `created_at`, `updated_at`) VALUES
-(1, 'S1750303045000_52', 'college', NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2025-06-19 03:17:25', '2025-06-19 03:17:25'),
-(2, '8Con1750319141000_53', 'college', NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2025-06-19 07:45:41', '2025-06-19 07:45:41'),
-(3, '8Con-1750327913000_5', 'college', NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2025-06-19 10:11:53', '2025-06-19 10:11:53'),
-(4, '8Con-1750333336000_6', 'college', NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2025-06-19 11:42:16', '2025-06-19 11:42:16');
 
 -- --------------------------------------------------------
 
@@ -1585,8 +2242,7 @@ CREATE TABLE `student_documents` (
 --
 
 INSERT INTO `student_documents` (`document_id`, `student_id`, `document_type_id`, `document_version`, `original_filename`, `stored_filename`, `file_path`, `file_size_bytes`, `mime_type`, `file_hash`, `upload_date`, `uploaded_by`, `verification_status`, `verified_by`, `verified_date`, `expiry_date`, `rejection_reason`, `verification_notes`, `is_current`, `is_archived`, `archived_date`) VALUES
-(1, 'S1750171298927', 3, 1, 'Picture1.png', 'document-1750216842457-383315071-Picture1.png', 'uploads\\documents\\document-1750216842457-383315071-Picture1.png', 50779, 'image/png', 'c4c11faaae55726f0e0b5f9effae11544aa844a6e0de620866e5444706cbc989', '2025-06-18 03:20:42', NULL, 'verified', NULL, '2025-06-18 03:20:42', NULL, NULL, NULL, 1, 0, '0000-00-00 00:00:00'),
-(2, 'S1749790242780_13', 2, 1, '8c663c10-8373-41c8-82fe-2e8415da3ae9.jpg', 'document-1750232031446-73121856-8c663c10-8373-41c8-82fe-2e8415da3ae9.jpg', 'uploads\\documents\\document-1750232031446-73121856-8c663c10-8373-41c8-82fe-2e8415da3ae9.jpg', 88120, 'image/jpeg', '226b5e6225c665585f5eb8efb7cf790b72361abe192ff047e5d060c38017f870', '2025-06-18 07:33:51', NULL, 'verified', NULL, '2025-06-18 07:33:51', NULL, NULL, NULL, 1, 0, '0000-00-00 00:00:00');
+(3, '8Con-2025-000172', 1, 1, 'Picture1.png', 'document-1750922364945-106829516-Picture1.png', 'uploads\\documents\\document-1750922364945-106829516-Picture1.png', 50779, 'image/png', 'c4c11faaae55726f0e0b5f9effae11544aa844a6e0de620866e5444706cbc989', '2025-06-26 07:19:25', NULL, 'verified', NULL, '2025-06-26 07:19:25', NULL, NULL, NULL, 1, 0, '0000-00-00 00:00:00');
 
 -- --------------------------------------------------------
 
@@ -1626,11 +2282,50 @@ CREATE TABLE `student_enrollments` (
   `offering_id` int(11) NOT NULL,
   `enrollment_date` timestamp NOT NULL DEFAULT current_timestamp(),
   `enrollment_status` enum('enrolled','completed','dropped','transferred','suspended') DEFAULT 'enrolled',
-  `completion_date` timestamp NOT NULL DEFAULT '0000-00-00 00:00:00',
+  `completion_date` timestamp NULL DEFAULT NULL,
   `final_grade` decimal(5,2) DEFAULT NULL,
   `completion_percentage` decimal(5,2) DEFAULT 0.00,
   `attendance_percentage` decimal(5,2) DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `student_enrollments`
+--
+
+INSERT INTO `student_enrollments` (`enrollment_id`, `student_id`, `offering_id`, `enrollment_date`, `enrollment_status`, `completion_date`, `final_grade`, `completion_percentage`, `attendance_percentage`) VALUES
+(6, '8Con-2025-000168', 2, '2025-06-25 04:42:04', 'enrolled', '2025-06-25 04:42:04', NULL, NULL, NULL),
+(7, '8Con-2025-000169', 3, '2025-06-25 04:58:18', 'enrolled', '2025-06-25 04:58:18', NULL, NULL, NULL),
+(20, '8Con-2025-000170', 3, '2025-06-25 08:26:12', 'enrolled', '2025-06-25 08:26:12', NULL, NULL, NULL),
+(26, '8Con-2025-000171', 7, '2025-06-25 09:06:02', 'enrolled', '2025-06-25 09:06:02', NULL, NULL, NULL),
+(27, '8Con-2025-000172', 7, '2025-06-25 09:24:14', 'enrolled', '2025-06-25 09:24:14', NULL, NULL, NULL),
+(28, '8Con-2025-000173', 3, '2025-06-25 09:34:47', 'enrolled', '2025-06-25 09:34:47', NULL, NULL, NULL),
+(29, '8Con-2025-000174', 3, '2025-06-25 13:51:37', 'enrolled', '2025-06-25 13:51:37', NULL, NULL, NULL),
+(33, '8Con-2025-000168', 7, '2025-06-26 03:29:18', 'enrolled', NULL, NULL, 0.00, NULL),
+(34, '8Con-2025-000170', 2, '2025-06-26 06:32:56', 'enrolled', NULL, NULL, 0.00, NULL),
+(35, '8Con-2025-000169', 7, '2025-06-27 04:32:15', 'enrolled', NULL, NULL, 0.00, NULL),
+(36, '8Con-2025-000175', 3, '2025-06-27 04:37:36', 'enrolled', NULL, NULL, NULL, NULL),
+(37, '8Con-2025-000176', 2, '2025-06-27 04:38:50', 'enrolled', NULL, NULL, NULL, NULL),
+(38, '8Con-2025-000177', 2, '2025-06-27 04:39:38', 'enrolled', NULL, NULL, NULL, NULL),
+(39, '8Con-2025-000178', 2, '2025-06-27 04:41:23', 'enrolled', NULL, NULL, NULL, NULL),
+(40, '8Con-2025-000179', 2, '2025-06-27 04:42:47', 'enrolled', NULL, NULL, NULL, NULL),
+(41, '8Con-2025-000180', 2, '2025-06-27 04:43:54', 'enrolled', NULL, NULL, NULL, NULL),
+(42, '8Con-2025-000181', 2, '2025-06-27 04:44:51', 'enrolled', NULL, NULL, NULL, NULL),
+(43, '8Con-2025-000182', 2, '2025-06-27 04:46:11', 'enrolled', NULL, NULL, NULL, NULL),
+(44, '8Con-2025-000183', 2, '2025-06-27 04:48:01', 'enrolled', NULL, NULL, NULL, NULL),
+(45, '8Con-2025-000184', 2, '2025-06-27 04:49:10', 'enrolled', NULL, NULL, NULL, NULL),
+(46, '8Con-2025-000185', 2, '2025-06-27 04:50:15', 'enrolled', NULL, NULL, NULL, NULL),
+(47, '8Con-2025-000186', 2, '2025-06-27 04:51:35', 'enrolled', NULL, NULL, NULL, NULL),
+(50, '8Con-2025-000189', 2, '2025-06-27 04:54:59', 'enrolled', NULL, NULL, NULL, NULL),
+(51, '8Con-2025-000190', 2, '2025-06-27 04:56:05', 'enrolled', NULL, NULL, NULL, NULL),
+(52, '8Con-2025-000191', 2, '2025-06-27 04:57:19', 'enrolled', NULL, NULL, NULL, NULL),
+(56, '8Con-2025-000195', 2, '2025-06-27 05:02:45', 'enrolled', NULL, NULL, NULL, NULL),
+(58, '8Con-2025-000197', 2, '2025-06-27 05:05:42', 'enrolled', NULL, NULL, NULL, NULL),
+(59, '8Con-2025-000198', 2, '2025-06-27 05:06:36', 'enrolled', NULL, NULL, NULL, NULL),
+(60, '8Con-2025-000199', 2, '2025-06-27 05:07:45', 'enrolled', NULL, NULL, NULL, NULL),
+(61, '8Con-2025-000200', 2, '2025-06-27 05:08:37', 'enrolled', NULL, NULL, NULL, NULL),
+(64, '8Con-2025-000203', 10, '2025-06-27 09:43:48', 'enrolled', '2025-10-03 08:46:28', NULL, 0.00, NULL),
+(65, '8Con-2025-000175', 10, '2025-06-28 09:20:43', 'enrolled', NULL, NULL, 0.00, NULL),
+(68, 'S1751178065000_206', 11, '2025-06-29 06:21:05', 'enrolled', '2025-09-21 05:33:20', NULL, 0.00, NULL);
 
 -- --------------------------------------------------------
 
@@ -1675,16 +2370,6 @@ CREATE TABLE `student_goals` (
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-
---
--- Dumping data for table `student_goals`
---
-
-INSERT INTO `student_goals` (`goal_id`, `student_id`, `goal_type`, `goal_title`, `goal_description`, `target_date`, `target_amount`, `priority_level`, `status`, `progress_percentage`, `created_at`, `updated_at`) VALUES
-(1, 'S1750303045000_52', 'academic', 'Complete Trading Course', 'Successfully complete the trading course and obtain certification', NULL, NULL, 'high', 'active', 0.00, '2025-06-19 03:17:25', '2025-06-19 03:17:25'),
-(2, '8Con1750319141000_53', 'academic', 'Complete Trading Course', 'Successfully complete the trading course and obtain certification', NULL, NULL, 'high', 'active', 0.00, '2025-06-19 07:45:41', '2025-06-19 07:45:41'),
-(3, '8Con-1750327913000_5', 'academic', 'Complete Trading Course', 'Successfully complete the trading course and obtain certification', NULL, NULL, 'high', 'active', 0.00, '2025-06-19 10:11:53', '2025-06-19 10:11:53'),
-(4, '8Con-1750333336000_6', 'academic', 'Complete Trading Course', 'Successfully complete the trading course and obtain certification', NULL, NULL, 'high', 'active', 0.00, '2025-06-19 11:42:16', '2025-06-19 11:42:16');
 
 -- --------------------------------------------------------
 
@@ -1783,27 +2468,35 @@ CREATE TABLE `student_trading_levels` (
 --
 
 INSERT INTO `student_trading_levels` (`student_id`, `level_id`, `assigned_date`, `assigned_by`, `assessment_score`, `assessment_method`, `is_current`, `notes`) VALUES
-('8Con-1750327913000_5', 1, '2025-06-19 10:11:53', NULL, NULL, 'exam', 0, NULL),
-('8Con-1750327913000_5', 2, '2025-06-19 10:11:53', NULL, NULL, 'exam', 1, NULL),
-('8Con-1750333336000_6', 1, '2025-06-19 11:42:16', NULL, NULL, 'exam', 1, NULL),
-('8Con1750319141000_53', 1, '2025-06-19 07:45:41', NULL, NULL, 'exam', 0, NULL),
-('8Con1750319141000_53', 2, '2025-06-19 07:45:41', NULL, NULL, 'exam', 1, NULL),
-('S1749790242780_13', 1, '2025-06-13 04:50:42', NULL, NULL, 'exam', 0, NULL),
-('S1749790242780_13', 1, '2025-06-16 08:09:26', NULL, NULL, 'exam', 0, NULL),
-('S1749790242780_13', 1, '2025-06-16 08:23:57', NULL, NULL, 'exam', 0, NULL),
-('S1749790242780_13', 1, '2025-06-16 08:27:38', NULL, NULL, 'exam', 0, NULL),
-('S1749790242780_13', 1, '2025-06-16 08:28:42', NULL, NULL, 'exam', 0, NULL),
-('S1749790242780_13', 1, '2025-06-16 08:28:49', NULL, NULL, 'exam', 0, NULL),
-('S1749790242780_13', 1, '2025-06-16 08:28:58', NULL, NULL, 'exam', 0, NULL),
-('S1749790242780_13', 1, '2025-06-16 08:41:06', NULL, NULL, 'exam', 0, NULL),
-('S1749790242780_13', 1, '2025-06-16 09:01:43', NULL, NULL, 'exam', 1, NULL),
-('S1750170945832', 2, '2025-06-17 14:35:45', NULL, NULL, 'exam', 1, NULL),
-('S1750171298927', 1, '2025-06-17 14:41:38', NULL, NULL, 'exam', 1, NULL),
-('S1750242545000_43', 2, '2025-06-18 10:29:05', NULL, NULL, 'exam', 1, NULL),
-('S1750303045000_52', 1, '2025-06-19 03:17:25', NULL, NULL, 'exam', 0, NULL),
-('S1750303045000_52', 2, '2025-06-19 03:17:25', NULL, NULL, 'exam', 1, NULL),
-('S1750496764000_85', 1, '2025-06-21 09:06:04', NULL, NULL, 'exam', 1, NULL),
-('S1750497042000_88', 4, '2025-06-21 09:10:42', NULL, NULL, 'exam', 1, NULL);
+('8Con-2025-000168', 1, '2025-06-25 04:42:04', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000169', 1, '2025-06-25 04:58:18', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000170', 1, '2025-06-25 08:26:12', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000171', 1, '2025-06-25 09:06:02', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000172', 2, '2025-06-25 09:24:14', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000173', 2, '2025-06-25 09:34:47', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000174', 1, '2025-06-25 13:51:37', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000175', 2, '2025-06-27 04:37:36', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000176', 1, '2025-06-27 04:38:50', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000177', 2, '2025-06-27 04:39:38', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000178', 2, '2025-06-27 04:41:23', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000179', 3, '2025-06-27 04:42:47', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000180', 2, '2025-06-27 04:43:54', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000181', 3, '2025-06-27 04:44:51', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000182', 2, '2025-06-27 04:46:11', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000183', 2, '2025-06-27 04:48:01', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000184', 1, '2025-06-27 04:49:10', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000185', 3, '2025-06-27 04:50:15', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000186', 3, '2025-06-27 04:51:35', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000189', 3, '2025-06-27 04:54:59', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000190', 4, '2025-06-27 04:56:05', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000191', 3, '2025-06-27 04:57:19', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000195', 2, '2025-06-27 05:02:45', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000197', 2, '2025-06-27 05:05:42', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000198', 1, '2025-06-27 05:06:36', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000199', 2, '2025-06-27 05:07:45', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000200', 4, '2025-06-27 05:08:37', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000203', 1, '2025-06-27 09:43:48', NULL, NULL, 'exam', 1, NULL),
+('S1751178065000_206', 1, '2025-06-29 06:21:05', NULL, NULL, 'exam', 1, NULL);
 
 -- --------------------------------------------------------
 
@@ -1889,7 +2582,7 @@ INSERT INTO `trading_levels` (`level_id`, `level_name`, `level_description`, `mi
 (1, 'No Experience ', 'New to trading', 0.00, NULL, 8, 10000.00, 'medium'),
 (2, 'Beginner', 'Has basic knowledge, developing strategies', 70.00, 1, 12, 20000.00, 'medium'),
 (3, 'Intermediate', 'Has an experienced in trading', 85.00, 2, 16, 80000.00, 'medium'),
-(4, 'Advanced', 'Experienced trader with proven track record', 18.00, 3, 100, 100000.00, 'medium');
+(4, 'Advanced', 'Experienced trader with proven track record', 100.00, 3, 100, 100000.00, 'medium');
 
 -- --------------------------------------------------------
 
@@ -2574,11 +3267,11 @@ ALTER TABLE `student_eligibility_assessments`
 --
 ALTER TABLE `student_enrollments`
   ADD PRIMARY KEY (`enrollment_id`),
-  ADD UNIQUE KEY `unique_student_offering` (`student_id`,`offering_id`),
   ADD KEY `offering_id` (`offering_id`),
   ADD KEY `idx_enrollment_date` (`enrollment_date`),
   ADD KEY `idx_enrollment_status` (`enrollment_status`),
-  ADD KEY `idx_student_enrollments_status` (`enrollment_status`);
+  ADD KEY `idx_student_enrollments_status` (`enrollment_status`),
+  ADD KEY `idx_student_id` (`student_id`);
 
 --
 -- Indexes for table `student_fees`
@@ -2686,7 +3379,7 @@ ALTER TABLE `trading_levels`
 -- AUTO_INCREMENT for table `accounts`
 --
 ALTER TABLE `accounts`
-  MODIFY `account_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=131;
+  MODIFY `account_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=207;
 
 --
 -- AUTO_INCREMENT for table `activity_logs`
@@ -2698,43 +3391,43 @@ ALTER TABLE `activity_logs`
 -- AUTO_INCREMENT for table `audit_log`
 --
 ALTER TABLE `audit_log`
-  MODIFY `log_id` bigint(20) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=25;
+  MODIFY `log_id` bigint(20) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=89;
 
 --
 -- AUTO_INCREMENT for table `competencies`
 --
 ALTER TABLE `competencies`
-  MODIFY `competency_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
+  MODIFY `competency_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=18;
 
 --
 -- AUTO_INCREMENT for table `competency_types`
 --
 ALTER TABLE `competency_types`
-  MODIFY `competency_type_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
+  MODIFY `competency_type_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
 
 --
 -- AUTO_INCREMENT for table `contact_info`
 --
 ALTER TABLE `contact_info`
-  MODIFY `contact_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=43;
+  MODIFY `contact_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=196;
 
 --
 -- AUTO_INCREMENT for table `courses`
 --
 ALTER TABLE `courses`
-  MODIFY `course_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+  MODIFY `course_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=9;
 
 --
 -- AUTO_INCREMENT for table `course_offerings`
 --
 ALTER TABLE `course_offerings`
-  MODIFY `offering_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `offering_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=12;
 
 --
 -- AUTO_INCREMENT for table `course_pricing`
 --
 ALTER TABLE `course_pricing`
-  MODIFY `pricing_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=19;
+  MODIFY `pricing_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=32;
 
 --
 -- AUTO_INCREMENT for table `document_types`
@@ -2752,13 +3445,13 @@ ALTER TABLE `eligibility_criteria`
 -- AUTO_INCREMENT for table `fee_types`
 --
 ALTER TABLE `fee_types`
-  MODIFY `fee_type_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
+  MODIFY `fee_type_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
 
 --
 -- AUTO_INCREMENT for table `learning_preferences`
 --
 ALTER TABLE `learning_preferences`
-  MODIFY `preference_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=15;
+  MODIFY `preference_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=66;
 
 --
 -- AUTO_INCREMENT for table `password_reset_tokens`
@@ -2770,7 +3463,7 @@ ALTER TABLE `password_reset_tokens`
 -- AUTO_INCREMENT for table `payments`
 --
 ALTER TABLE `payments`
-  MODIFY `payment_id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `payment_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=14;
 
 --
 -- AUTO_INCREMENT for table `payment_methods`
@@ -2782,13 +3475,13 @@ ALTER TABLE `payment_methods`
 -- AUTO_INCREMENT for table `payment_schemes`
 --
 ALTER TABLE `payment_schemes`
-  MODIFY `scheme_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
+  MODIFY `scheme_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
 
 --
 -- AUTO_INCREMENT for table `persons`
 --
 ALTER TABLE `persons`
-  MODIFY `person_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=89;
+  MODIFY `person_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=207;
 
 --
 -- AUTO_INCREMENT for table `positions`
@@ -2806,7 +3499,7 @@ ALTER TABLE `referral_sources`
 -- AUTO_INCREMENT for table `roles`
 --
 ALTER TABLE `roles`
-  MODIFY `role_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
+  MODIFY `role_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
 
 --
 -- AUTO_INCREMENT for table `sponsors`
@@ -2818,7 +3511,7 @@ ALTER TABLE `sponsors`
 -- AUTO_INCREMENT for table `sponsor_types`
 --
 ALTER TABLE `sponsor_types`
-  MODIFY `sponsor_type_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
+  MODIFY `sponsor_type_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
 
 --
 -- AUTO_INCREMENT for table `staff`
@@ -2830,7 +3523,7 @@ ALTER TABLE `staff`
 -- AUTO_INCREMENT for table `student_accounts`
 --
 ALTER TABLE `student_accounts`
-  MODIFY `account_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
+  MODIFY `account_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=62;
 
 --
 -- AUTO_INCREMENT for table `student_backgrounds`
@@ -2842,7 +3535,7 @@ ALTER TABLE `student_backgrounds`
 -- AUTO_INCREMENT for table `student_documents`
 --
 ALTER TABLE `student_documents`
-  MODIFY `document_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+  MODIFY `document_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
 
 --
 -- AUTO_INCREMENT for table `student_eligibility_assessments`
@@ -2854,7 +3547,7 @@ ALTER TABLE `student_eligibility_assessments`
 -- AUTO_INCREMENT for table `student_enrollments`
 --
 ALTER TABLE `student_enrollments`
-  MODIFY `enrollment_id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `enrollment_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=69;
 
 --
 -- AUTO_INCREMENT for table `student_fees`
@@ -2878,7 +3571,7 @@ ALTER TABLE `student_progress`
 -- AUTO_INCREMENT for table `student_referrals`
 --
 ALTER TABLE `student_referrals`
-  MODIFY `referral_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `referral_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
 
 --
 -- AUTO_INCREMENT for table `student_scholarships`
@@ -2896,7 +3589,7 @@ ALTER TABLE `system_configuration`
 -- AUTO_INCREMENT for table `trading_levels`
 --
 ALTER TABLE `trading_levels`
-  MODIFY `level_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
+  MODIFY `level_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
 
 --
 -- Constraints for dumped tables

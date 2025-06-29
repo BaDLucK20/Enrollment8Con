@@ -23,6 +23,21 @@ import {
   Menu,
   X,
 } from "lucide-react";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  LineChart,
+  Line,
+  PieChart,
+  Pie,
+  Cell,
+  ResponsiveContainer,
+} from "recharts";
 import PendingPayment from "./PendingPayment";
 import CompletedPayment from "./CompletedPayment";
 import PaymentHistory from "./PaymentHistory";
@@ -33,10 +48,11 @@ import AddDocument from "./AddDocument";
 import PendingDocument from "./PendingDocument";
 import Courses from "./Courses";
 import ReferralTracking from "./ReferralTracking";
-
 import { useNavigate } from "react-router-dom";
 import UploadPayments from "./UploadPayment";
 import CancelledPayments from "./CancelledPayment";
+import { useDashboardData } from "../hooks/useDashboardData";
+import Batch from "./Batch"
 
 // API configuration
 const API_BASE_URL = "http://localhost:3000/api";
@@ -80,17 +96,15 @@ function UniversalDashboard() {
   const [sidebarOpen, setSidebarOpen] = useState(false); // Mobile sidebar state
   const [userRole, setUserRole] = useState("");
   const [userInfo, setUserInfo] = useState(null);
-  const [dashboardMetrics, setDashboardMetrics] = useState({
-    enrolled_students: 0,
-    graduated_students: 0,
-    pending_payments: 0,
-    total_revenue: 0,
-    monthly_enrollments: [],
-    competency_breakdown: [],
-  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const navigate = useNavigate();
+  const {
+    dashboardData,
+    loading: dashboardLoading,
+    error: dashboardError,
+    refreshData,
+  } = useDashboardData();
 
   // Initialize user data and fetch dashboard metrics
   useEffect(() => {
@@ -115,11 +129,6 @@ function UniversalDashboard() {
           navigate("/");
           return;
         }
-
-        // Fetch dashboard metrics for admin/staff
-        if (["admin", "staff"].includes(userRole)) {
-          await fetchDashboardMetrics();
-        }
       } catch (error) {
         console.error("Dashboard initialization error:", error);
         setError("Failed to load dashboard data");
@@ -130,19 +139,6 @@ function UniversalDashboard() {
 
     initializeDashboard();
   }, [userRole, navigate]);
-
-  // Fetch dashboard metrics from server
-  const fetchDashboardMetrics = async () => {
-    try {
-      const metrics = await apiCall("/dashboard/metrics");
-      if (metrics) {
-        setDashboardMetrics(metrics);
-      }
-    } catch (error) {
-      console.error("Failed to fetch dashboard metrics:", error);
-      setError("Failed to load dashboard metrics");
-    }
-  };
 
   // Time update effect and responsive handler
   useEffect(() => {
@@ -217,19 +213,19 @@ function UniversalDashboard() {
       color: colors.blue,
       roles: ["admin", "staff"],
     },
-    {
-      id: "competency-assessment",
-      label: "Competency & Assessment",
-      icon: Award,
-      color: colors.red,
-      roles: ["admin", "staff"],
-      hasChildren: true,
-      children: [
-        { id: "skill-assessment", label: "Skill Assessment" },
-        { id: "performance-review", label: "Performance Review" },
-        { id: "certification-tracking", label: "Certification Tracking" },
-      ],
-    },
+    // {
+    //   id: "competency-assessment",
+    //   label: "Competency & Assessment",
+    //   icon: Award,
+    //   color: colors.red,
+    //   roles: ["admin", "staff"],
+    //   hasChildren: true,
+    //   children: [
+    //     { id: "skill-assessment", label: "Skill Assessment" },
+    //     { id: "performance-review", label: "Performance Review" },
+    //     { id: "certification-tracking", label: "Certification Tracking" },
+    //   ],
+    // },
     {
       id: "referral-tracking",
       label: "Referral",
@@ -246,6 +242,7 @@ function UniversalDashboard() {
       children: [
         { id: "add-new-Staff", label: "Add New Staff" },
         { id: "add-new-Student", label: "Add New Student" },
+        { id: "BatchStudent", label: "Batch" },
         { id: "DisplayAccount", label: "Manage Accounts" },
       ],
     },
@@ -729,123 +726,502 @@ function UniversalDashboard() {
 
     switch (activeSection) {
       case "dashboard":
+        if (dashboardLoading) {
+          return (
+            <div style={styles.loadingContainer}>
+              <div>Loading dashboard data...</div>
+            </div>
+          );
+        }
+
+        if (dashboardError) {
+          return (
+            <div style={styles.errorContainer}>
+              <strong>Error:</strong> {dashboardError}
+              <button
+                onClick={refreshData}
+                style={{
+                  marginLeft: "10px",
+                  padding: "5px 10px",
+                  backgroundColor: colors.darkGreen,
+                  color: "white",
+                  border: "none",
+                  borderRadius: "4px",
+                  cursor: "pointer",
+                }}
+              >
+                Retry
+              </button>
+            </div>
+          );
+        }
+
+        if (!dashboardData) {
+          return (
+            <div style={styles.loadingContainer}>
+              <div>No dashboard data available</div>
+            </div>
+          );
+        }
+
         return (
-          <div>
-            {/* Welcome Card */}
-            <div style={styles.welcomeCard}>
-              <h2 style={styles.welcomeTitle}>
-                Welcome back, {userInfo?.username || "User"}!
-              </h2>
-              <p style={styles.welcomeText}>
-                {currentTime.toLocaleDateString("en-US", {
-                  weekday: "long",
-                  year: "numeric",
-                  month: "long",
-                  day: "numeric",
-                })}
-              </p>
-              <div style={styles.welcomeStats}>
-                <div style={styles.welcomeStat}>
-                  <span style={styles.statValue}>
-                    {dashboardMetrics.enrolled_students}
-                  </span>
-                  <span style={styles.statLabel}>Enrolled Students</span>
+          <div
+            style={{
+              minHeight: "100vh",
+              backgroundColor: colors.cream,
+              padding: isMobile ? "1rem" : "2rem",
+              fontFamily: "Arial, Helvetica, sans-serif",
+            }}
+          >
+            {/* KPI Cards */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: isMobile
+                  ? "1fr"
+                  : "repeat(auto-fit, minmax(280px, 1fr))",
+                gap: isMobile ? "1rem" : "2rem",
+                marginBottom: isMobile ? "2rem" : "3rem",
+              }}
+            >
+              {[
+                {
+                  title: "Total Enrollees",
+                  value:
+                    dashboardData.kpiData.total_enrollees?.toLocaleString() ||
+                    "0",
+                  icon: Users,
+                  color: colors.blue,
+                },
+                {
+                  title: "Total Revenue",
+                  value: `₱${(
+                    dashboardData.kpiData.total_revenue || 0
+                  ).toLocaleString()}`,
+                  icon: DollarSign,
+                  color: colors.lightGreen,
+                },
+                {
+                  title: "Total Graduates",
+                  value:
+                    dashboardData.kpiData.total_graduates?.toString() || "0",
+                  icon: GraduationCap,
+                  color: colors.purple || "#9b59b6",
+                },
+                {
+                  title: "Accounts Receivable",
+                  value: `₱${(
+                    dashboardData.kpiData.pending_receivables || 0
+                  ).toLocaleString()}`,
+                  icon: TrendingUp,
+                  color: colors.coral,
+                },
+              ].map((kpi, index) => (
+                <div
+                  key={index}
+                  style={{
+                    backgroundColor: "#ffffff",
+                    borderRadius: isMobile ? "8px" : "12px",
+                    padding: isMobile ? "1.5rem" : "2rem",
+                    boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+                    border: "1px solid #e2e8f0",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      marginBottom: "1rem",
+                    }}
+                  >
+                    <p
+                      style={{
+                        fontSize: isMobile ? "14px" : "16px",
+                        fontWeight: "500",
+                        color: "#64748b",
+                        margin: 0,
+                      }}
+                    >
+                      {kpi.title}
+                    </p>
+                    <div
+                      style={{
+                        width: "40px",
+                        height: "40px",
+                        borderRadius: "8px",
+                        backgroundColor: kpi.color + "20",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <kpi.icon size={20} color={kpi.color} />
+                    </div>
+                  </div>
+                  <p
+                    style={{
+                      fontSize: isMobile ? "1.5rem" : "2rem",
+                      fontWeight: "bold",
+                      color: kpi.color,
+                      margin: 0,
+                    }}
+                  >
+                    {kpi.value}
+                  </p>
                 </div>
-                <div style={styles.welcomeStat}>
-                  <span style={styles.statValue}>
-                    {dashboardMetrics.graduated_students}
-                  </span>
-                  <span style={styles.statLabel}>Graduates</span>
+              ))}
+            </div>
+
+            {/* Charts Grid */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: isMobile ? "1fr" : "repeat(2, 1fr)",
+                gap: isMobile ? "1.5rem" : "2rem",
+                marginBottom: isMobile ? "2rem" : "3rem",
+              }}
+            >
+              {/* Revenue Analysis Chart */}
+              <div
+                style={{
+                  backgroundColor: "#ffffff",
+                  borderRadius: isMobile ? "8px" : "12px",
+                  padding: isMobile ? "1.5rem" : "2rem",
+                  boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+                }}
+              >
+                <h3
+                  style={{
+                    fontSize: isMobile ? "1.1rem" : "1.25rem",
+                    fontWeight: "600",
+                    color: colors.black,
+                    margin: "0 0 1.5rem 0",
+                  }}
+                >
+                  Revenue Analysis
+                </h3>
+                <div style={{ width: "100%", height: "300px" }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={dashboardData.revenueHistogram}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="month" />
+                      <YAxis />
+                      <Tooltip
+                        formatter={(value) => [
+                          `₱${value.toLocaleString()}`,
+                          "",
+                        ]}
+                      />
+                      <Legend />
+                      <Bar
+                        dataKey="payment_received"
+                        fill="#10B981"
+                        name="Payment Received"
+                      />
+                      <Bar
+                        dataKey="accounts_receivable"
+                        fill="#F59E0B"
+                        name="Accounts Receivable"
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
                 </div>
-                <div style={styles.welcomeStat}>
-                  <span style={styles.statValue}>
-                    ₱{(dashboardMetrics.total_revenue || 0).toLocaleString()}
-                  </span>
-                  <span style={styles.statLabel}>Total Revenue</span>
-                </div>
-                <div style={styles.welcomeStat}>
-                  <span style={styles.statValue}>
-                    {dashboardMetrics.pending_payments}
-                  </span>
-                  <span style={styles.statLabel}>Pending Payments</span>
+              </div>
+
+              {/* Status Distribution Chart */}
+              <div
+                style={{
+                  backgroundColor: "#ffffff",
+                  borderRadius: isMobile ? "8px" : "12px",
+                  padding: isMobile ? "1.5rem" : "2rem",
+                  boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+                }}
+              >
+                <h3
+                  style={{
+                    fontSize: isMobile ? "1.1rem" : "1.25rem",
+                    fontWeight: "600",
+                    color: colors.black,
+                    margin: "0 0 1.5rem 0",
+                  }}
+                >
+                  Enrollment Status Distribution
+                </h3>
+                <div style={{ width: "100%", height: "300px" }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={dashboardData.statusDistribution}
+                        cx="50%"
+                        cy="50%"
+                        outerRadius={100}
+                        dataKey="value"
+                        label={({ name, value }) => `${name}: ${value}`}
+                      >
+                        {dashboardData.statusDistribution.map(
+                          (entry, index) => (
+                            <Cell key={`cell-${index}`} fill={entry.color} />
+                          )
+                        )}
+                      </Pie>
+                      <Tooltip />
+                    </PieChart>
+                  </ResponsiveContainer>
                 </div>
               </div>
             </div>
 
-            {/* Key Metrics Grid */}
-            {["admin", "staff"].includes(userRole) && (
-              <div style={styles.statsGrid}>
-                {[
-                  {
-                    title: "Current Enrollment",
-                    value: dashboardMetrics.enrolled_students,
-                    change: "+8.2%",
-                    color: colors.blue,
-                    icon: Users,
-                  },
-                  {
-                    title: "Graduated Students",
-                    value: dashboardMetrics.graduated_students,
-                    change: "+12.5%",
-                    color: colors.purple,
-                    icon: Award,
-                  },
-                  {
-                    title: "Pending Payments",
-                    value: dashboardMetrics.pending_payments,
-                    change: "+5.8%",
-                    color: colors.coral,
-                    icon: DollarSign,
-                  },
-                  {
-                    title: "Monthly Revenue",
-                    value: `₱${(
-                      dashboardMetrics.total_revenue || 0
-                    ).toLocaleString()}`,
-                    change: "+7.2%",
-                    color: colors.lightGreen,
-                    icon: TrendingUp,
-                  },
-                ].map((stat, index) => (
-                  <div
-                    key={index}
-                    style={styles.statCard}
-                    onMouseEnter={(e) => {
-                      if (!isMobile) {
-                        e.currentTarget.style.transform = "translateY(-4px)";
-                        e.currentTarget.style.boxShadow =
-                          "0 10px 25px rgba(0, 0, 0, 0.1)";
-                      }
-                    }}
-                    onMouseLeave={(e) => {
-                      if (!isMobile) {
-                        e.currentTarget.style.transform = "translateY(0)";
-                        e.currentTarget.style.boxShadow = "none";
-                      }
-                    }}
-                  >
-                    <div style={styles.statCardHeader}>
-                      <h3 style={styles.statCardTitle}>{stat.title}</h3>
-                      <div
+            {/* Additional Charts */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: isMobile ? "1fr" : "repeat(2, 1fr)",
+                gap: isMobile ? "1.5rem" : "2rem",
+                marginBottom: isMobile ? "2rem" : "3rem",
+              }}
+            >
+              {/* Enrollment Trend */}
+              <div
+                style={{
+                  backgroundColor: "#ffffff",
+                  borderRadius: isMobile ? "8px" : "12px",
+                  padding: isMobile ? "1.5rem" : "2rem",
+                  boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+                }}
+              >
+                <h3
+                  style={{
+                    fontSize: isMobile ? "1.1rem" : "1.25rem",
+                    fontWeight: "600",
+                    color: colors.black,
+                    margin: "0 0 1.5rem 0",
+                  }}
+                >
+                  Monthly Enrollment Trend
+                </h3>
+                <div style={{ width: "100%", height: "300px" }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={dashboardData.enrollmentTrend}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="month" />
+                      <YAxis />
+                      <Tooltip />
+                      <Line
+                        type="monotone"
+                        dataKey="enrollees"
+                        stroke={colors.blue}
+                        strokeWidth={3}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              {/* Batch Performance */}
+              <div
+                style={{
+                  backgroundColor: "#ffffff",
+                  borderRadius: isMobile ? "8px" : "12px",
+                  padding: isMobile ? "1.5rem" : "2rem",
+                  boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+                }}
+              >
+                <h3
+                  style={{
+                    fontSize: isMobile ? "1.1rem" : "1.25rem",
+                    fontWeight: "600",
+                    color: colors.black,
+                    margin: "0 0 1.5rem 0",
+                  }}
+                >
+                  Batch Performance
+                </h3>
+                <div style={{ width: "100%", height: "300px" }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={dashboardData.batchData}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis
+                        dataKey="batch"
+                        angle={-45}
+                        textAnchor="end"
+                        height={80}
+                      />
+                      <YAxis />
+                      <Tooltip />
+                      <Legend />
+                      <Bar
+                        dataKey="enrollees"
+                        fill={colors.blue}
+                        name="Enrollees"
+                      />
+                      <Bar
+                        dataKey="graduates"
+                        fill="#10B981"
+                        name="Graduates"
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
+
+            {/* Batch Details Table */}
+            <div
+              style={{
+                backgroundColor: "#ffffff",
+                borderRadius: isMobile ? "8px" : "12px",
+                padding: isMobile ? "1.5rem" : "2rem",
+                boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: "1.5rem",
+                }}
+              >
+                <h3
+                  style={{
+                    fontSize: isMobile ? "1.1rem" : "1.25rem",
+                    fontWeight: "600",
+                    color: colors.black,
+                    margin: 0,
+                  }}
+                >
+                  Batch Details
+                </h3>
+                <button
+                  onClick={refreshData}
+                  style={{
+                    padding: "8px 16px",
+                    backgroundColor: colors.darkGreen,
+                    color: "white",
+                    border: "none",
+                    borderRadius: "6px",
+                    cursor: "pointer",
+                    fontSize: "14px",
+                  }}
+                >
+                  Refresh Data
+                </button>
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table
+                  style={{
+                    width: "100%",
+                    borderCollapse: "separate",
+                    borderSpacing: 0,
+                  }}
+                >
+                  <thead>
+                    <tr style={{ backgroundColor: "#f8fafc" }}>
+                      {[
+                        "Batch",
+                        "Total Enrollees",
+                        "Basic",
+                        "Common",
+                        "Core",
+                        "Graduates",
+                      ].map((header) => (
+                        <th
+                          key={header}
+                          style={{
+                            padding: "12px 16px",
+                            textAlign: "left",
+                            fontSize: "12px",
+                            fontWeight: "600",
+                            color: "#64748b",
+                            textTransform: "uppercase",
+                            letterSpacing: "0.5px",
+                            borderBottom: "1px solid #e2e8f0",
+                          }}
+                        >
+                          {header}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dashboardData.batchData.map((batch, index) => (
+                      <tr
+                        key={batch.batch}
                         style={{
-                          ...styles.statCardIcon,
-                          backgroundColor: stat.color + "20",
+                          backgroundColor:
+                            index % 2 === 0 ? "#ffffff" : "#f8fafc",
                         }}
                       >
-                        <stat.icon size={20} color={stat.color} />
-                      </div>
-                    </div>
-                    <div style={styles.statCardValue}>{stat.value}</div>
-                    <div style={styles.statCardChange}>
-                      {stat.change} vs last month
-                    </div>
-                  </div>
-                ))}
+                        <td
+                          style={{
+                            padding: "12px 16px",
+                            fontSize: "14px",
+                            fontWeight: "500",
+                            color: colors.black,
+                            borderBottom: "1px solid #e2e8f0",
+                          }}
+                        >
+                          {batch.batch}
+                        </td>
+                        <td
+                          style={{
+                            padding: "12px 16px",
+                            fontSize: "14px",
+                            color: colors.black,
+                            borderBottom: "1px solid #e2e8f0",
+                          }}
+                        >
+                          {batch.enrollees}
+                        </td>
+                        <td
+                          style={{
+                            padding: "12px 16px",
+                            fontSize: "14px",
+                            color: colors.black,
+                            borderBottom: "1px solid #e2e8f0",
+                          }}
+                        >
+                          {batch.basic || 0}
+                        </td>
+                        <td
+                          style={{
+                            padding: "12px 16px",
+                            fontSize: "14px",
+                            color: colors.black,
+                            borderBottom: "1px solid #e2e8f0",
+                          }}
+                        >
+                          {batch.common || 0}
+                        </td>
+                        <td
+                          style={{
+                            padding: "12px 16px",
+                            fontSize: "14px",
+                            color: colors.black,
+                            borderBottom: "1px solid #e2e8f0",
+                          }}
+                        >
+                          {batch.core || 0}
+                        </td>
+                        <td
+                          style={{
+                            padding: "12px 16px",
+                            fontSize: "14px",
+                            color: colors.black,
+                            borderBottom: "1px solid #e2e8f0",
+                          }}
+                        >
+                          {batch.graduates}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-            )}
+            </div>
           </div>
         );
-
       case "PendingPayments":
         return <PendingPayment />;
 
@@ -876,6 +1252,9 @@ function UniversalDashboard() {
 
       case "courses":
         return <Courses />;
+
+      case "BatchStudent":
+        return <Batch/>;
 
       case "pending-documents":
         return <PendingDocument />;

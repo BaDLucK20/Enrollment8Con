@@ -12,6 +12,7 @@ import UploadPayments from './components/UploadPayment'
 import PendingDocument from './components/PendingDocument'
 import ReferralTracking from './components/ReferralTracking'
 import Courses from './components/Courses'
+import Batch from './components/Batch'
 // import Logout from './components/Logout'
 
 function App() {
@@ -30,6 +31,7 @@ function App() {
       <Route path="/UploadPayment" element={<UploadPayments/>} />
       <Route path="/Courses" element={<Courses/>} />
       <Route path="/ReferralTracking" element={<ReferralTracking/>} />
+      <Route path="/Batch" element={<Batch/>}/>
       <Route path="/Dashboard" element={<UniversalDashboard />} />
 
     </Routes>

@@ -5,6 +5,7 @@ const DisplayAccount = () => {
   const [students, setStudents] = useState([]);
   const [staff, setStaff] = useState([]);
   const [courses, setCourses] = useState([]);
+  const [courseOfferings, setCourseOfferings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState('students');
@@ -50,6 +51,7 @@ const DisplayAccount = () => {
     const initializeData = async () => {
       try {
         await fetchCourses();
+        await fetchCourseOfferings();
         await fetchAccounts();
       } catch (error) {
         console.error('Error initializing data:', error);
@@ -59,6 +61,25 @@ const DisplayAccount = () => {
     
     initializeData();
   }, []);
+
+  // Debug function to check student data structure
+  useEffect(() => {
+    if (students.length > 0) {
+      console.log('=== STUDENT DATA DEBUG ===');
+      console.log('Sample student:', students[0]);
+      console.log('Available batches in filter:', uniqueBatches);
+      
+      // Show batch-related fields for first few students
+      students.slice(0, 3).forEach(student => {
+        console.log(`Student ${student.student_id} batch data:`, {
+          batch_identifiers: student.batch_identifiers,
+          batch_identifier: student.batch_identifier,
+          batch_year: student.batch_year,
+          enrolled_courses: student.enrolled_courses
+        });
+      });
+    }
+  }, [students]);
 
   // Helper function to get auth token
   const getAuthToken = () => {
@@ -139,6 +160,23 @@ const DisplayAccount = () => {
       console.log('Fetched courses:', coursesData);
     } catch (err) {
       console.error('Failed to fetch courses:', err.message);
+    }
+  };
+
+  // Fetch course offerings
+  const fetchCourseOfferings = async () => {
+    try {
+      const token = getAuthToken();
+      if (!token) {
+        console.warn('No token available for course offerings fetch');
+        return;
+      }
+
+      const offeringsData = await makeAuthenticatedRequest('http://localhost:3000/api/course-offerings');
+      setCourseOfferings(offeringsData || []);
+      console.log('Fetched course offerings:', offeringsData);
+    } catch (err) {
+      console.error('Failed to fetch course offerings:', err.message);
     }
   };
 
@@ -237,83 +275,6 @@ const DisplayAccount = () => {
       return [];
     }
   };
-
-  // Improved function to get current courses for a student
-  const getCurrentStudentCourses = async (student) => {
-    console.log('Getting current courses for student:', student.student_id);
-    
-    try {
-      // First try to get from API
-      const enrollments = await fetchStudentEnrollments(student.student_id);
-      
-      if (enrollments && enrollments.length > 0) {
-        // Return active enrollments
-        return enrollments
-          .filter(enrollment => 
-            ['enrolled', 'active', 'completed'].includes(enrollment.enrollment_status?.toLowerCase())
-          )
-          .map(enrollment => ({
-            course_id: enrollment.course_id,
-            course_code: enrollment.course_code,
-            course_name: enrollment.course_name,
-            enrollment_status: enrollment.enrollment_status,
-            batch_identifier: enrollment.batch_identifier
-          }));
-      }
-    } catch (error) {
-      console.warn('Failed to fetch enrollments from API, falling back to student data');
-    }
-    
-    // Fallback to student data parsing
-    let currentCourses = [];
-    
-    // Method 1: If student has enrolled_courses as a string
-    if (student.enrolled_courses && typeof student.enrolled_courses === 'string') {
-      const enrolledCourseStrings = student.enrolled_courses.split(',').map(c => c.trim());
-      console.log('Enrolled course strings:', enrolledCourseStrings);
-      
-      currentCourses = enrolledCourseStrings.map(courseStr => {
-        // Try to find matching course
-        let matchedCourse = courses.find(course => 
-          course.course_code?.toLowerCase() === courseStr.toLowerCase() ||
-          course.course_name?.toLowerCase().includes(courseStr.toLowerCase())
-        );
-        
-        if (matchedCourse) {
-          return {
-            course_id: matchedCourse.course_id,
-            course_code: matchedCourse.course_code,
-            course_name: matchedCourse.course_name
-          };
-        } else {
-          return { 
-            course_id: null, 
-            course_code: courseStr.toUpperCase(), 
-            course_name: courseStr 
-          };
-        }
-      });
-    }
-    // Method 2: If student has course_id
-    else if (student.course_id) {
-      const matchedCourse = courses.find(course => 
-        course.course_id === parseInt(student.course_id)
-      );
-      if (matchedCourse) {
-        currentCourses = [{
-          course_id: matchedCourse.course_id,
-          course_code: matchedCourse.course_code,
-          course_name: matchedCourse.course_name
-        }];
-      }
-    }
-    
-    console.log('Current courses found:', currentCourses);
-    return currentCourses;
-  };
-
-  // Fixed function to handle course application
-  
 
   // Function to handle course management
   const handleCourseManagement = async (studentId) => {
@@ -465,254 +426,160 @@ const DisplayAccount = () => {
     }
   };
 
-// Fixed function to submit course applications
-const submitCourseApplication = async () => {
-  if (selectedCourses.length === 0 || !selectedStudent) {
-    setApplicationError('Please select at least one course.');
-    return;
-  }
-
-  setApplicationLoading(true);
-  setApplicationError('');
-
-  try {
-    const studentId = selectedStudent.student_id; // Keep as string, don't parse as int
-
-    console.log('🚀 Submitting enrollments for student:', studentId);
-    console.log('📚 Selected courses:', selectedCourses);
-
-    const enrollmentResults = [];
-    const enrollmentErrors = [];
-
-    // Enroll in each selected course
-    for (const courseId of selectedCourses) {
-      try {
-        console.log(`📝 Enrolling in course ${courseId}...`);
-        
-        const response = await makeAuthenticatedRequest(
-          'http://localhost:3000/api/student/enroll-course',
-          {
-            method: 'POST',
-            body: JSON.stringify({
-              student_id: studentId,  // Keep as string
-              course_id: parseInt(courseId)  // Parse course_id as integer
-            })
-          }
-        );
-
-        enrollmentResults.push(response);
-        console.log('✅ Enrollment success:', response);
-        
-      } catch (error) {
-        console.error('❌ Enrollment error:', error);
-        
-        const course = courses.find(c => c.course_id === parseInt(courseId));
-        const courseName = course ? `${course.course_code} - ${course.course_name}` : `Course ID: ${courseId}`;
-        
-        // Extract meaningful error message
-        let errorMessage = error.message;
-        if (error.details && error.details.message) {
-          errorMessage = error.details.message;
-        } else if (typeof error.details === 'string') {
-          errorMessage = error.details;
-        }
-        
-        enrollmentErrors.push(`${courseName}: ${errorMessage}`);
-      }
-    }
-
-    // Close the modal
-    setShowCourseApplication(false);
-    setSelectedStudent(null);
-    setSelectedCourses([]);
-    
-    // Refresh the accounts data to show the new enrollments
-    await fetchAccounts();
-    
-    // Show results
-    let message = '';
-    if (enrollmentResults.length > 0) {
-      message += `✅ Successfully enrolled in ${enrollmentResults.length} course(s):\n`;
-      enrollmentResults.forEach(result => {
-        const courseName = result.enrollment?.course?.course_name || 
-                          result.enrollment?.course?.course_code || 
-                          'Unknown Course';
-        const batchInfo = result.enrollment?.offering?.batch_identifier || '';
-        message += `• ${courseName} ${batchInfo ? `(${batchInfo})` : ''}\n`;
-      });
-    }
-    
-    if (enrollmentErrors.length > 0) {
-      if (message) message += '\n';
-      message += `❌ Failed to enroll in ${enrollmentErrors.length} course(s):\n`;
-      enrollmentErrors.forEach(error => {
-        message += `• ${error}\n`;
-      });
-    }
-    
-    alert(message || 'Course applications submitted!');
-    
-  } catch (error) {
-    console.error('❌ Failed to submit course applications:', error);
-    setApplicationError(error.message || 'Failed to submit course applications. Please try again.');
-  } finally {
-    setApplicationLoading(false);
-  }
-};
-
-// Enhanced error handling for makeAuthenticatedRequest
-// const makeAuthenticatedRequest = async (url, options = {}) => {
-//   const token = getAuthToken();
-  
-//   if (!token) {
-//     throw new Error('No authentication token found. Please log in.');
-//   }
-
-//   const response = await fetch(url, {
-//     ...options,
-//     headers: {
-//       'Content-Type': 'application/json',
-//       'Authorization': `Bearer ${token}`,
-//       ...options.headers,
-//     },
-//   });
-
-//   if (!response.ok) {
-//     let errorMessage = `Server error: ${response.status} ${response.statusText}`;
-//     let errorDetails = null;
-    
-//     try {
-//       const errorData = await response.json();
-//       console.log('🔍 Server error response:', errorData);
-      
-//       if (errorData.message) {
-//         errorMessage = errorData.message;
-//       } else if (errorData.error) {
-//         errorMessage = errorData.error;
-//       }
-      
-//       errorDetails = errorData;
-//     } catch (parseError) {
-//       console.warn('Could not parse error response:', parseError);
-//     }
-
-//     if (response.status === 401) {
-//       throw new Error('Authentication failed. Please log in again.');
-//     } else if (response.status === 403) {
-//       throw new Error('Access denied. Insufficient permissions.');
-//     } else if (response.status === 404) {
-//       throw new Error(errorDetails?.error || 'Data not found.');
-//     } else if (response.status === 409) {
-//       const conflictError = new Error(errorMessage);
-//       conflictError.details = errorDetails;
-//       conflictError.status = 409;
-//       throw conflictError;
-//     } else {
-//       const serverError = new Error(errorMessage);
-//       serverError.details = errorDetails;
-//       serverError.status = response.status;
-//       throw serverError;
-//     }
-//   }
-
-//   return response.json();
-// };
-
-// Fixed function to get test data before enrolling
-const getTestData = async () => {
-  try {
-    const testData = await makeAuthenticatedRequest(
-      'http://localhost:3000/api/enrollment/test-data'
-    );
-    
-    console.log('📊 Test data from server:', testData);
-    
-    if (testData.data?.suggested_test_request) {
-      console.log('💡 Suggested test request:', testData.data.suggested_test_request);
-      
-      // You can use this to test enrollment:
-      // const testEnrollment = await makeAuthenticatedRequest(
-      //   'http://localhost:3000/api/student/enroll-course',
-      //   {
-      //     method: 'POST',
-      //     body: JSON.stringify(testData.data.suggested_test_request)
-      //   }
-      // );
-    }
-    
-    return testData;
-  } catch (error) {
-    console.error('Failed to get test data:', error);
-    throw error;
-  }
-};
-
-// Enhanced course application handler with better error handling
-const handleCourseApplication = async (studentId) => {
-  try {
-    const student = students.find(s => s.student_id === studentId);
-    if (!student) {
-      setApplicationError('Student not found.');
+  // Fixed function to submit course applications
+  const submitCourseApplication = async () => {
+    if (selectedCourses.length === 0 || !selectedStudent) {
+      setApplicationError('Please select at least one course.');
       return;
     }
 
-    console.log('🎯 Preparing course application for student:', student);
-
-    setSelectedStudent(student);
+    setApplicationLoading(true);
     setApplicationError('');
-    setSelectedCourses([]);
-    
-    // First, let's get test data to make sure our system is working
+
     try {
-      await getTestData();
-    } catch (testError) {
-      console.warn('Test data check failed:', testError);
-    }
-    
-    // Get current enrollments from API
-    const currentEnrollments = await fetchStudentEnrollments(studentId);
-    console.log('📚 Current enrollments:', currentEnrollments);
-    
-    // Extract enrolled course IDs
-    const enrolledCourseIds = new Set();
-    
-    if (currentEnrollments && currentEnrollments.length > 0) {
-      currentEnrollments.forEach(enrollment => {
-        if (['enrolled', 'active', 'completed'].includes(enrollment.enrollment_status?.toLowerCase())) {
-          if (enrollment.course_id) {
-            enrolledCourseIds.add(enrollment.course_id);
+      const studentId = selectedStudent.student_id;
+
+      console.log('🚀 Submitting enrollments for student:', studentId);
+      console.log('📚 Selected courses:', selectedCourses);
+
+      const enrollmentResults = [];
+      const enrollmentErrors = [];
+
+      // Enroll in each selected course
+      for (const courseId of selectedCourses) {
+        try {
+          console.log(`📝 Enrolling in course ${courseId}...`);
+          
+          const response = await makeAuthenticatedRequest(
+            'http://localhost:3000/api/student/enroll-course',
+            {
+              method: 'POST',
+              body: JSON.stringify({
+                student_id: studentId,
+                course_id: parseInt(courseId)
+              })
+            }
+          );
+
+          enrollmentResults.push(response);
+          console.log('✅ Enrollment success:', response);
+          
+        } catch (error) {
+          console.error('❌ Enrollment error:', error);
+          
+          const course = courses.find(c => c.course_id === parseInt(courseId));
+          const courseName = course ? `${course.course_code} - ${course.course_name}` : `Course ID: ${courseId}`;
+          
+          // Extract meaningful error message
+          let errorMessage = error.message;
+          if (error.details && error.details.message) {
+            errorMessage = error.details.message;
+          } else if (typeof error.details === 'string') {
+            errorMessage = error.details;
           }
+          
+          enrollmentErrors.push(`${courseName}: ${errorMessage}`);
         }
-      });
-    }
-    
-    console.log('🔒 Already enrolled in course IDs:', Array.from(enrolledCourseIds));
-    
-    // Filter out already enrolled courses
-    const available = courses.filter(course => {
-      const isEnrolled = enrolledCourseIds.has(course.course_id);
-      console.log(`📋 Course ${course.course_code} (ID: ${course.course_id}) - Enrolled: ${isEnrolled}`);
-      return !isEnrolled;
-    });
-    
-    console.log('✅ Available courses for enrollment:', available.length);
-    
-    if (available.length === 0) {
-      if (courses.length === 0) {
-        setApplicationError('No courses are currently available in the system.');
-      } else {
-        setApplicationError('This student is already enrolled in all available courses.');
       }
+
+      // Close the modal
+      setShowCourseApplication(false);
+      setSelectedStudent(null);
+      setSelectedCourses([]);
+      
+      // Refresh the accounts data to show the new enrollments
+      await fetchAccounts();
+      
+      // Show results
+      let message = '';
+      if (enrollmentResults.length > 0) {
+        message += `✅ Successfully enrolled in ${enrollmentResults.length} course(s):\n`;
+        enrollmentResults.forEach(result => {
+          const courseName = result.enrollment?.course?.course_name || 
+                            result.enrollment?.course?.course_code || 
+                            'Unknown Course';
+          const batchInfo = result.enrollment?.offering?.batch_identifier || '';
+          message += `• ${courseName} ${batchInfo ? `(${batchInfo})` : ''}\n`;
+        });
+      }
+      
+      if (enrollmentErrors.length > 0) {
+        if (message) message += '\n';
+        message += `❌ Failed to enroll in ${enrollmentErrors.length} course(s):\n`;
+        enrollmentErrors.forEach(error => {
+          message += `• ${error}\n`;
+        });
+      }
+      
+      alert(message || 'Course applications submitted!');
+      
+    } catch (error) {
+      console.error('❌ Failed to submit course applications:', error);
+      setApplicationError(error.message || 'Failed to submit course applications. Please try again.');
+    } finally {
+      setApplicationLoading(false);
     }
-    
-    setAvailableCourses(available);
-    setShowCourseApplication(true);
-    
-  } catch (error) {
-    console.error('❌ Error preparing course application:', error);
-    setApplicationError('Failed to prepare course application: ' + error.message);
-  }
-};
+  };
+
+  // Enhanced course application handler with better error handling
+  const handleCourseApplication = async (studentId) => {
+    try {
+      const student = students.find(s => s.student_id === studentId);
+      if (!student) {
+        setApplicationError('Student not found.');
+        return;
+      }
+
+      console.log('🎯 Preparing course application for student:', student);
+
+      setSelectedStudent(student);
+      setApplicationError('');
+      setSelectedCourses([]);
+      
+      // Get current enrollments from API
+      const currentEnrollments = await fetchStudentEnrollments(studentId);
+      console.log('📚 Current enrollments:', currentEnrollments);
+      
+      // Extract enrolled course IDs
+      const enrolledCourseIds = new Set();
+      
+      if (currentEnrollments && currentEnrollments.length > 0) {
+        currentEnrollments.forEach(enrollment => {
+          if (['enrolled', 'active', 'completed'].includes(enrollment.enrollment_status?.toLowerCase())) {
+            if (enrollment.course_id) {
+              enrolledCourseIds.add(enrollment.course_id);
+            }
+          }
+        });
+      }
+      
+      console.log('🔒 Already enrolled in course IDs:', Array.from(enrolledCourseIds));
+      
+      // Filter out already enrolled courses
+      const available = courses.filter(course => {
+        const isEnrolled = enrolledCourseIds.has(course.course_id);
+        console.log(`📋 Course ${course.course_code} (ID: ${course.course_id}) - Enrolled: ${isEnrolled}`);
+        return !isEnrolled;
+      });
+      
+      console.log('✅ Available courses for enrollment:', available.length);
+      
+      if (available.length === 0) {
+        if (courses.length === 0) {
+          setApplicationError('No courses are currently available in the system.');
+        } else {
+          setApplicationError('This student is already enrolled in all available courses.');
+        }
+      }
+      
+      setAvailableCourses(available);
+      setShowCourseApplication(true);
+      
+    } catch (error) {
+      console.error('❌ Error preparing course application:', error);
+      setApplicationError('Failed to prepare course application: ' + error.message);
+    }
+  };
 
   // Handle course selection for multiple courses
   const handleCourseSelectionToggle = (courseId) => {
@@ -742,9 +609,30 @@ const handleCourseApplication = async (studentId) => {
     })).sort((a, b) => a.display.localeCompare(b.display));
   }, [courses]);
 
+  // Fixed batch filter to use student batch identifiers
   const uniqueBatches = useMemo(() => {
-    return getUniqueValues(students, 'batch_year');
-  }, [students]);
+    // Get batch identifiers from student data
+    const studentBatchIdentifiers = students
+      .map(student => student.batch_identifiers)
+      .filter(Boolean)
+      .flatMap(batchStr => batchStr.split(',').map(b => b.trim()))
+      .filter(Boolean);
+    
+    // Also get from course offerings as backup
+    const courseOfferingBatches = courseOfferings
+      .map(offering => offering.batch_identifier)
+      .filter(Boolean);
+    
+    // Also include batch years from students if available
+    const studentBatchYears = students
+      .map(student => student.batch_year)
+      .filter(Boolean)
+      .map(year => year.toString());
+    
+    // Combine all sources and remove duplicates
+    const allBatches = [...studentBatchIdentifiers, ...courseOfferingBatches, ...studentBatchYears];
+    return [...new Set(allBatches)].sort();
+  }, [students, courseOfferings]);
 
   const uniqueStatuses = useMemo(() => {
     return getUniqueValues(students, 'graduation_status');
@@ -754,7 +642,7 @@ const handleCourseApplication = async (studentId) => {
     return getUniqueValues(staff, 'role_name');
   }, [staff]);
 
-  // Updated filter logic for courses
+  // Updated filter logic for courses and batches
   const filteredStudents = useMemo(() => {
     return students.filter(student => {
       const fullName = `${student.first_name || ''} ${student.last_name || ''}`.toLowerCase();
@@ -788,15 +676,59 @@ const handleCourseApplication = async (studentId) => {
         return false;
       })();
       
-      const matchesBatch = !filters.batch || 
-        (student.batch_year && student.batch_year.toString() === filters.batch);
+      // Fixed batch matching logic
+      const matchesBatch = !filters.batch || (() => {
+        console.log('Filtering student:', student.student_id, 'for batch:', filters.batch);
+        
+        // Method 1: Check batch_identifiers field from student enrollments
+        if (student.batch_identifiers) {
+          const studentBatches = student.batch_identifiers.split(',').map(b => b.trim());
+          const hasMatch = studentBatches.includes(filters.batch);
+          if (hasMatch) {
+            console.log('✅ Match via batch_identifiers:', student.batch_identifiers);
+            return true;
+          }
+        }
+        
+        // Method 2: Check direct batch_identifier field
+        if (student.batch_identifier && student.batch_identifier === filters.batch) {
+          console.log('✅ Match via batch_identifier:', student.batch_identifier);
+          return true;
+        }
+        
+        // Method 3: Check batch_year field (convert to string for comparison)
+        if (student.batch_year && student.batch_year.toString() === filters.batch) {
+          console.log('✅ Match via batch_year:', student.batch_year);
+          return true;
+        }
+        
+        // Method 4: Check other possible batch fields
+        const studentFields = [
+          student.batch,
+          student.batch_id,
+          student.current_batch,
+          student.enrollment_batch,
+          student.cohort_identifier,
+          student.class_identifier
+        ];
+        
+        for (const field of studentFields) {
+          if (field && field.toString() === filters.batch) {
+            console.log('✅ Match via student field:', field);
+            return true;
+          }
+        }
+        
+        console.log('❌ No batch match found for student:', student.student_id);
+        return false;
+      })();
       
       const matchesStatus = !filters.status || 
         (student.graduation_status && student.graduation_status.toLowerCase() === filters.status.toLowerCase());
 
       return matchesName && matchesCourse && matchesBatch && matchesStatus;
     });
-  }, [students, filters, courses]);
+  }, [students, filters, courses, courseOfferings]);
 
   const filteredStaff = useMemo(() => {
     return staff.filter(member => {
@@ -964,6 +896,7 @@ const handleCourseApplication = async (studentId) => {
                 <p><strong>Name:</strong> {selectedStudent.first_name} {selectedStudent.last_name}</p>
                 <p><strong>Student ID:</strong> {selectedStudent.student_id}</p>
                 <p><strong>Current Courses:</strong> {getStudentCoursesDisplay(selectedStudent)}</p>
+                <p><strong>Batch:</strong> {selectedStudent.batch_identifiers || selectedStudent.batch_identifier || selectedStudent.batch_year || 'N/A'}</p>
               </div>
 
               <div style={styles.courseSelection}>
@@ -1098,6 +1031,7 @@ const handleCourseApplication = async (studentId) => {
                 <p><strong>Name:</strong> {selectedStudent.first_name} {selectedStudent.last_name}</p>
                 <p><strong>Student ID:</strong> {selectedStudent.student_id}</p>
                 <p><strong>Email:</strong> {selectedStudent.email}</p>
+                <p><strong>Batch:</strong> {selectedStudent.batch_identifiers || selectedStudent.batch_identifier || selectedStudent.batch_year || 'N/A'}</p>
               </div>
 
               <div style={styles.courseSelection}>
@@ -1218,7 +1152,6 @@ const handleCourseApplication = async (studentId) => {
       minHeight: '100vh',
       fontFamily: 'Arial, sans-serif'
     },
-
     header: {
       backgroundColor: '#ffffff',
       borderRadius: '12px',
@@ -1227,7 +1160,6 @@ const handleCourseApplication = async (studentId) => {
       border: '1px solid #e2e8f0',
       boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
     },
-
     title: {
       fontSize: '32px',
       fontWeight: 'bold',
@@ -1235,14 +1167,11 @@ const handleCourseApplication = async (studentId) => {
       margin: 0,
       marginBottom: '8px'
     },
-
     subtitle: {
       fontSize: '16px',
       color: colors.lightGreen,
       margin: 0
     },
-
-    // Updated Filter Section to match PendingPayment.jsx design
     filterSection: {
       backgroundColor: '#ffffff',
       borderRadius: '12px',
@@ -1250,7 +1179,6 @@ const handleCourseApplication = async (studentId) => {
       marginBottom: '24px',
       boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
     },
-
     filterTitle: {
       fontSize: '20px',
       fontWeight: 'bold',
@@ -1260,27 +1188,23 @@ const handleCourseApplication = async (studentId) => {
       alignItems: 'center',
       gap: '8px'
     },
-
     filterGrid: {
       display: 'grid',
       gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
       gap: '20px',
       alignItems: 'end'
     },
-
     filterGroup: {
       display: 'flex',
       flexDirection: 'column',
       gap: '8px'
     },
-
     filterLabel: {
       fontSize: '14px',
       fontWeight: '500',
       color: '#4a5568',
       marginBottom: '4px'
     },
-
     filterInput: {
       padding: '12px 16px',
       border: '1px solid #e2e8f0',
@@ -1290,7 +1214,6 @@ const handleCourseApplication = async (studentId) => {
       transition: 'border-color 0.2s',
       width: '100%'
     },
-
     filterSelect: {
       padding: '12px 16px',
       border: '1px solid #e2e8f0',
@@ -1302,7 +1225,6 @@ const handleCourseApplication = async (studentId) => {
       transition: 'border-color 0.2s',
       width: '100%'
     },
-
     filterActions: {
       display: 'flex',
       gap: '12px',
@@ -1310,7 +1232,6 @@ const handleCourseApplication = async (studentId) => {
       marginTop: '20px',
       flexWrap: 'wrap'
     },
-
     clearButton: {
       padding: '12px 24px',
       backgroundColor: '#e53e3e',
@@ -1322,7 +1243,6 @@ const handleCourseApplication = async (studentId) => {
       cursor: 'pointer',
       transition: 'background-color 0.2s'
     },
-
     refreshButton: {
       padding: '12px 24px',
       backgroundColor: colors.lightGreen,
@@ -1337,8 +1257,6 @@ const handleCourseApplication = async (studentId) => {
       gap: '8px',
       transition: 'background-color 0.2s'
     },
-
-    // Tab Container
     tabContainer: {
       backgroundColor: '#ffffff',
       borderRadius: '12px',
@@ -1346,12 +1264,10 @@ const handleCourseApplication = async (studentId) => {
       border: '1px solid #e2e8f0',
       overflow: 'hidden'
     },
-
     tabHeader: {
       display: 'flex',
       backgroundColor: colors.lightGreen,
     },
-
     tab: {
       flex: 1,
       padding: '16px 24px',
@@ -1366,29 +1282,23 @@ const handleCourseApplication = async (studentId) => {
       justifyContent: 'center',
       gap: '8px'
     },
-
     activeTab: {
       backgroundColor: colors.darkGreen,
       color: '#ffffff',
     },
-
     inactiveTab: {
       backgroundColor: colors.lightGreen,
       color: '#ffffff',
       opacity: 0.8
     },
-
     tabContent: {
       padding: '20px'
     },
-
-    // Account Grid
     accountsGrid: {
       display: 'grid',
       gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))',
       gap: '20px'
     },
-
     accountCard: {
       backgroundColor: '#f8f9fa',
       border: '1px solid #dee2e6',
@@ -1397,62 +1307,51 @@ const handleCourseApplication = async (studentId) => {
       transition: 'transform 0.2s ease, box-shadow 0.2s ease',
       cursor: 'pointer',
     },
-
     accountCardHover: {
       transform: 'translateY(-2px)',
       boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
     },
-
     accountHeader: {
       display: 'flex',
       justifyContent: 'space-between',
       alignItems: 'center',
       marginBottom: '15px',
     },
-
     accountName: {
       fontSize: '18px',
       fontWeight: 'bold',
       color: colors.darkGreen,
       margin: 0,
     },
-
     accountId: {
       fontSize: '12px',
       color: colors.olive,
       fontFamily: 'monospace',
     },
-
     accountInfo: {
       display: 'flex',
       flexDirection: 'column',
       gap: '8px',
     },
-
     infoRow: {
       display: 'flex',
       justifyContent: 'space-between',
       alignItems: 'center',
     },
-
     infoLabel: {
       fontWeight: 'bold',
       color: colors.black,
       fontSize: '14px',
     },
-
     infoValue: {
       color: colors.olive,
       fontSize: '14px',
     },
-
-    // Updated button styles for multiple buttons
     buttonContainer: {
       display: 'flex',
       gap: '8px',
       marginTop: '15px',
     },
-
     viewMoreButton: {
       backgroundColor: colors.lightGreen,
       color: 'white',
@@ -1464,7 +1363,6 @@ const handleCourseApplication = async (studentId) => {
       transition: 'background-color 0.2s ease',
       flex: 1,
     },
-
     applyCourseButton: {
       backgroundColor: colors.coral,
       color: 'white',
@@ -1480,8 +1378,6 @@ const handleCourseApplication = async (studentId) => {
       justifyContent: 'center',
       gap: '4px',
     },
-
-    // New button for course management
     manageCourseButton: {
       backgroundColor: colors.olive,
       color: 'white',
@@ -1497,8 +1393,6 @@ const handleCourseApplication = async (studentId) => {
       justifyContent: 'center',
       gap: '4px',
     },
-
-    // Error and Loading States
     error: {
       backgroundColor: '#ffffff',
       borderRadius: '12px',
@@ -1509,12 +1403,10 @@ const handleCourseApplication = async (studentId) => {
       alignItems: 'center',
       gap: '12px'
     },
-
     errorText: {
       color: colors.red,
       margin: 0
     },
-
     warning: {
       backgroundColor: '#fff3cd',
       borderRadius: '12px',
@@ -1523,7 +1415,6 @@ const handleCourseApplication = async (studentId) => {
       border: '1px solid #ffeaa7',
       color: '#856404'
     },
-
     loading: {
       display: 'flex',
       justifyContent: 'center',
@@ -1533,7 +1424,6 @@ const handleCourseApplication = async (studentId) => {
       borderRadius: '12px',
       marginTop: '24px'
     },
-
     emptyState: {
       textAlign: 'center',
       padding: '40px',
@@ -1543,7 +1433,6 @@ const handleCourseApplication = async (studentId) => {
       borderRadius: '12px',
       border: '1px solid #e2e8f0'
     },
-
     sectionTitle: {
       fontSize: '24px',
       fontWeight: 'bold',
@@ -1553,7 +1442,6 @@ const handleCourseApplication = async (studentId) => {
       alignItems: 'center',
       gap: '12px'
     },
-
     count: {
       backgroundColor: colors.darkGreen,
       color: 'white',
@@ -1562,8 +1450,6 @@ const handleCourseApplication = async (studentId) => {
       fontSize: '14px',
       fontWeight: '500'
     },
-
-    // Modal styles
     modalOverlay: {
       position: 'fixed',
       top: 0,
@@ -1669,36 +1555,29 @@ const handleCourseApplication = async (studentId) => {
       border: '1px solid #dee2e6',
       margin: 0,
     },
-
-    // Course Application Modal Styles
     courseApplicationContainer: {
       display: 'flex',
       flexDirection: 'column',
       gap: '20px',
     },
-
     studentInfo: {
       backgroundColor: '#f8f9fa',
       padding: '16px',
       borderRadius: '8px',
       border: '1px solid #e9ecef',
     },
-
     courseSelection: {
       backgroundColor: '#ffffff',
       padding: '16px',
       borderRadius: '8px',
       border: '1px solid #e9ecef',
     },
-
-    // Course grid for multiple selection
     courseGrid: {
       display: 'grid',
       gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
       gap: '12px',
       marginBottom: '16px',
     },
-
     courseCard: {
       border: '2px solid #e5e7eb',
       borderRadius: '8px',
@@ -1707,40 +1586,33 @@ const handleCourseApplication = async (studentId) => {
       transition: 'all 0.2s ease',
       backgroundColor: '#fff',
     },
-
     courseCardSelected: {
       border: '2px solid #4F46E5',
       backgroundColor: '#EEF2FF',
     },
-
     courseCardHeader: {
       display: 'flex',
       alignItems: 'flex-start',
       gap: '8px',
       marginBottom: '8px',
     },
-
     courseCheckbox: {
       marginTop: '2px',
     },
-
     courseInfo: {
       flex: 1,
     },
-
     courseTitle: {
       fontWeight: 'bold',
       color: colors.black,
       fontSize: '14px',
       marginBottom: '4px',
     },
-
     courseDescription: {
       fontSize: '12px',
       color: colors.olive,
       lineHeight: '1.4',
     },
-
     selectedCoursesInfo: {
       marginTop: '12px',
       padding: '12px',
@@ -1748,14 +1620,12 @@ const handleCourseApplication = async (studentId) => {
       borderRadius: '6px',
       border: '1px solid #4F46E5',
     },
-
     noCourses: {
       color: colors.olive,
       fontStyle: 'italic',
       textAlign: 'center',
       padding: '20px',
     },
-
     errorMessage: {
       backgroundColor: '#f8d7da',
       color: '#721c24',
@@ -1763,7 +1633,6 @@ const handleCourseApplication = async (studentId) => {
       borderRadius: '6px',
       border: '1px solid #f5c6cb',
     },
-
     modalActions: {
       display: 'flex',
       gap: '12px',
@@ -1771,7 +1640,6 @@ const handleCourseApplication = async (studentId) => {
       paddingTop: '16px',
       borderTop: '1px solid #e9ecef',
     },
-
     cancelButton: {
       padding: '10px 20px',
       backgroundColor: '#6c757d',
@@ -1782,7 +1650,6 @@ const handleCourseApplication = async (studentId) => {
       fontSize: '14px',
       transition: 'background-color 0.2s ease',
     },
-
     submitButton: {
       padding: '10px 20px',
       backgroundColor: colors.darkGreen,
@@ -1796,14 +1663,11 @@ const handleCourseApplication = async (studentId) => {
       alignItems: 'center',
       gap: '4px',
     },
-
-    // Course Management Modal Styles
     enrollmentsList: {
       display: 'flex',
       flexDirection: 'column',
       gap: '12px',
     },
-
     enrollmentCard: {
       border: '1px solid #e9ecef',
       borderRadius: '8px',
@@ -1813,11 +1677,9 @@ const handleCourseApplication = async (studentId) => {
       justifyContent: 'space-between',
       alignItems: 'flex-start',
     },
-
     enrollmentInfo: {
       flex: 1,
     },
-
     enrollmentDetails: {
       display: 'flex',
       flexWrap: 'wrap',
@@ -1825,7 +1687,6 @@ const handleCourseApplication = async (studentId) => {
       marginTop: '8px',
       marginBottom: '8px',
     },
-
     enrollmentBadge: {
       backgroundColor: colors.lightGreen,
       color: 'white',
@@ -1834,22 +1695,18 @@ const handleCourseApplication = async (studentId) => {
       fontSize: '11px',
       fontWeight: 'bold',
     },
-
     enrollmentDetail: {
       fontSize: '12px',
       color: colors.olive,
     },
-
     progressBar: {
       marginTop: '8px',
     },
-
     progressLabel: {
       fontSize: '12px',
       color: colors.olive,
       marginBottom: '4px',
     },
-
     progressTrack: {
       width: '100%',
       height: '8px',
@@ -1857,20 +1714,17 @@ const handleCourseApplication = async (studentId) => {
       borderRadius: '4px',
       overflow: 'hidden',
     },
-
     progressFill: {
       height: '100%',
       backgroundColor: colors.darkGreen,
       transition: 'width 0.3s ease',
     },
-
     enrollmentActions: {
       display: 'flex',
       flexDirection: 'column',
       gap: '8px',
       marginLeft: '16px',
     },
-
     withdrawButton: {
       padding: '6px 12px',
       backgroundColor: colors.red,
@@ -1884,7 +1738,6 @@ const handleCourseApplication = async (studentId) => {
       alignItems: 'center',
       gap: '4px',
     },
-
     loadingContainer: {
       padding: '20px',
       textAlign: 'center',
@@ -1929,12 +1782,6 @@ const handleCourseApplication = async (studentId) => {
       </div>
     );
   }
-
-  const currentData = activeTab === 'students' ? filteredStudents : filteredStaff;
-  const totalStudents = students.length;
-  const totalStaff = staff.length;
-  const activeStudents = students.filter(s => s.graduation_status?.toLowerCase() === 'enrolled').length;
-  const graduatedStudents = students.filter(s => s.graduation_status?.toLowerCase() === 'graduated').length;
 
   return (
     <div style={styles.container}>
@@ -1987,7 +1834,7 @@ const handleCourseApplication = async (studentId) => {
               </div>
               
               <div style={styles.filterGroup}>
-                <label style={styles.filterLabel}>Batch Year</label>
+                <label style={styles.filterLabel}>Batch</label>
                 <select
                   value={filters.batch}
                   onChange={(e) => handleFilterChange('batch', e.target.value)}
@@ -2146,6 +1993,13 @@ const handleCourseApplication = async (studentId) => {
                           {student.current_trading_level || 'Not assigned'}
                         </span>
                       </div>
+
+                      <div style={styles.infoRow}>
+                        <span style={styles.infoLabel}>Batch:</span>
+                        <span style={styles.infoValue}>
+                          {student.batch_identifiers || student.batch_identifier || student.batch_year || 'N/A'}
+                        </span>
+                      </div>
                       
                       <div style={styles.infoRow}>
                         <span style={styles.infoLabel}>Registered:</span>
@@ -2155,7 +2009,6 @@ const handleCourseApplication = async (studentId) => {
                       </div>
                     </div>
 
-                    {/* Updated button container with three buttons */}
                     <div style={styles.buttonContainer}>
                       <button
                         style={styles.viewMoreButton}

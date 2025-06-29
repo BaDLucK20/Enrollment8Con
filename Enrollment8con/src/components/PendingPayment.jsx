@@ -49,20 +49,72 @@ const updatePaymentStatus = async (
   rejectionReason = ""
 ) => {
   try {
-    const response = await fetch(
+    const formattedNotes = rejectionReason
+      ? `${rejectionReason}: ${notes}`
+      : notes;
+
+    console.log('Sending payment update request:', {
+      paymentId,
+      status,
+      notes: formattedNotes
+    });
+
+    // Try main endpoint first
+    let response = await fetch(
       `${API_BASE_URL}/payments/${paymentId}/status`,
       {
         method: "PUT",
-        headers: getAuthHeaders(),
+        headers: {
+          "Content-Type": "application/json",
+          ...getAuthHeaders(),
+        },
         body: JSON.stringify({
           status,
-          notes: rejectionReason ? `${rejectionReason}: ${notes}` : notes,
+          notes: formattedNotes,
         }),
       }
     );
 
-    if (!response.ok) throw new Error("Failed to update payment status");
-    return await response.json();
+    // If main endpoint fails, try backup endpoint
+    if (!response.ok) {
+      console.log('Main endpoint failed, trying backup endpoint...');
+      
+      response = await fetch(
+        `${API_BASE_URL}/payments/${paymentId}/status-simple`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            ...getAuthHeaders(),
+          },
+          body: JSON.stringify({
+            status,
+            notes: formattedNotes,
+          }),
+        }
+      );
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      let errorMessage;
+      
+      try {
+        const errorJson = JSON.parse(errorText);
+        errorMessage = errorJson.message || errorJson.error || errorText;
+      } catch {
+        errorMessage = errorText;
+      }
+
+      throw new Error(
+        `Failed to update payment status (HTTP ${response.status}): ${errorMessage}`
+      );
+    }
+
+    const result = await response.json();
+    console.log('Payment update successful:', result);
+    return result;
+
   } catch (error) {
     console.error("Error updating payment status:", error);
     throw error;
@@ -462,6 +514,16 @@ const styles = {
     alignItems: "center",
     gap: "8px",
   },
+  successMessage: {
+    backgroundColor: "#c6f6d5",
+    color: "#22543d",
+    padding: "12px 16px",
+    borderRadius: "8px",
+    marginBottom: "16px",
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+  },
 };
 
 const REJECTION_REASONS = [
@@ -486,6 +548,7 @@ const PendingPayments = ({ onPaymentProcessed }) => {
   const [hoveredButton, setHoveredButton] = useState(null);
   const [isMobile, setIsMobile] = useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
 
   // Rejection modal states
   const [showRejectModal, setShowRejectModal] = useState(false);
@@ -511,6 +574,21 @@ const PendingPayments = ({ onPaymentProcessed }) => {
 
     return () => window.removeEventListener("resize", checkMobile);
   }, []);
+
+  // Clear success and error messages after 5 seconds
+  useEffect(() => {
+    if (success) {
+      const timer = setTimeout(() => setSuccess(""), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [success]);
+
+  useEffect(() => {
+    if (error) {
+      const timer = setTimeout(() => setError(""), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [error]);
 
   // Filter and sort payments whenever filters change
   useEffect(() => {
@@ -606,14 +684,37 @@ const PendingPayments = ({ onPaymentProcessed }) => {
     }
 
     setProcessing(paymentId);
+    setError("");
+    setSuccess("");
+
     try {
-      const status = action === "approved" ? "confirmed" : action;
+      // Map frontend actions to backend statuses
+      let status;
+      if (action === "approved") {
+        status = "completed"; // Use 'completed' instead of 'confirmed'
+      } else {
+        status = action;
+      }
+
+      console.log('Processing payment action:', { paymentId, action, status });
+
       await updatePaymentStatus(paymentId, status);
 
+      // Remove payment from the pending list
       setPayments((prev) => prev.filter((p) => p.payment_id !== paymentId));
       setSelectedPayment(null);
-      onPaymentProcessed && onPaymentProcessed(paymentId, action);
+      
+      // Show success message
+      const actionText = action === "approved" ? "approved" : action;
+      setSuccess(`Payment ${paymentId} has been ${actionText} successfully!`);
+
+      // Call callback if provided
+      if (onPaymentProcessed) {
+        onPaymentProcessed(paymentId, action);
+      }
+
     } catch (error) {
+      console.error(`Error ${action}ing payment:`, error);
       setError(`Failed to ${action} payment. Please try again.`);
     } finally {
       setProcessing(null);
@@ -627,7 +728,16 @@ const PendingPayments = ({ onPaymentProcessed }) => {
     }
 
     setProcessing(paymentToReject);
+    setError("");
+    setSuccess("");
+
     try {
+      console.log('Rejecting payment:', { 
+        paymentId: paymentToReject, 
+        reason: rejectionReason, 
+        notes: rejectionNotes 
+      });
+
       await updatePaymentStatus(
         paymentToReject,
         "failed",
@@ -635,16 +745,28 @@ const PendingPayments = ({ onPaymentProcessed }) => {
         rejectionReason
       );
 
+      // Remove payment from the pending list
       setPayments((prev) =>
         prev.filter((p) => p.payment_id !== paymentToReject)
       );
+      
+      // Close modals and reset state
       setShowRejectModal(false);
       setSelectedPayment(null);
       setPaymentToReject(null);
       setRejectionReason("");
       setRejectionNotes("");
-      onPaymentProcessed && onPaymentProcessed(paymentToReject, "failed");
+      
+      // Show success message
+      setSuccess(`Payment ${paymentToReject} has been rejected successfully!`);
+
+      // Call callback if provided
+      if (onPaymentProcessed) {
+        onPaymentProcessed(paymentToReject, "failed");
+      }
+
     } catch (error) {
+      console.error("Error rejecting payment:", error);
       setError("Failed to reject payment. Please try again.");
     } finally {
       setProcessing(null);
@@ -809,6 +931,14 @@ const PendingPayments = ({ onPaymentProcessed }) => {
         <div style={styles.errorMessage}>
           <AlertCircle style={styles.icon} />
           {error}
+        </div>
+      )}
+
+      {/* Success Message */}
+      {success && (
+        <div style={styles.successMessage}>
+          <Check style={styles.icon} />
+          {success}
         </div>
       )}
 

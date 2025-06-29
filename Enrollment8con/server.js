@@ -19,53 +19,63 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET =
   process.env.JWT_SECRET || crypto.randomBytes(64).toString("hex");
+const dashboardCache = new Map();
+const CACHE_DURATION = 5 * 60 * 1000;
 
 // ============================================================================
 // MIDDLEWARE CONFIGURATION
 // ============================================================================
-app.use(
-  cors({
-    origin: [
-      "http://localhost:5173",
-      "https://atecon.netlify.app",
-      "http://localhost:5174",
-      "https://8con.netlify.app",
-      "http://localhost:3000",
-    ],
+app.use(cors({
+    origin: ['http://localhost:5173','https://atecon.netlify.app','http://localhost:5174','https://8con.netlify.app', 'http://localhost:3000'],
     credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
 // Security middleware
-app.use(
-  helmet({
-    contentSecurityPolicy: {
-      directives: {
-        defaultSrc: ["'self'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
-        scriptSrc: ["'self'"],
-        imgSrc: ["'self'", "data:", "https:"],
-      },
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "https:"],
     },
-  })
-);
+  },
+}));
 
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
-  message: "Too many requests from this IP, please try again later.",
+  message: 'Too many requests from this IP, please try again later.',
 });
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
-  message: "Too many login attempts, please try again later.",
+  message: 'Too many login attempts, please try again later.',
 });
 
 app.use(limiter);
+
+// Core middleware
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.static('public'));
+app.use('/uploads', express.static('uploads'));
+
+// Database connection pool
+const pool = mysql.createPool({
+ host: process.env.DB_HOST || 'localhost',
+  user: process.env.DB_USER || 'root',
+  password: process.env.DB_PASSWORD || '', 
+  database: process.env.DB_NAME || '8cons',
+  waitForConnections: true,
+  connectionLimit: parseInt(process.env.DB_CONNECTION_LIMIT) || 10,
+  queueLimit: 0
+});
+
 
 // Core middleware
 app.use(express.json({ limit: "10mb" }));
@@ -73,20 +83,91 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(express.static("public"));
 app.use("/uploads", express.static("uploads"));
 
-// Database connection pool
-const pool = mysql.createPool({
-  host: process.env.DB_HOST || "localhost",
-  user: process.env.DB_USER || "root",
-  password: process.env.DB_PASSWORD || "",
-  database: process.env.DB_NAME_EDGE || process.env.DB_NAME || "8cons",
-  port: process.env.DB_PORT || 3306,
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
-  acquireTimeout: 60000,
-  timeout: 60000,
-  reconnect: true,
-});
+
+// ============================================================================
+// ENHANCED DASHBOARD PROCEDURES
+// ============================================================================
+async function createDashboardProcedures() {
+  const connection = await pool.getConnection();
+
+  try {
+    // Create comprehensive dashboard data procedure
+    await connection.query(`
+      CREATE PROCEDURE IF NOT EXISTS sp_get_dashboard_kpi_data()
+      BEGIN
+        -- KPI Metrics
+        SELECT 
+          (SELECT COUNT(*) FROM students WHERE graduation_status != 'expelled') as total_enrollees,
+          (SELECT SUM(payment_amount) FROM payments WHERE payment_status = 'confirmed') as total_revenue,
+          (SELECT COUNT(*) FROM students WHERE graduation_status = 'graduated') as total_graduates,
+          (SELECT SUM(payment_amount) FROM payments WHERE payment_status = 'pending') as pending_receivables;
+        
+        -- Revenue Analysis (Monthly)
+        SELECT 
+          MONTHNAME(p.payment_date) as month,
+          SUM(CASE WHEN p.payment_status = 'confirmed' THEN p.payment_amount ELSE 0 END) as payment_received,
+          SUM(CASE WHEN p.payment_status = 'pending' THEN p.payment_amount ELSE 0 END) as accounts_receivable
+        FROM payments p
+        WHERE p.payment_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+        GROUP BY YEAR(p.payment_date), MONTH(p.payment_date), MONTHNAME(p.payment_date)
+        ORDER BY YEAR(p.payment_date), MONTH(p.payment_date);
+        
+        -- Status Distribution
+        SELECT 
+          CASE 
+            WHEN tl.level_name = 'Beginner' THEN 'Basic'
+            WHEN tl.level_name = 'Intermediate' THEN 'Common' 
+            WHEN tl.level_name = 'Advanced' THEN 'Core'
+            ELSE 'Basic'
+          END as name,
+          COUNT(*) as value
+        FROM students s
+        LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
+        LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
+        WHERE s.graduation_status != 'expelled'
+        GROUP BY CASE 
+          WHEN tl.level_name = 'Beginner' THEN 'Basic'
+          WHEN tl.level_name = 'Intermediate' THEN 'Common' 
+          WHEN tl.level_name = 'Advanced' THEN 'Core'
+          ELSE 'Basic'
+        END;
+        
+        -- Monthly Enrollment Trend
+        SELECT 
+          MONTHNAME(s.registration_date) as month,
+          COUNT(*) as enrollees
+        FROM students s
+        WHERE s.registration_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+        GROUP BY YEAR(s.registration_date), MONTH(s.registration_date), MONTHNAME(s.registration_date)
+        ORDER BY YEAR(s.registration_date), MONTH(s.registration_date);
+        
+        -- Batch Performance Data
+        SELECT 
+          co.batch_identifier as batch,
+          COUNT(DISTINCT se.student_id) as enrollees,
+          COUNT(DISTINCT CASE WHEN s.graduation_status = 'graduated' THEN s.student_id END) as graduates,
+          COUNT(DISTINCT CASE WHEN tl.level_name = 'Beginner' THEN s.student_id END) as basic,
+          COUNT(DISTINCT CASE WHEN tl.level_name = 'Intermediate' THEN s.student_id END) as common,
+          COUNT(DISTINCT CASE WHEN tl.level_name = 'Advanced' THEN s.student_id END) as core
+        FROM course_offerings co
+        LEFT JOIN student_enrollments se ON co.offering_id = se.offering_id
+        LEFT JOIN students s ON se.student_id = s.student_id
+        LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
+        LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
+        WHERE co.start_date >= DATE_SUB(CURDATE(), INTERVAL 2 YEAR)
+        GROUP BY co.offering_id, co.batch_identifier
+        ORDER BY co.start_date DESC;
+      END
+    `);
+
+    console.log("✅ Dashboard KPI procedures created successfully");
+  } catch (error) {
+    console.error("❌ Failed to create dashboard procedures:", error);
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
 
 // ============================================================================
 // DATABASE INITIALIZATION - SYNC IDs AND CREATE PROCEDURES
@@ -255,6 +336,7 @@ async function initializeDatabase() {
 
       console.log("✅ ID synchronization completed");
     }
+    await createDashboardProcedures();
   } catch (error) {
     console.error("❌ Database initialization error:", error);
     throw error;
@@ -1323,170 +1405,6 @@ app.post(
     }
   }
 );
-// app.post('/api/auth/login', [
-//   body('token').notEmpty().isString()
-// ], validateInput, async (req, res) => {
-//   try {
-//     const { token } = req.body;
-
-//     if (!token) return res.status(400).json({ error: 'Token required' });
-
-//     console.log('🔐 Incoming token:', token);
-
-//     // Verify JWT
-//     let payload;
-//     try {
-//       payload = jwt.verify(token, JWT_SECRET);
-//       console.log('✅ Decoded JWT payload:', payload);
-//     } catch (err) {
-//       console.error('❌ JWT verification failed:', err.message);
-//       return res.status(401).json({ error: 'Invalid or expired token' });
-//     }
-
-//     // Query the account using account_id and token from DB
-//     const [rows] = await pool.execute(`
-//       SELECT
-//         a.account_id, a.account_status, a.last_login, a.failed_login_attempts, a.locked_until, a.created_at, a.updated_at,
-//         ar.role_id,
-//         r.role_name,
-//         r.permissions,
-//         p.person_id, p.first_name, p.middle_name, p.last_name, p.gender, p.birth_date, p.birth_place, p.email, p.education, p.created_at AS person_created_at, p.updated_at AS person_updated_at,
-//         st.staff_id, st.employee_id, st.employment_status, st.hire_date,
-//         s.student_id, s.graduation_status, s.academic_standing, s.registration_date
-//       FROM accounts a
-//       JOIN account_roles ar ON a.account_id = ar.account_id AND ar.is_active = TRUE
-//       JOIN roles r ON ar.role_id = r.role_id
-//       LEFT JOIN staff st ON a.account_id = st.account_id
-//       LEFT JOIN students s ON a.account_id = s.account_id
-//       LEFT JOIN persons p ON a.account_id = p.person_id
-//       WHERE a.account_id = ? AND a.token = ?
-//     `, [payload.accountId, token]);
-
-//     console.log('📦 Query result rows:', rows.length);
-
-//     if (rows.length === 0) {
-//       return res.status(401).json({ error: 'Invalid or expired token (not matched in DB)' });
-//     }
-
-//     const user = rows[0];
-
-//     // Fetch contact information
-//     let contactInfo = [];
-//     if (user.person_id) {
-//       const [contactRows] = await pool.execute(`
-//         SELECT contact_type, contact_value, is_primary
-//         FROM contact_info
-//         WHERE person_id = ?
-//         ORDER BY is_primary DESC, contact_type
-//       `, [user.person_id]);
-//       contactInfo = contactRows;
-//     }
-
-//     // Fetch additional data based on role
-//     let additionalData = {};
-
-//     if (user.role_name === 'student' && user.student_id) {
-//       const [tradingLevels] = await pool.execute(`
-//         SELECT
-//           tl.level_name,
-//           tl.level_description,
-//           stl.is_current,
-//           stl.assigned_date
-//         FROM student_trading_levels stl
-//         JOIN trading_levels tl ON stl.level_id = tl.level_id
-//         WHERE stl.student_id = ?
-//         ORDER BY stl.assigned_date DESC
-//       `, [user.student_id]);
-
-//       const [learningPrefs] = await pool.execute(`
-//         SELECT device_type, learning_style, created_at
-//         FROM learning_preferences
-//         WHERE student_id = ?
-//       `, [user.student_id]);
-
-//       additionalData = {
-//         trading_levels: tradingLevels,
-//         learning_preferences: learningPrefs,
-//         enrollments: [] // Optional: You can query this later if needed
-//       };
-//     }
-
-//     // Build user response object
-//     const responseUser = {
-//       account: {
-//         account_id: user.account_id,
-//         account_status: user.account_status,
-//         last_login: user.last_login,
-//         failed_login_attempts: user.failed_login_attempts,
-//         locked_until: user.locked_until,
-//         created_at: user.created_at,
-//         updated_at: user.updated_at
-//       },
-//       role: {
-//         role_id: user.role_id,
-//         role_name: user.role_name,
-//         permissions: user.permissions
-//       },
-//       person: {
-//         person_id: user.person_id,
-//         first_name: user.first_name,
-//         middle_name: user.middle_name,
-//         last_name: user.last_name,
-//         full_name: `${user.first_name} ${user.middle_name ? user.middle_name + ' ' : ''}${user.last_name}`.trim(),
-//         gender: user.gender,
-//         birth_date: user.birth_date,
-//         birth_place: user.birth_place,
-//         email: user.email,
-//         education: user.education,
-//         created_at: user.person_created_at,
-//         updated_at: user.person_updated_at
-//       },
-//       contact_info: contactInfo,
-//       profile: {},
-//       additional_data: additionalData
-//     };
-
-//     // Set role-specific profile
-//     if (user.role_name === 'student') {
-//       responseUser.profile = {
-//         student_id: user.student_id,
-//         graduation_status: user.graduation_status,
-//         academic_standing: user.academic_standing,
-//         registration_date: user.registration_date,
-//         current_trading_level: additionalData.trading_levels?.find(tl => tl.is_current)?.level_name || null,
-//         total_enrollments: additionalData.enrollments?.length || 0,
-//         active_enrollments: additionalData.enrollments?.filter(e => e.status === 'active').length || 0,
-//         completed_courses: additionalData.enrollments?.filter(e => e.status === 'completed').length || 0
-//       };
-//     } else if (user.role_name === 'staff' || user.role_name === 'admin') {
-//       responseUser.profile = {
-//         staff_id: user.staff_id,
-//         employee_id: user.employee_id,
-//         employment_status: user.employment_status,
-//         hire_date: user.hire_date
-//       };
-//     }
-
-//     // Update last login time
-//     await pool.execute(`
-//       UPDATE accounts
-//       SET last_login = NOW()
-//       WHERE account_id = ?
-//     `, [user.account_id]);
-
-//     console.log('✅ Login successful for account:', user.account_id);
-
-//     return res.status(200).json({
-//       success: true,
-//       token,
-//       user: responseUser
-//     });
-
-//   } catch (err) {
-//     console.error('❌ Login token validation error:', err);
-//     return res.status(401).json({ error: 'Invalid token' });
-//   }
-// });
 
 app.post("/api/auth/logout", authenticateToken, async (req, res) => {
   try {
@@ -2083,20 +2001,34 @@ app.get(
       const { name_sort, graduation_status, trading_level, search } = req.query;
 
       let query = `
-      SELECT s.student_id, p.first_name, p.last_name, 
-             GROUP_CONCAT(DISTINCT CONCAT(c.course_code, ' - ', c.course_name) SEPARATOR ', ') as enrolled_courses,
-            s.graduation_status, s.academic_standing, s.gpa, s.registration_date,
-             p.birth_date, p.birth_place, p.gender,
-             tl.level_name as current_trading_level,
-             COUNT(DISTINCT se.enrollment_id) as total_enrollments
-      FROM students s
-      JOIN persons p ON s.person_id = p.person_id
-      LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
-      LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
-      LEFT JOIN student_enrollments se ON s.student_id = se.student_id
-      LEFT JOIN course_offerings co ON se.offering_id = co.offering_id
-      LEFT JOIN courses c ON co.course_id = c.course_id
-    `;
+        SELECT 
+          s.student_id,
+          p.first_name,
+          p.last_name,
+          p.email,
+          GROUP_CONCAT(DISTINCT CONCAT(c.course_code, ' - ', c.course_name) SEPARATOR ', ') as enrolled_courses,
+          GROUP_CONCAT(DISTINCT co.batch_identifier SEPARATOR ', ') as batch_identifiers,
+          s.graduation_status,
+          s.academic_standing,
+          s.gpa,
+          s.registration_date,
+          p.birth_date,
+          p.birth_place,
+          p.gender,
+          tl.level_name as current_trading_level,
+          COUNT(DISTINCT se.enrollment_id) as total_enrollments,
+          SUM(DISTINCT sa.total_due) as total_course_cost,
+          SUM(DISTINCT sa.amount_paid) as total_amount_paid,
+          SUM(DISTINCT sa.balance) as total_balance
+        FROM students s
+        JOIN persons p ON s.person_id = p.person_id
+        LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
+        LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
+        LEFT JOIN student_enrollments se ON s.student_id = se.student_id
+        LEFT JOIN course_offerings co ON se.offering_id = co.offering_id
+        LEFT JOIN courses c ON co.course_id = c.course_id
+        LEFT JOIN student_accounts sa ON se.student_id = sa.student_id AND se.offering_id = sa.offering_id
+      `;
 
       const params = [];
       const conditions = [];
@@ -2123,8 +2055,21 @@ app.get(
         query += " WHERE " + conditions.join(" AND ");
       }
 
-      query +=
-        " GROUP BY s.student_id, p.first_name, p.last_name, p.birth_date, p.birth_place, p.gender, s.graduation_status, s.academic_standing, s.gpa, s.registration_date, tl.level_name";
+      query += `
+        GROUP BY 
+          s.student_id,
+          p.first_name,
+          p.last_name,
+          p.email,
+          p.birth_date,
+          p.birth_place,
+          p.gender,
+          s.graduation_status,
+          s.academic_standing,
+          s.gpa,
+          s.registration_date,
+          tl.level_name
+      `;
 
       if (name_sort) {
         query += ` ORDER BY p.first_name ${
@@ -2139,14 +2084,22 @@ app.get(
 
       const [students] = await pool.execute(query, params);
 
-      console.log(`Found ${students.length} students`);
-      res.json(students);
+      const processedStudents = students.map(student => ({
+        ...student,
+        total_course_cost: parseFloat(student.total_course_cost) || 0,
+        total_amount_paid: parseFloat(student.total_amount_paid) || 0,
+        total_balance: parseFloat(student.total_balance) || 0
+      }));
+
+      console.log(`Found ${processedStudents.length} students`);
+      res.json(processedStudents);
     } catch (error) {
       console.error("Students fetch error:", error);
       res.status(500).json({ error: "Failed to fetch students" });
     }
   }
 );
+
 
 // Improved Student Creation Endpoint
 app.post(
@@ -2431,6 +2384,80 @@ app.post(
   }
 );
 
+app.get(
+  "/api/students/:studentId/financial-summary",
+  authenticateToken,
+  authorize(["admin", "staff"]),
+  async (req, res) => {
+    try {
+      const { studentId } = req.params;
+
+      const [financialData] = await pool.execute(
+        `
+        SELECT 
+          s.student_id,
+          p.first_name,
+          p.last_name,
+          c.course_code,
+          c.course_name,
+          sa.total_due,
+          sa.amount_paid,
+          sa.balance,
+          se.enrollment_status,
+          co.batch_identifier
+        FROM students s
+        JOIN persons p ON s.person_id = p.person_id
+        JOIN student_enrollments se ON s.student_id = se.student_id
+        JOIN course_offerings co ON se.offering_id = co.offering_id
+        JOIN courses c ON co.course_id = c.course_id
+        LEFT JOIN student_accounts sa ON se.student_id = sa.student_id AND se.offering_id = sa.offering_id
+        WHERE s.student_id = ?
+        ORDER BY c.course_code
+        `,
+        [studentId]
+      );
+
+      if (financialData.length === 0) {
+        return res.status(404).json({ error: "Student not found or no enrollments" });
+      }
+
+      // Calculate totals
+      const totals = financialData.reduce(
+        (acc, row) => ({
+          total_cost: acc.total_cost + (parseFloat(row.total_due) || 0),
+          total_paid: acc.total_paid + (parseFloat(row.amount_paid) || 0),
+          total_balance: acc.total_balance + (parseFloat(row.balance) || 0),
+        }),
+        { total_cost: 0, total_paid: 0, total_balance: 0 }
+      );
+
+      res.json({
+        student_info: {
+          student_id: financialData[0].student_id,
+          name: `${financialData[0].first_name} ${financialData[0].last_name}`,
+        },
+        course_financials: financialData.map(row => ({
+          course_code: row.course_code,
+          course_name: row.course_name,
+          batch: row.batch_identifier,
+          enrollment_status: row.enrollment_status,
+          cost: parseFloat(row.total_due) || 0,
+          paid: parseFloat(row.amount_paid) || 0,
+          balance: parseFloat(row.balance) || 0,
+        })),
+        summary: {
+          total_course_cost: totals.total_cost,
+          total_amount_paid: totals.total_paid,
+          outstanding_balance: totals.total_balance,
+        },
+      });
+    } catch (error) {
+      console.error("Financial summary fetch error:", error);
+      res.status(500).json({ error: "Failed to fetch financial summary" });
+    }
+  }
+);
+
 // Staff Creation Endpoint
 app.post(
   "/api/staff",
@@ -2695,55 +2722,61 @@ app.get(
 // ============================================================================
 
 app.get(
-  "/api/dashboard/metrics",
+  "/api/dashboard/kpi-data",
   authenticateToken,
   authorize(["admin", "staff"]),
   async (req, res) => {
     try {
-      const [enrolledCount] = await pool.execute(
-        `SELECT COUNT(*) as count FROM students WHERE graduation_status = 'enrolled'`
-      );
+      const cacheKey = 'dashboard_kpi_data';
+      const now = Date.now();
+      
+      // Check cache first
+      if (dashboardCache.has(cacheKey)) {
+        const { data, timestamp } = dashboardCache.get(cacheKey);
+        if (now - timestamp < CACHE_DURATION) {
+          return res.json(data);
+        }
+      }
 
-      const [graduatedCount] = await pool.execute(
-        `SELECT COUNT(*) as count FROM students WHERE graduation_status = 'graduated'`
-      );
+      // Fetch fresh data using stored procedure
+      const [results] = await pool.execute('CALL sp_get_dashboard_kpi_data()');
+      
+      const dashboardData = {
+        kpiData: results[0][0] || {
+          total_enrollees: 0,
+          total_revenue: 0,
+          total_graduates: 0,
+          pending_receivables: 0
+        },
+        revenueHistogram: results[1] || [],
+        statusDistribution: (results[2] || []).map(item => ({
+          ...item,
+          color: item.name === 'Basic' ? '#3B82F6' : 
+                 item.name === 'Common' ? '#10B981' : '#F59E0B'
+        })),
+        enrollmentTrend: results[3] || [],
+        batchData: results[4] || []
+      };
 
-      const [pendingPayments] = await pool.execute(
-        `SELECT COUNT(*) as count FROM payments WHERE payment_status = 'pending'`
-      );
+      // Cache the result
+      dashboardCache.set(cacheKey, { data: dashboardData, timestamp: now });
 
-      const [totalRevenue] = await pool.execute(
-        `SELECT SUM(payment_amount) as total FROM payments WHERE payment_status = 'confirmed'`
-      );
-
-      const [monthlyEnrollments] = await pool.execute(`
-      SELECT MONTH(registration_date) as month, COUNT(*) as count 
-      FROM students 
-      WHERE YEAR(registration_date) = YEAR(CURDATE())
-      GROUP BY MONTH(registration_date)
-      ORDER BY month
-    `);
-
-      const [competencyBreakdown] = await pool.execute(`
-      SELECT tl.level_name, COUNT(*) as count 
-      FROM students s
-      LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
-      LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
-      GROUP BY tl.level_name
-    `);
-
-      res.json({
-        enrolled_students: enrolledCount[0].count,
-        graduated_students: graduatedCount[0].count,
-        pending_payments: pendingPayments[0].count,
-        total_revenue: totalRevenue[0].total || 0,
-        monthly_enrollments: monthlyEnrollments,
-        competency_breakdown: competencyBreakdown,
-      });
+      res.json(dashboardData);
     } catch (error) {
-      console.error("Dashboard metrics error:", error);
-      res.status(500).json({ error: "Failed to fetch dashboard metrics" });
+      console.error("Dashboard KPI data fetch error:", error);
+      res.status(500).json({ error: "Failed to fetch dashboard KPI data" });
     }
+  }
+);
+
+// Clear cache endpoint for real-time updates
+app.post(
+  "/api/dashboard/clear-cache",
+  authenticateToken,
+  authorize(["admin", "staff"]),
+  (req, res) => {
+    dashboardCache.clear();
+    res.json({ message: "Dashboard cache cleared successfully" });
   }
 );
 
@@ -2827,97 +2860,18 @@ app.get(
   }
 );
 
-// app.put('/api/payments/:id/status', authenticateToken, async (req, res) => {
-//   try {
-//     const { id: paymentId } = req.params;
-//     const { status, notes, amount } = req.body; // Added amount parameter
-    
-//     // Validate required parameters
-//     if (!paymentId || !status) {
-//       return res.status(400).json({ 
-//         success: false, 
-//         message: 'Payment ID and status are required' 
-//       });
-//     }
-
-//     // Validate payment ID is a valid number
-//     const numericPaymentId = parseInt(paymentId);
-//     if (isNaN(numericPaymentId)) {
-//       return res.status(400).json({ 
-//         success: false, 
-//         message: 'Invalid payment ID format' 
-//       });
-//     }
-
-//     // Validate amount if provided
-//     if (amount !== undefined && amount !== null) {
-//       const numericAmount = parseFloat(amount);
-//       if (isNaN(numericAmount) || numericAmount <= 0) {
-//         return res.status(400).json({ 
-//           success: false, 
-//           message: 'Amount must be a positive number' 
-//         });
-//       }
-//     }
-
-//     // Sanitize parameters for MySQL (convert undefined to null)
-//     const sanitizedParams = [
-//       numericPaymentId,
-//       status || null,
-//       notes || null,
-//       amount ? parseFloat(amount) : null
-//     ];
-
-//     console.log('Updating payment with params:', {
-//       paymentId: numericPaymentId,
-//       status,
-//       notes,
-//       amount: amount ? parseFloat(amount) : null
-//     });
-
-//     // Call the updated stored procedure with amount parameter
-//     const [result] = await pool.execute(
-//       'CALL UpdatePaymentStatusWithAmount(?, ?, ?, ?, @result)',
-//       sanitizedParams
-//     );
-
-//     // Get the result from the output parameter
-//     const [resultRow] = await pool.execute('SELECT @result as result');
-//     const procedureResult = resultRow[0].result;
-
-//     console.log('Stored procedure result:', procedureResult);
-
-//     // Check if the procedure was successful
-//     if (procedureResult && procedureResult.startsWith('SUCCESS')) {
-//       res.json({ 
-//         success: true, 
-//         message: procedureResult,
-//         paymentId: numericPaymentId,
-//         newStatus: status,
-//         updatedAmount: amount ? parseFloat(amount) : null
-//       });
-//     } else {
-//       res.status(400).json({ 
-//         success: false, 
-//         message: procedureResult || 'Payment update failed' 
-//       });
-//     }
-
-//   } catch (error) {
-//     console.error('Payment status update error:', error);
-//     res.status(500).json({ 
-//       success: false, 
-//       message: 'Internal server error during payment status update',
-//       error: process.env.NODE_ENV === 'development' ? error.message : undefined
-//     });
-//   }
-// });
-
 app.put('/api/payments/:id/status', authenticateToken, async (req, res) => {
   try {
     const { id: paymentId } = req.params;
-    const { status, notes, amount } = req.body;
+    const { status, notes } = req.body;
     
+    console.log('Payment status update request:', {
+      paymentId,
+      status,
+      notes,
+      body: req.body
+    });
+
     // Validate required parameters
     if (!paymentId || !status) {
       return res.status(400).json({ 
@@ -2936,70 +2890,139 @@ app.put('/api/payments/:id/status', authenticateToken, async (req, res) => {
     }
 
     // Validate status
-    const allowedStatuses = ['pending', 'confirmed', 'failed', 'cancelled'];
+    const allowedStatuses = ['pending', 'confirmed', 'completed', 'failed', 'cancelled'];
     if (!allowedStatuses.includes(status)) {
       return res.status(400).json({ 
         success: false, 
-        message: 'Invalid status value' 
+        message: `Invalid status value. Allowed: ${allowedStatuses.join(', ')}` 
       });
     }
 
-    // Validate amount if provided
-    let validatedAmount = null;
-    if (amount !== undefined && amount !== null) {
-      validatedAmount = parseFloat(amount);
-      if (isNaN(validatedAmount) || validatedAmount <= 0) {
-        return res.status(400).json({ 
-          success: false, 
-          message: 'Amount must be a positive number' 
-        });
-      }
+    // Get the user ID from the token (with fallbacks)
+    let processedBy = 1; // Default fallback
+    if (req.user) {
+      processedBy = req.user.user_id || req.user.id || req.user.staff_id || 1;
     }
 
-    console.log('Updating payment:', {
+    console.log('Processing payment update:', {
       paymentId: numericPaymentId,
       status,
-      notes,
-      amount: validatedAmount
+      notes: notes || null,
+      processedBy
     });
 
-    // Choose the appropriate procedure based on whether you're updating amount
-    const procedureName = 'UpdatePaymentStatusWithAmount';
-    const params = [
-      numericPaymentId,                
-      status,                         
-      notes || null,                   
-      validatedAmount || null   
-    ];
-
-    const [result] = await pool.execute(
-      `CALL UpdatePaymentStatusWithAmount (?, ?, ?, ?, @result)`,
-      params
+    // First, check if payment exists
+    const [existingPayment] = await pool.execute(
+      'SELECT payment_id, payment_status FROM payments WHERE payment_id = ?',
+      [numericPaymentId]
     );
 
-    const [resultRow] = await pool.execute('SELECT @result as result');
-    const procedureResult = resultRow[0].result;
-
-    if (procedureResult && procedureResult.startsWith('SUCCESS')) {
-      res.json({ 
-        success: true, 
-        message: procedureResult,
-        paymentId: numericPaymentId,
-        newStatus: status,
-        updatedAmount: validatedAmount
-      });
-    } else {
-      res.status(400).json({ 
-        success: false, 
-        message: procedureResult || 'Payment update failed' 
+    if (existingPayment.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Payment not found'
       });
     }
+
+    console.log('Found existing payment:', existingPayment[0]);
+
+    // Update payment status using direct SQL (no stored procedures)
+    const updateQuery = `
+      UPDATE payments 
+      SET payment_status = ?, 
+          notes = ?, 
+          updated_at = NOW()
+      WHERE payment_id = ?
+    `;
+
+    const updateParams = [status, notes || null, numericPaymentId];
+
+    console.log('Executing update query:', updateQuery);
+    console.log('With parameters:', updateParams);
+
+    const [updateResult] = await pool.execute(updateQuery, updateParams);
+
+    console.log('Update result:', updateResult);
+
+    if (updateResult.affectedRows === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Failed to update payment status'
+      });
+    }
+
+    // Verify the update worked
+    const [verifyResult] = await pool.execute(
+      'SELECT payment_id, payment_status, notes, updated_at FROM payments WHERE payment_id = ?',
+      [numericPaymentId]
+    );
+
+    console.log('Verification result:', verifyResult[0]);
+
+    res.json({
+      success: true,
+      message: 'Payment status updated successfully',
+      paymentId: numericPaymentId,
+      newStatus: status,
+      payment: verifyResult[0]
+    });
 
   } catch (error) {
     console.error('Payment status update error:', error);
+    console.error('Error stack:', error.stack);
+    
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error during payment status update',
+      error: process.env.NODE_ENV === 'development' ? {
+        message: error.message,
+        stack: error.stack
+      } : 'Internal server error'
+    });
+  }
+});
+
+// Backup simple endpoint
+app.put('/api/payments/:id/status-simple', authenticateToken, async (req, res) => {
+  try {
+    const { id: paymentId } = req.params;
+    const { status, notes } = req.body;
+    
+    console.log('Simple status update request:', { paymentId, status, notes });
+
+    const numericPaymentId = parseInt(paymentId);
+    if (isNaN(numericPaymentId)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid payment ID format' 
+      });
+    }
+
+    // Very simple update - just status and notes
+    const [updateResult] = await pool.execute(
+      'UPDATE payments SET payment_status = ?, notes = ?, updated_at = NOW() WHERE payment_id = ?',
+      [status, notes || null, numericPaymentId]
+    );
+
+    if (updateResult.affectedRows === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Payment not found' 
+      });
+    }
+
+    res.json({ 
+      success: true, 
+      message: 'Payment status updated successfully',
+      paymentId: numericPaymentId,
+      newStatus: status
+    });
+
+  } catch (error) {
+    console.error('Simple payment status update error:', error);
     res.status(500).json({ 
       success: false, 
-      message: 'Internal server error during payment status update',
+      message: 'Internal server error',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
@@ -3074,8 +3097,6 @@ function sanitizeParams(params) {
     return param;
   });
 }
-
-
 
 // GET /api/payments - Enhanced to include filtering and pagination
 app.get(
@@ -3334,9 +3355,7 @@ app.get(
           co.batch_identifier,
           co.offering_id,
           pm.method_id,
-          ci_phone.contact_value as phone,
-          staff_per.first_name as processed_by_first_name,
-          staff_per.last_name as processed_by_last_name
+          ci_phone.contact_value as phone
         FROM payments p
         JOIN payment_methods pm ON p.method_id = pm.method_id
         JOIN student_accounts sa ON p.account_id = sa.account_id
@@ -3347,8 +3366,6 @@ app.get(
         LEFT JOIN contact_info ci_phone ON s.person_id = ci_phone.person_id 
           AND ci_phone.contact_type = 'phone' 
           AND ci_phone.is_primary = TRUE
-        LEFT JOIN staff st ON p.processed_by = st.staff_id
-        LEFT JOIN persons staff_per ON st.person_id = staff_per.person_id
         WHERE p.payment_status IN ('completed', 'confirmed')
       `;
 
@@ -3409,7 +3426,7 @@ app.get(
   }
 );
 
-// GET /api/payments/cancelled - Get cancelled/failed payments
+// Enhanced cancelled payments endpoint  
 app.get(
   "/api/payments/cancelled",
   authenticateToken,
@@ -3441,9 +3458,7 @@ app.get(
           co.batch_identifier,
           co.offering_id,
           pm.method_id,
-          ci_phone.contact_value as phone,
-          staff_per.first_name as processed_by_first_name,
-          staff_per.last_name as processed_by_last_name
+          ci_phone.contact_value as phone
         FROM payments p
         JOIN payment_methods pm ON p.method_id = pm.method_id
         JOIN student_accounts sa ON p.account_id = sa.account_id
@@ -3454,8 +3469,6 @@ app.get(
         LEFT JOIN contact_info ci_phone ON s.person_id = ci_phone.person_id 
           AND ci_phone.contact_type = 'phone' 
           AND ci_phone.is_primary = TRUE
-        LEFT JOIN staff st ON p.processed_by = st.staff_id
-        LEFT JOIN persons staff_per ON st.person_id = staff_per.person_id
         WHERE p.payment_status IN ('failed', 'cancelled')
       `;
 
@@ -3515,6 +3528,166 @@ app.get(
     }
   }
 );
+
+// Test endpoint to verify payment status updates
+app.get('/api/payments/:id/verify', authenticateToken, async (req, res) => {
+  try {
+    const { id: paymentId } = req.params;
+    const numericPaymentId = parseInt(paymentId);
+    
+    if (isNaN(numericPaymentId)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid payment ID format' 
+      });
+    }
+
+    const [result] = await pool.execute(
+      'SELECT payment_id, payment_status, notes, updated_at FROM payments WHERE payment_id = ?',
+      [numericPaymentId]
+    );
+
+    if (result.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Payment not found' 
+      });
+    }
+
+    res.json({ 
+      success: true, 
+      payment: result[0] 
+    });
+
+  } catch (error) {
+    console.error('Payment verification error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Internal server error' 
+    });
+  }
+});
+
+// Utility function to log payment status changes for debugging
+const logPaymentStatusChange = async (paymentId, oldStatus, newStatus, processedBy, notes) => {
+  try {
+    await pool.execute(
+      `INSERT INTO payment_status_log (payment_id, old_status, new_status, processed_by, notes, changed_at) 
+       VALUES (?, ?, ?, ?, ?, NOW())`,
+      [paymentId, oldStatus || 'unknown', newStatus, processedBy, notes || null]
+    );
+  } catch (error) {
+    console.error('Failed to log payment status change:', error);
+    // Don't throw error as this is just for logging
+  }
+};
+
+// GET /api/payments/cancelled - Get cancelled/failed payments
+// app.get(
+//   "/api/payments/cancelled",
+//   authenticateToken,
+//   authorize(["admin", "staff"]),
+//   async (req, res) => {
+//     try {
+//       const { name_sort, student_search, date_range } = req.query;
+
+//       let query = `
+//         SELECT 
+//           p.payment_id, 
+//           p.payment_amount, 
+//           p.processing_fee, 
+//           p.payment_date, 
+//           p.payment_status,
+//           p.reference_number, 
+//           p.notes,
+//           p.created_at,
+//           p.updated_at,
+//           pm.method_name,
+//           sa.account_id,
+//           sa.total_due, 
+//           sa.balance,
+//           s.student_id, 
+//           per.first_name, 
+//           per.last_name,
+//           per.email,
+//           c.course_name, 
+//           co.batch_identifier,
+//           co.offering_id,
+//           pm.method_id,
+//           ci_phone.contact_value as phone,
+//           staff_per.first_name as processed_by_first_name,
+//           staff_per.last_name as processed_by_last_name
+//         FROM payments p
+//         JOIN payment_methods pm ON p.method_id = pm.method_id
+//         JOIN student_accounts sa ON p.account_id = sa.account_id
+//         JOIN students s ON sa.student_id = s.student_id
+//         JOIN persons per ON s.person_id = per.person_id
+//         JOIN course_offerings co ON sa.offering_id = co.offering_id
+//         JOIN courses c ON co.course_id = c.course_id
+//         LEFT JOIN contact_info ci_phone ON s.person_id = ci_phone.person_id 
+//           AND ci_phone.contact_type = 'phone' 
+//           AND ci_phone.is_primary = TRUE
+//         LEFT JOIN staff st ON p.processed_by = st.staff_id
+//         LEFT JOIN persons staff_per ON st.person_id = staff_per.person_id
+//         WHERE p.payment_status IN ('failed', 'cancelled')
+//       `;
+
+//       const params = [];
+
+//       // Filter by student name search
+//       if (student_search) {
+//         query +=
+//           " AND (per.first_name LIKE ? OR per.last_name LIKE ? OR s.student_id LIKE ?)";
+//         const searchParam = `%${student_search}%`;
+//         params.push(searchParam, searchParam, searchParam);
+//       }
+
+//       // Filter by date range
+//       if (date_range && date_range !== "all") {
+//         const now = new Date();
+//         let filterDate = new Date();
+
+//         switch (date_range) {
+//           case "week":
+//             filterDate.setDate(now.getDate() - 7);
+//             break;
+//           case "month":
+//             filterDate.setMonth(now.getMonth() - 1);
+//             break;
+//           case "quarter":
+//             filterDate.setMonth(now.getMonth() - 3);
+//             break;
+//           case "year":
+//             filterDate.setFullYear(now.getFullYear() - 1);
+//             break;
+//         }
+
+//         query += " AND p.updated_at >= ?";
+//         params.push(filterDate.toISOString().split("T")[0]);
+//       }
+
+//       // Sort by student name or payment date
+//       if (name_sort) {
+//         query += ` ORDER BY per.first_name ${
+//           name_sort === "ascending" ? "ASC" : "DESC"
+//         }, per.last_name ${name_sort === "ascending" ? "ASC" : "DESC"}`;
+//       } else {
+//         query += " ORDER BY p.updated_at DESC, p.created_at DESC";
+//       }
+
+//       console.log("Executing cancelled payments query:", query);
+//       console.log("With parameters:", params);
+
+//       const [payments] = await pool.execute(query, params);
+
+//       console.log(`Found ${payments.length} cancelled payments`);
+//       res.json(payments);
+//     } catch (error) {
+//       console.error("Cancelled payments fetch error:", error);
+//       res.status(500).json({ error: "Failed to fetch cancelled payments" });
+//     }
+//   }
+// );
 
 // GET /api/payments/statistics - Get payment statistics
 app.get(
@@ -4529,469 +4702,6 @@ const validateStudentRegistration = (req, res, next) => {
   next();
 };
 
-// Fixed validation rules - more permissive for optional fields
-app.post(
-  "/api/students/register",
-  [
-    authenticateToken,
-    authorize(["admin", "instructor"]),
-    // Required fields
-    body("first_name")
-      .trim()
-      .notEmpty()
-      .withMessage("First name is required")
-      .isLength({ max: 50 }),
-    body("last_name")
-      .trim()
-      .notEmpty()
-      .withMessage("Last name is required")
-      .isLength({ max: 50 }),
-    body("email")
-      .isEmail()
-      .normalizeEmail()
-      .withMessage("Valid email is required"),
-    body("course_id")
-      .isInt({ min: 1 })
-      .withMessage("Valid course ID is required"),
-
-    // Optional fields - properly configured to allow null/undefined
-    body("middle_name").optional({ checkFalsy: true }).trim(),
-    body("birth_date").optional({ checkFalsy: true }).isISO8601(),
-    body("birth_place").optional({ checkFalsy: true }).trim(),
-    body("gender")
-      .optional({ checkFalsy: true })
-      .isIn(["Male", "Female", "Other"]),
-    body("education").optional({ checkFalsy: true }).trim(),
-    body("phone").optional({ checkFalsy: true }).trim(),
-    body("address").optional({ checkFalsy: true }).trim(),
-    body("trading_level_id").optional({ checkFalsy: true }).isInt({ min: 1 }),
-    body("referred_by").optional({ checkFalsy: true }).isInt({ min: 1 }),
-    body("device_type").optional({ checkFalsy: true }).isString(),
-    body("learning_style").optional({ checkFalsy: true }).isString(),
-    body("scheme_id").optional({ checkFalsy: true }).isInt({ min: 1 }),
-    body("total_due").optional({ checkFalsy: true }).isFloat({ min: 0 }),
-    body("amount_paid").optional({ checkFalsy: true }).isFloat({ min: 0 }),
-  ],
-  validateStudentRegistration,
-  async (req, res) => {
-    const connection = await pool.getConnection();
-
-    try {
-      await connection.beginTransaction();
-
-      const {
-        first_name,
-        middle_name,
-        last_name,
-        birth_date,
-        birth_place,
-        gender,
-        email,
-        education,
-        phone,
-        address,
-        course_id,
-        scheme_id,
-        total_due,
-        amount_paid,
-        referred_by,
-        trading_level_id,
-        device_type,
-        learning_style,
-      } = req.body;
-
-      console.log("📝 Received registration data:", {
-        first_name,
-        last_name,
-        email,
-        course_id,
-        optional_fields: {
-          middle_name,
-          birth_date,
-          birth_place,
-          gender,
-          education,
-          phone,
-          address,
-        },
-      });
-
-      // Step 1: Find eligible course offering
-      const [offerings] = await connection.execute(
-        `
-      SELECT co.*, c.course_name, c.course_code
-      FROM course_offerings co
-      JOIN courses c ON co.course_id = c.course_id
-      WHERE co.course_id = ? 
-        AND co.status IN ('planned', 'active')
-        AND co.current_enrollees < co.max_enrollees
-        AND co.end_date > NOW()
-      ORDER BY 
-        CASE WHEN co.status = 'planned' THEN 1 ELSE 2 END,
-        co.start_date ASC
-      LIMIT 1
-    `,
-        [course_id]
-      );
-
-      if (offerings.length === 0) {
-        await connection.rollback();
-        return res.status(404).json({
-          error: "No eligible course offering available for this course.",
-        });
-      }
-
-      const offering = offerings[0];
-      const offering_id = offering.offering_id;
-
-      console.log("📚 Found course offering:", {
-        offering_id,
-        course_name: offering.course_name,
-        batch: offering.batch_identifier,
-      });
-
-      // Step 2: Check for existing enrollment
-      const [existing] = await connection.execute(
-        `
-      SELECT sa.account_id, p.email
-      FROM student_accounts sa
-      JOIN students s ON sa.student_id = s.student_id
-      JOIN persons p ON s.person_id = p.person_id
-      JOIN course_offerings co ON sa.offering_id = co.offering_id
-      WHERE p.email = ? AND co.course_id = ?
-    `,
-        [email, course_id]
-      );
-
-      if (existing.length > 0) {
-        await connection.rollback();
-        return res.status(409).json({
-          error: "Student with this email is already enrolled in this course.",
-        });
-      }
-
-      // Step 3: Generate and hash password
-      const generatedPassword = generateRandomPassword();
-      const password_hash = await bcrypt.hash(generatedPassword, 10);
-
-      console.log("🔐 Generated password for student");
-
-      // Step 4: Call stored procedure to create user + student
-      await connection.query(
-        `
-      CALL sp_register_user_with_synced_ids(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, @p_account_id, @p_result);
-    `,
-        [
-          password_hash,
-          first_name,
-          middle_name || null,
-          last_name,
-          birth_date || null,
-          birth_place || null,
-          gender || null,
-          email,
-          education || null,
-          phone || null,
-          address || null,
-          "student",
-        ]
-      );
-
-      const [selectResult] = await connection.query(`
-      SELECT @p_account_id AS account_id, @p_result AS result;
-    `);
-
-      const resultRow = selectResult[0];
-      const account_id = resultRow.account_id;
-      const result = resultRow.result;
-
-      console.log("👤 Stored procedure result:", { account_id, result });
-
-      if (!account_id || !result.startsWith("SUCCESS")) {
-        await connection.rollback();
-        return res.status(500).json({
-          error: "Failed to register student: " + result,
-        });
-      }
-
-      // Step 4.5: Get the student_id
-      const [studentResult] = await connection.execute(
-        `
-      SELECT student_id FROM students WHERE account_id = ?
-    `,
-        [account_id]
-      );
-
-      if (studentResult.length === 0) {
-        await connection.rollback();
-        return res.status(500).json({
-          error: "Failed to retrieve student ID after registration",
-        });
-      }
-
-      const student_id = studentResult[0].student_id;
-      console.log("🎓 Student created with ID:", student_id);
-
-      // Step 5: Update trading level if provided
-      if (trading_level_id) {
-        await connection.execute(
-          `
-        UPDATE student_trading_levels 
-        SET level_id = ?, assigned_date = NOW()
-        WHERE student_id = ? AND is_current = TRUE
-      `,
-          [parseInt(trading_level_id), student_id]
-        );
-
-        console.log("📊 Updated trading level:", trading_level_id);
-      }
-
-      // Step 6: Update learning preferences if provided
-      if (device_type || learning_style) {
-        const updateFields = [];
-        const updateValues = [];
-
-        if (device_type) {
-          updateFields.push("device_type = ?");
-          updateValues.push(device_type);
-        }
-
-        if (learning_style) {
-          updateFields.push("learning_style = ?");
-          updateValues.push(learning_style);
-        }
-
-        if (updateFields.length > 0) {
-          updateValues.push(student_id);
-          await connection.execute(
-            `
-          UPDATE learning_preferences 
-          SET ${updateFields.join(", ")}, updated_at = NOW()
-          WHERE student_id = ?
-        `,
-            updateValues
-          );
-
-          console.log("🎯 Updated learning preferences");
-        }
-      }
-
-      // Step 7: Insert into student_accounts
-      const totalDue = total_due ? parseFloat(total_due) : 0;
-      const amountPaid = amount_paid ? parseFloat(amount_paid) : 0;
-      const balance = totalDue - amountPaid;
-      const dueDate =
-        balance > 0 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) : null;
-
-      await connection.execute(
-        `
-      INSERT INTO student_accounts (
-        student_id, offering_id, total_due, amount_paid, balance,
-        scheme_id, account_status, due_date, payment_reminder_count,
-        created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-    `,
-        [
-          student_id,
-          offering_id,
-          totalDue,
-          amountPaid,
-          balance,
-          scheme_id ? parseInt(scheme_id) : null,
-          balance > 0 ? "pending" : "paid",
-          dueDate,
-          0,
-        ]
-      );
-
-      console.log("💰 Created student account with balance:", balance);
-      await connection.execute(
-        `
-      INSERT INTO student_enrollments(
-        student_id, offering_id, enrollment_date, enrollment_status,completion_date,
-        final_grade, completion_percentage, attendance_percentage
-      ) VALUES (?, ?, NOW(), 'enrolled', ?, ?, ?, ?)
-    `,
-        [student_id, offering_id, null, null, null, null]
-      );
-      // Step 8: Add referral if provided
-      if (referred_by) {
-        try {
-          // Verify referrer exists
-          const [referrerCheck] = await connection.execute(
-            `
-          SELECT student_id FROM students WHERE student_id = ?
-        `,
-            [referred_by]
-          );
-
-          if (referrerCheck.length > 0) {
-            await connection.execute(
-              `
-            INSERT INTO student_referrals (
-              student_id, referrer_student_id, referral_date, source_id
-            ) VALUES (?, ?, NOW(), 1)
-          `,
-              [student_id, referred_by]
-            );
-
-            console.log("👥 Added referral from:", referred_by);
-          }
-        } catch (referralError) {
-          console.warn("⚠️ Failed to add referral:", referralError.message);
-          // Don't fail the entire registration for referral issues
-        }
-      }
-
-      // Step 9: Update course offering
-      await connection.execute(
-        `
-      UPDATE course_offerings
-      SET current_enrollees = current_enrollees + 1,
-          status = IF(status = 'planned', 'active', status),
-          updated_at = NOW()
-      WHERE offering_id = ?
-    `,
-        [offering_id]
-      );
-
-      console.log("📈 Updated course offering enrollment count");
-
-      await connection.commit();
-      console.log("✅ Transaction committed successfully");
-
-      // Step 10: Send email credentials
-      let emailSent = false;
-      let emailError = null;
-
-      try {
-        if (emailTransporter) {
-          emailSent = await sendPasswordEmail(
-            email,
-            generatedPassword,
-            first_name,
-            last_name,
-            offering.course_name,
-            offering.batch_identifier
-          );
-          console.log("📧 Email sent successfully");
-        } else {
-          console.log("📧 Email service not configured");
-        }
-      } catch (err) {
-        emailError = err.message;
-        console.error("📧 Email sending failed:", err.message);
-      }
-
-      // Final response
-      res.status(201).json({
-        message: "Student registered successfully",
-        student_id,
-        account_id,
-        course_offering: {
-          offering_id,
-          batch_identifier: offering.batch_identifier,
-          course_name: offering.course_name,
-          course_code: offering.course_code,
-        },
-        credentials: {
-          email,
-          password: generatedPassword,
-        },
-        financial: {
-          total_due: totalDue,
-          amount_paid: amountPaid,
-          balance: balance,
-        },
-        email_sent: emailSent,
-        email_error: emailError,
-      });
-    } catch (err) {
-      await connection.rollback();
-      console.error("❌ Registration error:", err);
-      res.status(500).json({
-        error: "Registration failed",
-        details:
-          process.env.NODE_ENV === "development" ? err.message : undefined,
-      });
-    } finally {
-      connection.release();
-    }
-  }
-);
-
-// Helper function to generate random password
-function generateRandomPassword(length = 12) {
-  const charset =
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
-  let password = "";
-
-  // Ensure at least one of each type
-  const lowercase = "abcdefghijklmnopqrstuvwxyz";
-  const uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  const numbers = "0123456789";
-  const symbols = "!@#$%^&*";
-
-  password += lowercase[Math.floor(Math.random() * lowercase.length)];
-  password += uppercase[Math.floor(Math.random() * uppercase.length)];
-  password += numbers[Math.floor(Math.random() * numbers.length)];
-  password += symbols[Math.floor(Math.random() * symbols.length)];
-
-  // Fill the rest randomly
-  for (let i = 4; i < length; i++) {
-    password += charset[Math.floor(Math.random() * charset.length)];
-  }
-
-  // Shuffle the password
-  return password
-    .split("")
-    .sort(() => Math.random() - 0.5)
-    .join("");
-}
-
-// Enhanced email function
-async function sendPasswordEmail(
-  email,
-  password,
-  firstName,
-  lastName,
-  courseName,
-  batchIdentifier
-) {
-  if (!emailTransporter) {
-    throw new Error("Email service not configured");
-  }
-
-  const mailOptions = {
-    from: `"${process.env.EMAIL_FROM_NAME || "Trading Academy"}" <${
-      process.env.EMAIL_USER
-    }>`,
-    to: email,
-    subject: `Welcome to ${courseName} - Your Login Credentials`,
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h2 style="color: #2d4a3d;">Welcome to Trading Academy!</h2>
-        <p>Dear ${firstName} ${lastName},</p>
-        <p>You have been successfully enrolled in <strong>${courseName}</strong> (Batch: ${batchIdentifier}).</p>
-        <div style="background-color: #f5f2e8; padding: 20px; border-radius: 5px; margin: 20px 0;">
-          <p><strong>Your login credentials:</strong></p>
-          <ul>
-            <li>Email: ${email}</li>
-            <li>Password: <code style="background-color: #fff; padding: 2px 4px; border-radius: 3px;">${password}</code></li>
-          </ul>
-        </div>
-        <p><strong>Important:</strong> Please change your password after your first login for security purposes.</p>
-        <p>You can log in to your account using your email address and the password provided above.</p>
-        <p>If you have any questions, please don't hesitate to contact our support team.</p>
-        <p>Best regards,<br>Trading Academy Team</p>
-      </div>
-    `,
-  };
-
-  await emailTransporter.sendMail(mailOptions);
-  return true;
-}
-
 // Additional API endpoint to get available courses (not course offerings)
 app.get(
   "/api/courses/available",
@@ -5003,7 +4713,6 @@ app.get(
         c.*,
         COUNT(DISTINCT co.offering_id) as total_offerings,
         SUM(CASE WHEN co.status IN ('planned', 'active') 
-                 AND co.current_enrollees < co.max_enrollees 
                  AND co.end_date > NOW() THEN 1 ELSE 0 END) as available_offerings,
         MIN(CASE WHEN co.status IN ('planned', 'active') 
                  AND co.current_enrollees < co.max_enrollees 
@@ -5030,6 +4739,489 @@ app.get(
     }
   }
 );
+
+app.put(
+  "/api/students/batch-reassign",
+  [
+    authenticateToken,
+    authorize(["admin", "staff"]),
+    body("student_ids").isArray({ min: 1 }).withMessage("At least one student ID is required"),
+    body("new_batch_identifier").trim().isLength({ min: 1 }).withMessage("New batch identifier is required"),
+  ],
+  validateInput,
+  async (req, res) => {
+    const connection = await pool.getConnection();
+
+    try {
+      await connection.beginTransaction();
+
+      const { student_ids, new_batch_identifier } = req.body;
+
+      console.log('🔄 Batch reassignment request:', {
+        student_count: student_ids.length,
+        new_batch: new_batch_identifier,
+        student_ids: student_ids
+      });
+
+      // Validate that all student IDs exist
+      const placeholders = student_ids.map(() => '?').join(',');
+      const [studentCheck] = await connection.execute(
+        `SELECT student_id, person_id FROM students WHERE student_id IN (${placeholders})`,
+        student_ids
+      );
+
+      if (studentCheck.length !== student_ids.length) {
+        await connection.rollback();
+        const foundIds = studentCheck.map(s => s.student_id);
+        const missingIds = student_ids.filter(id => !foundIds.includes(id));
+        return res.status(404).json({
+          error: `Some student IDs not found: ${missingIds.join(', ')}`
+        });
+      }
+
+      // Find the course offering with the new batch identifier
+      const [targetOffering] = await connection.execute(
+        `SELECT co.offering_id, co.course_id, co.batch_identifier, co.max_enrollees, 
+                co.current_enrollees, co.status, c.course_name, c.course_code
+         FROM course_offerings co
+         JOIN courses c ON co.course_id = c.course_id
+         WHERE co.batch_identifier = ?`,
+        [new_batch_identifier]
+      );
+
+      if (targetOffering.length === 0) {
+        await connection.rollback();
+        return res.status(404).json({
+          error: `Course offering with batch identifier '${new_batch_identifier}' not found`
+        });
+      }
+
+      const offering = targetOffering[0];
+
+      // Check if the target offering has enough capacity
+      const availableSpots = offering.max_enrollees - offering.current_enrollees;
+      if (availableSpots < student_ids.length) {
+        await connection.rollback();
+        return res.status(400).json({
+          error: `Target batch '${new_batch_identifier}' has insufficient capacity. Available: ${availableSpots}, Required: ${student_ids.length}`
+        });
+      }
+
+      // Check if offering is available for enrollment
+      if (offering.status === 'cancelled' || offering.status === 'completed') {
+        await connection.rollback();
+        return res.status(400).json({
+          error: `Cannot reassign to batch '${new_batch_identifier}' with status: ${offering.status}`
+        });
+      }
+
+      let successCount = 0;
+      let errorCount = 0;
+      const results = [];
+
+      for (const student_id of student_ids) {
+        try {
+          // Get current enrollments for this student
+          const [currentEnrollments] = await connection.execute(
+            `SELECT se.enrollment_id, se.offering_id, co.batch_identifier, co.course_id
+             FROM student_enrollments se
+             JOIN course_offerings co ON se.offering_id = co.offering_id
+             WHERE se.student_id = ? AND se.enrollment_status = 'enrolled'`,
+            [student_id]
+          );
+
+          // Check if student is already in the target batch
+          const alreadyInTargetBatch = currentEnrollments.some(
+            enrollment => enrollment.batch_identifier === new_batch_identifier
+          );
+
+          if (alreadyInTargetBatch) {
+            results.push({
+              student_id,
+              status: 'skipped',
+              message: 'Already in target batch'
+            });
+            continue;
+          }
+
+          // Find enrollment in the same course as target offering
+          const relevantEnrollment = currentEnrollments.find(
+            enrollment => enrollment.course_id === offering.course_id
+          );
+
+          if (relevantEnrollment) {
+            // Update existing enrollment to new offering
+            await connection.execute(
+              `UPDATE student_enrollments 
+               SET offering_id = ?, updated_at = NOW()
+               WHERE enrollment_id = ?`,
+              [offering.offering_id, relevantEnrollment.enrollment_id]
+            );
+
+            // Update student account if it exists
+            const [accountCheck] = await connection.execute(
+              `SELECT account_id FROM student_accounts 
+               WHERE student_id = ? AND offering_id = ?`,
+              [student_id, relevantEnrollment.offering_id]
+            );
+
+            if (accountCheck.length > 0) {
+              await connection.execute(
+                `UPDATE student_accounts 
+                 SET offering_id = ?, updated_at = NOW()
+                 WHERE student_id = ? AND offering_id = ?`,
+                [offering.offering_id, student_id, relevantEnrollment.offering_id]
+              );
+            }
+
+            // Decrease count from old offering
+            await connection.execute(
+              `UPDATE course_offerings 
+               SET current_enrollees = GREATEST(0, current_enrollees - 1), updated_at = NOW()
+               WHERE offering_id = ?`,
+              [relevantEnrollment.offering_id]
+            );
+
+            results.push({
+              student_id,
+              status: 'moved',
+              message: `Moved from batch ${relevantEnrollment.batch_identifier} to ${new_batch_identifier}`
+            });
+
+          } else {
+            // Create new enrollment in target offering
+            await connection.execute(
+              `INSERT INTO student_enrollments (
+                student_id, offering_id, enrollment_date, enrollment_status, 
+                completion_percentage, attendance_percentage
+              ) VALUES (?, ?, NOW(), 'enrolled', 0.00, NULL)`,
+              [student_id, offering.offering_id]
+            );
+
+            // Create student account for the new enrollment if pricing exists
+            const [pricingData] = await connection.execute(
+              `SELECT amount FROM course_pricing 
+               WHERE offering_id = ? AND pricing_type = 'regular' AND is_active = TRUE
+               ORDER BY effective_date DESC LIMIT 1`,
+              [offering.offering_id]
+            );
+
+            const totalDue = pricingData.length > 0 ? parseFloat(pricingData[0].amount) : 0;
+            const dueDate = new Date();
+            dueDate.setDate(dueDate.getDate() + 30); // 30 days from now
+
+            await connection.execute(
+              `INSERT INTO student_accounts (
+                student_id, offering_id, total_due, amount_paid, balance,
+                account_status, due_date, created_at, updated_at
+              ) VALUES (?, ?, ?, 0.00, ?, 'active', ?, NOW(), NOW())`,
+              [student_id, offering.offering_id, totalDue, totalDue, dueDate]
+            );
+
+            results.push({
+              student_id,
+              status: 'enrolled',
+              message: `Newly enrolled in batch ${new_batch_identifier}`
+            });
+          }
+
+          successCount++;
+
+        } catch (studentError) {
+          console.error(`Error processing student ${student_id}:`, studentError);
+          results.push({
+            student_id,
+            status: 'error',
+            message: studentError.message
+          });
+          errorCount++;
+        }
+      }
+
+      // Update target offering enrollment count
+      await connection.execute(
+        `UPDATE course_offerings 
+         SET current_enrollees = current_enrollees + ?, updated_at = NOW()
+         WHERE offering_id = ?`,
+        [successCount, offering.offering_id]
+      );
+
+      // Log the batch reassignment activity
+      const staffQuery = await connection.execute(
+        "SELECT staff_id FROM staff WHERE account_id = ?",
+        [req.user.accountId]
+      );
+      const staffId = staffQuery[0]?.[0]?.staff_id;
+
+      if (staffId) {
+        await connection.execute(
+          `INSERT INTO activity_logs (account_id, action, description, created_at)
+           VALUES (?, 'batch_reassignment', ?, NOW())`,
+          [req.user.accountId, 
+           `Reassigned ${successCount} students to batch ${new_batch_identifier}. ${errorCount} errors.`]
+        );
+      }
+
+      await connection.commit();
+      console.log('✅ Batch reassignment completed successfully');
+
+      res.json({
+        success: true,
+        message: `Batch reassignment completed. ${successCount} successful, ${errorCount} failed.`,
+        target_batch: {
+          batch_identifier: new_batch_identifier,
+          course_name: offering.course_name,
+          course_code: offering.course_code
+        },
+        summary: {
+          total_processed: student_ids.length,
+          successful: successCount,
+          failed: errorCount,
+          skipped: results.filter(r => r.status === 'skipped').length
+        },
+        results: results
+      });
+
+    } catch (error) {
+      await connection.rollback();
+      console.error('❌ Batch reassignment error:', error);
+      
+      res.status(500).json({
+        success: false,
+        error: "Failed to reassign students to new batch",
+        message: error.message,
+        details: process.env.NODE_ENV === "development" ? error.stack : undefined,
+      });
+    } finally {
+      connection.release();
+    }
+  }
+);
+
+// GET /api/batches - Get all available batches with student counts
+app.get(
+  "/api/batches",
+  authenticateToken,
+  authorize(["admin", "staff"]),
+  async (req, res) => {
+    try {
+      const [batches] = await pool.execute(`
+        SELECT 
+          co.offering_id,
+          co.batch_identifier,
+          co.start_date,
+          co.end_date,
+          co.status,
+          co.max_enrollees,
+          co.current_enrollees,
+          co.location,
+          c.course_id,
+          c.course_code,
+          c.course_name,
+          COUNT(DISTINCT se.student_id) as actual_enrolled_count
+        FROM course_offerings co
+        JOIN courses c ON co.course_id = c.course_id
+        LEFT JOIN student_enrollments se ON co.offering_id = se.offering_id 
+          AND se.enrollment_status = 'enrolled'
+        WHERE c.is_active = TRUE
+        GROUP BY co.offering_id, co.batch_identifier, co.start_date, co.end_date, 
+                 co.status, co.max_enrollees, co.current_enrollees, co.location,
+                 c.course_id, c.course_code, c.course_name
+        ORDER BY c.course_name, co.start_date DESC
+      `);
+
+      res.json({
+        message: "Batches retrieved successfully",
+        batches: batches
+      });
+    } catch (error) {
+      console.error("Batches fetch error:", error);
+      res.status(500).json({ error: "Failed to fetch batches" });
+    }
+  }
+);
+
+// GET /api/batches/:batchIdentifier/students - Get students in a specific batch
+app.get(
+  "/api/batches/:batchIdentifier/students",
+  authenticateToken,
+  authorize(["admin", "staff"]),
+  async (req, res) => {
+    try {
+      const { batchIdentifier } = req.params;
+
+      const [students] = await pool.execute(`
+        SELECT 
+          s.student_id,
+          p.first_name,
+          p.last_name,
+          p.email,
+          se.enrollment_date,
+          se.enrollment_status,
+          se.completion_percentage,
+          se.attendance_percentage,
+          c.course_code,
+          c.course_name,
+          co.batch_identifier,
+          tl.level_name as trading_level
+        FROM student_enrollments se
+        JOIN students s ON se.student_id = s.student_id
+        JOIN persons p ON s.person_id = p.person_id
+        JOIN course_offerings co ON se.offering_id = co.offering_id
+        JOIN courses c ON co.course_id = c.course_id
+        LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
+        LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
+        WHERE co.batch_identifier = ?
+        ORDER BY p.last_name, p.first_name
+      `, [batchIdentifier]);
+
+      res.json({
+        message: "Batch students retrieved successfully",
+        batch_identifier: batchIdentifier,
+        student_count: students.length,
+        students: students
+      });
+    } catch (error) {
+      console.error("Batch students fetch error:", error);
+      res.status(500).json({ error: "Failed to fetch batch students" });
+    }
+  }
+);
+
+// POST /api/batches/create - Create a new batch (course offering)
+app.post(
+  "/api/batches/create",
+  [
+    authenticateToken,
+    authorize(["admin", "staff"]),
+    body("course_id").isInt({ min: 1 }).withMessage("Valid course ID is required"),
+    body("batch_identifier").trim().isLength({ min: 1 }).withMessage("Batch identifier is required"),
+    body("start_date").isISO8601().withMessage("Valid start date is required"),
+    body("max_enrollees").isInt({ min: 1 }).withMessage("Maximum enrollees must be at least 1"),
+  ],
+  validateInput,
+  async (req, res) => {
+    const connection = await pool.getConnection();
+
+    try {
+      await connection.beginTransaction();
+
+      const {
+        course_id,
+        batch_identifier,
+        start_date,
+        end_date,
+        max_enrollees,
+        location = "Online",
+        instructor_id
+      } = req.body;
+
+      // Check if batch identifier already exists
+      const [existingBatch] = await connection.execute(
+        "SELECT offering_id FROM course_offerings WHERE batch_identifier = ?",
+        [batch_identifier]
+      );
+
+      if (existingBatch.length > 0) {
+        await connection.rollback();
+        return res.status(409).json({
+          error: `Batch identifier '${batch_identifier}' already exists`
+        });
+      }
+
+      // Verify course exists
+      const [courseCheck] = await connection.execute(
+        "SELECT course_id, course_name, duration_weeks FROM courses WHERE course_id = ? AND is_active = TRUE",
+        [course_id]
+      );
+
+      if (courseCheck.length === 0) {
+        await connection.rollback();
+        return res.status(404).json({
+          error: "Course not found or inactive"
+        });
+      }
+
+      const course = courseCheck[0];
+
+      // Calculate end date if not provided
+      let calculatedEndDate = end_date;
+      if (!calculatedEndDate) {
+        const startDateObj = new Date(start_date);
+        const endDateObj = new Date(startDateObj);
+        endDateObj.setDate(startDateObj.getDate() + (course.duration_weeks * 7));
+        calculatedEndDate = endDateObj.toISOString().split('T')[0];
+      }
+
+      // Create the new batch
+      const [result] = await connection.execute(`
+        INSERT INTO course_offerings (
+          course_id, batch_identifier, start_date, end_date, max_enrollees,
+          current_enrollees, status, location, instructor_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 0, 'planned', ?, ?, NOW(), NOW())
+      `, [course_id, batch_identifier, start_date, calculatedEndDate, max_enrollees, location, instructor_id || null]);
+
+      const offeringId = result.insertId;
+
+      // Copy pricing from the latest offering of the same course
+      const [latestPricing] = await connection.execute(`
+        SELECT cp.pricing_type, cp.amount, cp.currency
+        FROM course_pricing cp
+        JOIN course_offerings co ON cp.offering_id = co.offering_id
+        WHERE co.course_id = ? AND cp.is_active = TRUE
+        ORDER BY cp.effective_date DESC
+        LIMIT 5
+      `, [course_id]);
+
+      if (latestPricing.length > 0) {
+        for (const pricing of latestPricing) {
+          await connection.execute(`
+            INSERT INTO course_pricing (
+              offering_id, pricing_type, amount, currency, effective_date, is_active
+            ) VALUES (?, ?, ?, ?, NOW(), TRUE)
+          `, [offeringId, pricing.pricing_type, pricing.amount, pricing.currency]);
+        }
+      } else {
+        // Create default pricing
+        await connection.execute(`
+          INSERT INTO course_pricing (
+            offering_id, pricing_type, amount, currency, effective_date, is_active
+          ) VALUES (?, 'regular', 0, 'PHP', NOW(), TRUE)
+        `, [offeringId]);
+      }
+
+      await connection.commit();
+
+      res.status(201).json({
+        success: true,
+        message: "New batch created successfully",
+        batch: {
+          offering_id: offeringId,
+          course_id: course_id,
+          course_name: course.course_name,
+          batch_identifier: batch_identifier,
+          start_date: start_date,
+          end_date: calculatedEndDate,
+          max_enrollees: max_enrollees,
+          current_enrollees: 0,
+          status: 'planned',
+          location: location
+        }
+      });
+
+    } catch (error) {
+      await connection.rollback();
+      console.error("Batch creation error:", error);
+      res.status(500).json({
+        error: "Failed to create new batch",
+        details: process.env.NODE_ENV === "development" ? error.message : undefined,
+      });
+    } finally {
+      connection.release();
+    }
+  }
+);
+
 // Backend: Fixed PUT /api/courses/:courseId endpoint
 app.put(
   "/api/courses/:courseId",
@@ -5487,37 +5679,6 @@ app.get(
     }
   }
 );
-
-// app.get("/api/course-offerings", authenticateToken, async (req, res) => {
-//   try {
-//     const { status } = req.query;
-
-//     let query = `
-//       SELECT co.offering_id, co.batch_identifier, co.start_date, co.end_date, co.status,
-//              co.max_enrollees, co.current_enrollees, co.location,
-//              c.course_code, c.course_name,
-//              AVG(cp.amount) as average_price
-//       FROM course_offerings co
-//       JOIN courses c ON co.course_id = c.course_id
-//       LEFT JOIN course_pricing cp ON co.offering_id = cp.offering_id AND cp.is_active = TRUE
-//       WHERE 1=1
-//     `;
-//     const params = [];
-
-//     if (status) {
-//       query += " AND co.status = ?";
-//       params.push(status);
-//     }
-
-//     query += " GROUP BY co.offering_id ORDER BY co.start_date DESC";
-
-//     const [offerings] = await pool.execute(query, params);
-//     res.json(offerings);
-//   } catch (error) {
-//     console.error("Course offerings fetch error:", error);
-//     res.status(500).json({ error: "Failed to fetch course offerings" });
-//   }
-// });
 
 app.post(
   "/api/enrollments",
@@ -7408,7 +7569,6 @@ app.post(
   }
 );
 
-
 // GET /api/student/:studentId/enrollments - Get all enrollments for a student
 app.get(
   "/api/student/:studentId/enrollments",
@@ -9138,317 +9298,54 @@ app.post(
 // ============================================================================
 
 app.post(
-  "/api/register",
-  [
-    body("firstName").trim().isLength({ min: 1, max: 50 }).escape(),
-    body("lastName").trim().isLength({ min: 1, max: 50 }).escape(),
-    body("email").isEmail().normalizeEmail(),
-    body("phoneNumber").isMobilePhone(),
-    body("dob").isISO8601(),
-    body("address").trim().isLength({ min: 1, max: 500 }),
-    body("city").trim().isLength({ min: 1, max: 100 }),
-    body("province").trim().isLength({ min: 1, max: 100 }),
-    body("gender").isIn(["Male", "Female", "Other"]),
-    body("education").trim().isLength({ min: 1, max: 100 }),
-    body("tradingLevel").trim().isLength({ min: 1, max: 50 }),
-    body("courseOfferingId").optional().isInt(), // Optional parameter for specific course offering
-    body("password").isLength({ min: 6 }),
-  ],
-  validateInput,
-  async (req, res) => {
-    const connection = await pool.getConnection();
-
-    try {
-      await connection.beginTransaction();
-
-      const {
-        firstName,
-        lastName,
-        email,
-        phoneNumber,
-        dob,
-        address,
-        city,
-        province,
-        gender,
-        education,
-        tradingLevel,
-        device,
-        learningStyle,
-        password,
-        courseOfferingId,
-      } = req.body;
-
-      // Hash password
-      const hashedPassword = await bcrypt.hash(password, 12);
-      const fullAddress = `${address}, ${city}, ${province}`;
-
-      // Use stored procedure for synced registration
-      const [result] = await connection.execute(
-        ` 
-      CALL sp_register_user_with_synced_ids(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, @account_id, @result) 
-    `,
-        [
-          hashedPassword,
-          firstName,
-          null,
-          lastName,
-          dob,
-          city,
-          gender,
-          email,
-          education,
-          phoneNumber,
-          fullAddress,
-          "student",
-        ]
-      );
-
-      const [output] = await connection.execute(
-        `SELECT @account_id as account_id, @result as result`
-      );
-      const { account_id, result: procedureResult } = output[0];
-
-      if (!procedureResult.startsWith("SUCCESS")) {
-        await connection.rollback();
-        return res.status(400).json({ error: procedureResult });
-      }
-
-      // Get the student_id for the newly registered student
-      const [studentData] = await connection.execute(
-        ` 
-      SELECT student_id FROM students WHERE account_id = ? 
-    `,
-        [account_id]
-      );
-
-      if (studentData.length === 0) {
-        await connection.rollback();
-        return res
-          .status(500)
-          .json({ error: "Failed to retrieve student information" });
-      }
-
-      const student_id = studentData[0].student_id;
-
-      // Handle additional fields specific to students
-      if (tradingLevel || device || learningStyle) {
-        // Update trading level if provided
-        if (tradingLevel) {
-          const [levelRows] = await connection.execute(
-            ` 
-          SELECT level_id FROM trading_levels WHERE level_name = ? 
-        `,
-            [tradingLevel]
-          );
-
-          if (levelRows.length > 0) {
-            const level_id = levelRows[0].level_id;
-
-            // Update the default level
-            await connection.execute(
-              ` 
-            UPDATE student_trading_levels  
-            SET level_id = ?, assigned_date = CURRENT_TIMESTAMP 
-            WHERE student_id = ? AND is_current = 1 
-          `,
-              [level_id, student_id]
-            );
-          }
-        }
-
-        // Update learning preferences if provided
-        if (device || learningStyle) {
-          const deviceArray = Array.isArray(device)
-            ? device
-            : device
-            ? [device]
-            : [];
-          const learningStyleArray = Array.isArray(learningStyle)
-            ? learningStyle
-            : learningStyle
-            ? [learningStyle]
-            : [];
-
-          await connection.execute(
-            ` 
-          UPDATE learning_preferences  
-          SET device_type = ?, learning_style = ?, updated_at = CURRENT_TIMESTAMP 
-          WHERE student_id = ? 
-        `,
-            [deviceArray.join(","), learningStyleArray.join(","), student_id]
-          );
-        }
-      }
-
-      // AUTO-ENROLLMENT LOGIC
-      let offering_id;
-
-      // Get offering_id - either from request parameter or get the latest active offering
-      if (courseOfferingId) {
-        // Verify the provided offering exists and is active
-        const [offeringCheck] = await connection.execute(
-          `
-        SELECT offering_id FROM course_offerings 
-        WHERE offering_id = ? AND status IN ('planned', 'active')
-      `,
-          [courseOfferingId]
-        );
-
-        if (offeringCheck.length === 0) {
-          await connection.rollback();
-          return res
-            .status(400)
-            .json({ error: "Invalid or inactive course offering" });
-        }
-        offering_id = courseOfferingId;
-      } else {
-        // Get the latest active course offering (you may want to modify this logic)
-        const [latestOffering] = await connection.execute(`
-        SELECT co.offering_id 
-        FROM course_offerings co 
-        WHERE co.status IN ('planned', 'active') 
-          AND co.current_enrollees < co.max_enrollees
-          AND co.start_date > NOW()
-        ORDER BY co.start_date ASC 
-        LIMIT 1
-      `);
-
-        if (latestOffering.length === 0) {
-          await connection.rollback();
-          return res
-            .status(400)
-            .json({ error: "No available course offerings for enrollment" });
-        }
-        offering_id = latestOffering[0].offering_id;
-      }
-
-      // Get course offering details for calculations
-      const [offeringDetails] = await connection.execute(
-        `
-      SELECT 
-        co.offering_id,
-        co.start_date,
-        co.end_date,
-        c.duration_weeks,
-        co.current_enrollees,
-        co.max_enrollees
-      FROM course_offerings co
-      INNER JOIN courses c ON co.course_id = c.course_id
-      WHERE co.offering_id = ?
-    `,
-        [offering_id]
-      );
-
-      const offering = offeringDetails[0];
-
-      // Calculate completion date based on duration weeks from start date
-      const startDate = new Date(offering.start_date);
-      const completionDate = new Date(startDate);
-      completionDate.setDate(startDate.getDate() + offering.duration_weeks * 7);
-
-      // Create enrollment record
-      const [enrollmentResult] = await connection.execute(
-        `
-      INSERT INTO student_enrollments (
-        student_id, 
-        offering_id, 
-        enrollment_date, 
-        enrollment_status, 
-        completion_date, 
-        completion_percentage
-      ) VALUES (?, ?, CURRENT_TIMESTAMP, 'enrolled', ?, 0.00)
-    `,
-        [student_id, offering_id, completionDate]
-      );
-
-      // Update current enrollees count in course_offerings
-      await connection.execute(
-        `
-      UPDATE course_offerings 
-      SET current_enrollees = current_enrollees + 1,
-          updated_at = CURRENT_TIMESTAMP
-      WHERE offering_id = ?
-    `,
-        [offering_id]
-      );
-
-      // Create student account record for financial tracking
-      const [pricingData] = await connection.execute(
-        `
-      SELECT amount FROM course_pricing 
-      WHERE offering_id = ? AND pricing_type = 'regular' AND is_active = 1
-      ORDER BY effective_date DESC 
-      LIMIT 1
-    `,
-        [offering_id]
-      );
-
-      const totalDue = pricingData.length > 0 ? pricingData[0].amount : 0;
-
-      await connection.execute(
-        `
-      INSERT INTO student_accounts (
-        student_id,
-        offering_id,
-        total_due,
-        amount_paid,
-        balance,
-        account_status,
-        created_at,
-        updated_at
-      ) VALUES (?, ?, ?, 0.00, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    `,
-        [student_id, offering_id, totalDue, totalDue]
-      );
-
-      await connection.commit();
-
-      res.status(201).json({
-        message: "Student successfully registered and enrolled.",
-        account_id: account_id,
-        student_id: student_id,
-        enrollment: {
-          offering_id: offering_id,
-          enrollment_status: "enrolled",
-          completion_date: completionDate.toISOString().split("T")[0],
-          completion_percentage: 0.0,
-          duration_weeks: offering.duration_weeks,
-          total_due: totalDue,
-        },
-      });
-    } catch (error) {
-      await connection.rollback();
-      console.error("Registration error:", error);
-
-      if (error.code === "ER_DUP_ENTRY") {
-        res.status(409).json({ error: "Username or email already exists" });
-      } else {
-        res
-          .status(500)
-          .json({ error: "Failed to register student: " + error.message });
-      }
-    } finally {
-      connection.release();
-    }
-  }
-);
-app.post('/api/students/register', 
+  "/api/students/register",
   [
     authenticateToken,
-    authorize(["admin", "staff"]),
-    body("first_name").trim().notEmpty(),
-    body("last_name").trim().notEmpty(),
-    body("email").isEmail().normalizeEmail(),
-    body("course_id").isInt({ min: 1 }),
+    authorize(["admin", "instructor", "staff"]),
+    // Required fields validation
+    body("first_name")
+      .trim()
+      .notEmpty()
+      .withMessage("First name is required")
+      .isLength({ max: 50 }),
+    body("last_name")
+      .trim()
+      .notEmpty()
+      .withMessage("Last name is required")
+      .isLength({ max: 50 }),
+    body("email")
+      .isEmail()
+      .normalizeEmail()
+      .withMessage("Valid email is required"),
+    body("course_id")
+      .isInt({ min: 1 })
+      .withMessage("Valid course ID is required"),
+
+    // Optional fields - properly configured to allow null/undefined
+    body("middle_name").optional({ checkFalsy: true }).trim(),
+    body("birth_date").optional({ checkFalsy: true }).isISO8601(),
+    body("birth_place").optional({ checkFalsy: true }).trim(),
+    body("gender")
+      .optional({ checkFalsy: true })
+      .isIn(["Male", "Female", "Other"]),
+    body("education").optional({ checkFalsy: true }).trim(),
+    body("phone").optional({ checkFalsy: true }).trim(),
+    body("address").optional({ checkFalsy: true }).trim(),
+    body("trading_level_id").optional({ checkFalsy: true }).isInt({ min: 1 }),
+    body("referred_by").optional({ checkFalsy: true }).isInt({ min: 1 }),
+    body("device_type").optional({ checkFalsy: true }).isString(),
+    body("learning_style").optional({ checkFalsy: true }).isString(),
+    body("scheme_id").optional({ checkFalsy: true }).isInt({ min: 1 }),
+    body("total_due").optional({ checkFalsy: true }).isFloat({ min: 0 }),
+    body("amount_paid").optional({ checkFalsy: true }).isFloat({ min: 0 }),
   ],
   validateInput,
   async (req, res) => {
     const connection = await pool.getConnection();
-    
+
     try {
       await connection.beginTransaction();
-      
+
       const {
         first_name,
         middle_name,
@@ -9460,63 +9357,197 @@ app.post('/api/students/register',
         education,
         phone,
         address,
-        trading_level_id,
         course_id,
+        scheme_id,
+        total_due,
+        amount_paid,
+        referred_by,
+        trading_level_id,
         device_type,
         learning_style,
-        referred_by,
-        scheme_id,
-        total_due, // Frontend calculated price
-        amount_paid
       } = req.body;
 
-      // Validate required fields
-      if (!first_name || !last_name || !email || !course_id) {
+      console.log("📝 Received registration data:", {
+        first_name,
+        last_name,
+        email,
+        course_id,
+        optional_fields: {
+          middle_name,
+          birth_date,
+          birth_place,
+          gender,
+          education,
+          phone,
+          address,
+        },
+      });
+
+      // Step 1: Get course details first
+      const [courseInfo] = await connection.execute(`
+        SELECT 
+          c.course_name, 
+          c.duration_weeks, 
+          c.course_code, 
+          c.course_id
+        FROM courses c
+        WHERE c.course_id = ?
+      `, [course_id]);
+
+      if (courseInfo.length === 0) {
         await connection.rollback();
-        return res.status(400).json({ 
-          error: 'Missing required fields: first_name, last_name, email, course_id' 
+        return res.status(404).json({ 
+          error: 'Course not found' 
         });
       }
 
-      // Check if email already exists
-      const [existingStudent] = await connection.execute(
-        'SELECT student_id FROM students s JOIN persons p ON s.person_id = p.person_id WHERE p.email = ?',
-        [email]
+      const courseData = courseInfo[0];
+
+      // Step 2: Check for existing enrollment
+      const [existing] = await connection.execute(
+        `
+        SELECT sa.account_id, p.email
+        FROM student_accounts sa
+        JOIN students s ON sa.student_id = s.student_id
+        JOIN persons p ON s.person_id = p.person_id
+        JOIN course_offerings co ON sa.offering_id = co.offering_id
+        WHERE p.email = ? AND co.course_id = ?
+      `,
+        [email, course_id]
       );
 
-      if (existingStudent.length > 0) {
+      if (existing.length > 0) {
         await connection.rollback();
-        return res.status(409).json({ 
-          error: 'A student with this email already exists' 
+        return res.status(409).json({
+          error: "Student with this email is already enrolled in this course.",
         });
       }
 
-      // Find an available course offering for the selected course
-      const [availableOfferings] = await connection.execute(`
+      // Step 3: Find available course offerings or create new batch
+      let [availableOfferings] = await connection.execute(`
         SELECT co.offering_id, co.course_id, co.batch_identifier, co.start_date, 
                co.end_date, co.max_enrollees, co.current_enrollees, co.status,
-               c.course_name, c.duration_weeks
+               c.course_name, c.duration_weeks, c.course_code
         FROM course_offerings co
         INNER JOIN courses c ON co.course_id = c.course_id
         WHERE co.course_id = ? 
           AND co.status IN ('planned', 'active')
           AND co.current_enrollees < co.max_enrollees
-          AND co.start_date > NOW()
-        ORDER BY co.start_date ASC
+          AND co.end_date > NOW()
+        ORDER BY 
+          CASE WHEN co.status = 'planned' THEN 1 ELSE 2 END,
+          co.start_date ASC
         LIMIT 1
       `, [course_id]);
 
+      let courseOffering;
+      let offering_id;
+      let isNewBatch = false;
+
+      // Check if we need to create a new batch
       if (availableOfferings.length === 0) {
-        await connection.rollback();
-        return res.status(404).json({ 
-          error: 'No available course offerings found for the selected course' 
+        console.log('🆕 Creating new batch - no available offerings found...');
+        
+        // Get the latest batch identifier to generate the next one
+        const [latestBatch] = await connection.execute(`
+          SELECT batch_identifier, start_date, max_enrollees
+          FROM course_offerings
+          WHERE course_id = ?
+          ORDER BY CAST(SUBSTRING_INDEX(batch_identifier, '-', -1) AS UNSIGNED) DESC,
+                   created_at DESC
+          LIMIT 1
+        `, [course_id]);
+
+        let newBatchIdentifier;
+        let newStartDate;
+        let maxEnrollees = 30; // Default
+
+        if (latestBatch.length > 0) {
+          // Extract batch number and increment
+          const latestBatchId = latestBatch[0].batch_identifier;
+          const batchPattern = /^(.+)-(\d{4})-(\d+)$/;
+          const match = latestBatchId.match(batchPattern);
+          
+          if (match) {
+            const [, coursePrefix, year, batchNum] = match;
+            const currentYear = new Date().getFullYear();
+            
+            // If it's a new year, start from 01, otherwise increment
+            if (parseInt(year) < currentYear) {
+              newBatchIdentifier = `${coursePrefix}-${currentYear}-01`;
+            } else {
+              const nextBatchNum = parseInt(batchNum) + 1;
+              newBatchIdentifier = `${coursePrefix}-${year}-${String(nextBatchNum).padStart(2, '0')}`;
+            }
+          } else {
+            // Fallback if batch identifier doesn't match expected pattern
+            newBatchIdentifier = `${courseData.course_code}-${new Date().getFullYear()}-01`;
+          }
+          
+          // Set start date 2 weeks after the latest batch start date
+          const latestStartDate = new Date(latestBatch[0].start_date);
+          newStartDate = new Date(latestStartDate);
+          newStartDate.setDate(newStartDate.getDate() + 14); // 2 weeks later
+          
+          maxEnrollees = latestBatch[0].max_enrollees || 30;
+        } else {
+          // First batch for this course
+          newBatchIdentifier = `${courseData.course_code}-${new Date().getFullYear()}-01`;
+          newStartDate = new Date();
+          newStartDate.setDate(newStartDate.getDate() + 7); // Start next week
+        }
+        
+        const newEndDate = new Date(newStartDate);
+        newEndDate.setDate(newStartDate.getDate() + (courseData.duration_weeks * 7));
+
+        // Create new course offering
+        const [newOfferingResult] = await connection.execute(`
+          INSERT INTO course_offerings (
+            course_id, batch_identifier, start_date, end_date, 
+            max_enrollees, current_enrollees, status, location, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, 0, 'planned', 'Online', NOW(), NOW())
+        `, [course_id, newBatchIdentifier, newStartDate, newEndDate, maxEnrollees]);
+
+        offering_id = newOfferingResult.insertId;
+        isNewBatch = true;
+
+        // Create courseOffering object for the new batch
+        courseOffering = {
+          offering_id: offering_id,
+          course_id: course_id,
+          batch_identifier: newBatchIdentifier,
+          start_date: newStartDate,
+          end_date: newEndDate,
+          max_enrollees: maxEnrollees,
+          current_enrollees: 0,
+          status: 'planned',
+          course_name: courseData.course_name,
+          duration_weeks: courseData.duration_weeks,
+          course_code: courseData.course_code
+        };
+
+        // Create default pricing for new batch
+        await connection.execute(`
+          INSERT INTO course_pricing (
+            offering_id, amount, pricing_type, currency, 
+            effective_date, is_active
+          ) VALUES (?, 0, 'regular', 'PHP', NOW(), 1)
+        `, [offering_id]);
+
+        console.log(`✅ Created new batch: ${newBatchIdentifier} for course ${courseData.course_name}`);
+      } else {
+        // Use existing available offering
+        courseOffering = availableOfferings[0];
+        offering_id = courseOffering.offering_id;
+        
+        console.log("📚 Found available course offering:", {
+          offering_id,
+          course_name: courseOffering.course_name,
+          batch: courseOffering.batch_identifier,
         });
       }
 
-      const courseOffering = availableOfferings[0];
-      const offering_id = courseOffering.offering_id;
-
-      // Get the pricing for this course offering (server-side validation)
+      // Step 4: Get pricing information
       const [pricingData] = await connection.execute(`
         SELECT amount FROM course_pricing 
         WHERE offering_id = ? AND pricing_type = 'regular' AND is_active = 1
@@ -9524,21 +9555,25 @@ app.post('/api/students/register',
         LIMIT 1
       `, [offering_id]);
 
-      // Use server-calculated price or frontend price, with server as fallback
       const serverCalculatedPrice = pricingData.length > 0 ? parseFloat(pricingData[0].amount) : 0;
-      const finalTotalDue = total_due ? parseFloat(total_due) : serverCalculatedPrice;
-      const finalAmountPaid = amount_paid ? parseFloat(amount_paid) : 0;
-      const balance = finalTotalDue - finalAmountPaid;
+      const totalDue = total_due ? parseFloat(total_due) : serverCalculatedPrice;
+      const amountPaid = amount_paid ? parseFloat(amount_paid) : 0;
+      const balance = totalDue - amountPaid;
+      const dueDate = balance > 0 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) : null;
 
-      // Generate student credentials
-      const studentPassword = Math.random().toString(36).slice(-8);
-      const hashedPassword = await bcrypt.hash(studentPassword, 12);
+      // Step 5: Generate and hash password
+      const generatedPassword = generateRandomPassword();
+      const password_hash = await bcrypt.hash(generatedPassword, 10);
 
-      // Use the stored procedure to create the student
-      const [registerResult] = await connection.execute(
-        `CALL sp_register_user_with_synced_ids(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, @account_id, @result)`,
+      console.log("🔐 Generated password for student");
+
+      // Step 6: Call stored procedure to create user + student
+      await connection.query(
+        `
+        CALL sp_register_user_with_synced_ids(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, @p_account_id, @p_result);
+      `,
         [
-          hashedPassword,
+          password_hash,
           first_name,
           middle_name || null,
           last_name,
@@ -9553,45 +9588,64 @@ app.post('/api/students/register',
         ]
       );
 
-      const [[output]] = await connection.execute(
-        `SELECT @account_id AS account_id, @result AS result`
-      );
+      const [selectResult] = await connection.query(`
+        SELECT @p_account_id AS account_id, @p_result AS result;
+      `);
 
-      if (!output || !output.result || !output.result.startsWith("SUCCESS")) {
-        throw new Error(output?.result || "Registration failed");
+      const resultRow = selectResult[0];
+      const account_id = resultRow.account_id;
+      const result = resultRow.result;
+
+      console.log("👤 Stored procedure result:", { account_id, result });
+
+      if (!account_id || !result.startsWith("SUCCESS")) {
+        await connection.rollback();
+        return res.status(500).json({
+          error: "Failed to register student: " + result,
+        });
       }
 
-      const account_id = output.account_id;
-
-      // Get the student_id
-      const [studentData] = await connection.execute(
-        "SELECT student_id FROM students WHERE account_id = ?",
+      // Step 7: Get the student_id
+      const [studentResult] = await connection.execute(
+        `
+        SELECT student_id FROM students WHERE account_id = ?
+      `,
         [account_id]
       );
 
-      const student_id = studentData[0]?.student_id;
-
-      if (!student_id) {
-        throw new Error("Student record not found after creation");
+      if (studentResult.length === 0) {
+        await connection.rollback();
+        return res.status(500).json({
+          error: "Failed to retrieve student ID after registration",
+        });
       }
 
-      // Update trading level if provided
+      const student_id = studentResult[0].student_id;
+      console.log("🎓 Student created with ID:", student_id);
+
+      // Step 8: Update trading level if provided
       if (trading_level_id && trading_level_id !== 1) {
         await connection.execute(
-          `UPDATE student_trading_levels 
-           SET is_current = FALSE 
-           WHERE student_id = ? AND is_current = TRUE`,
+          `
+          UPDATE student_trading_levels 
+          SET is_current = FALSE 
+          WHERE student_id = ? AND is_current = TRUE
+        `,
           [student_id]
         );
 
         await connection.execute(
-          `INSERT INTO student_trading_levels (student_id, level_id, is_current, assigned_by)
-           VALUES (?, ?, TRUE, ?)`,
+          `
+          INSERT INTO student_trading_levels (student_id, level_id, is_current, assigned_by, assigned_date)
+          VALUES (?, ?, TRUE, ?, NOW())
+        `,
           [student_id, trading_level_id, req.user.staffId || null]
         );
+
+        console.log("📊 Updated trading level:", trading_level_id);
       }
 
-      // Update learning preferences if provided
+      // Step 9: Update learning preferences if provided
       if (device_type || learning_style) {
         const updateFields = [];
         const updateValues = [];
@@ -9600,6 +9654,7 @@ app.post('/api/students/register',
           updateFields.push("device_type = ?");
           updateValues.push(device_type);
         }
+
         if (learning_style) {
           updateFields.push("learning_style = ?");
           updateValues.push(learning_style);
@@ -9608,125 +9663,257 @@ app.post('/api/students/register',
         if (updateFields.length > 0) {
           updateValues.push(student_id);
           await connection.execute(
-            `UPDATE learning_preferences 
-             SET ${updateFields.join(", ")}
-             WHERE student_id = ?`,
+            `
+            UPDATE learning_preferences 
+            SET ${updateFields.join(", ")}, updated_at = NOW()
+            WHERE student_id = ?
+          `,
             updateValues
           );
+
+          console.log("🎯 Updated learning preferences");
         }
       }
 
-      // Create student account record for financial tracking
-      await connection.execute(`
+      // Step 10: Insert into student_accounts
+      await connection.execute(
+        `
         INSERT INTO student_accounts (
-          student_id, offering_id, total_due, amount_paid, balance, 
-          account_status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, 'active', NOW(), NOW())
-      `, [student_id, offering_id, finalTotalDue, finalAmountPaid, balance]);
+          student_id, offering_id, total_due, amount_paid, balance,
+          scheme_id, account_status, due_date, payment_reminder_count,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+      `,
+        [
+          student_id,
+          offering_id,
+          totalDue,
+          amountPaid,
+          balance,
+          scheme_id ? parseInt(scheme_id) : null,
+          balance > 0 ? "pending" : "paid",
+          dueDate,
+          0,
+        ]
+      );
 
-      // Create enrollment record
+      console.log("💰 Created student account with balance:", balance);
+
+      // Step 11: Create enrollment record
       const startDate = new Date(courseOffering.start_date);
       const completionDate = new Date(startDate);
       completionDate.setDate(startDate.getDate() + courseOffering.duration_weeks * 7);
 
-      await connection.execute(`
-        INSERT INTO student_enrollments (
-          student_id, offering_id, enrollment_date, enrollment_status, 
-          completion_date, completion_percentage
-        ) VALUES (?, ?, NOW(), 'enrolled', ?, 0.00)
-      `, [student_id, offering_id, completionDate]);
+      await connection.execute(
+        `
+        INSERT INTO student_enrollments(
+          student_id, offering_id, enrollment_date, enrollment_status, completion_date,
+          final_grade, completion_percentage, attendance_percentage
+        ) VALUES (?, ?, NOW(), 'enrolled', ?, ?, ?, ?)
+      `,
+        [student_id, offering_id, completionDate, null, 0.00, null]
+      );
 
-      // Update current enrollees count
-      await connection.execute(`
-        UPDATE course_offerings 
-        SET current_enrollees = current_enrollees + 1, updated_at = NOW()
-        WHERE offering_id = ?
-      `, [offering_id]);
-
-      // Add referral if provided
+      // Step 12: Add referral if provided
       if (referred_by) {
         try {
+          // Verify referrer exists
           const [referrerCheck] = await connection.execute(
-            `SELECT student_id FROM students WHERE student_id = ?`,
+            `
+            SELECT student_id FROM students WHERE student_id = ?
+          `,
             [referred_by]
           );
 
           if (referrerCheck.length > 0) {
             await connection.execute(
-              `INSERT INTO student_referrals (
+              `
+              INSERT INTO student_referrals (
                 student_id, referrer_student_id, referral_date, source_id
-              ) VALUES (?, ?, NOW(), 1)`,
+              ) VALUES (?, ?, NOW(), 1)
+            `,
               [student_id, referred_by]
             );
+
+            console.log("👥 Added referral from:", referred_by);
           }
         } catch (referralError) {
-          console.warn('Failed to add referral:', referralError.message);
+          console.warn("⚠️ Failed to add referral:", referralError.message);
+          // Don't fail the entire registration for referral issues
         }
       }
+
+      // Step 13: Update course offering
+      await connection.execute(
+        `
+        UPDATE course_offerings
+        SET current_enrollees = current_enrollees + 1,
+            status = IF(status = 'planned', 'active', status),
+            updated_at = NOW()
+        WHERE offering_id = ?
+      `,
+        [offering_id]
+      );
+
+      console.log("📈 Updated course offering enrollment count");
 
       await connection.commit();
+      console.log("✅ Transaction committed successfully");
 
-      // Send welcome email
+      // Step 14: Send email credentials
       let emailSent = false;
+      let emailError = null;
+
       try {
-        if (emailTransporter && email) {
-          await sendWelcomeEmail(
+        if (emailTransporter) {
+          emailSent = await sendPasswordEmail(
             email,
+            generatedPassword,
             first_name,
             last_name,
-            studentPassword,
-            "student"
+            courseOffering.course_name,
+            courseOffering.batch_identifier
           );
-          emailSent = true;
+          console.log("📧 Email sent successfully");
+        } else {
+          console.log("📧 Email service not configured");
         }
-      } catch (emailError) {
-        console.error('Failed to send welcome email:', emailError);
+      } catch (err) {
+        emailError = err.message;
+        console.error("📧 Email sending failed:", err.message);
       }
 
-      // Prepare response data
-      const responseData = {
-        message: 'Student registered successfully',
-        student_id: student_id,
-        account_id: account_id,
+      // Get updated enrollment count for response
+      const [updatedOffering] = await connection.execute(`
+        SELECT current_enrollees FROM course_offerings WHERE offering_id = ?
+      `, [offering_id]);
+
+      const currentEnrolleeCount = updatedOffering[0]?.current_enrollees || 0;
+
+      // Final response
+      res.status(201).json({
+        message: isNewBatch 
+          ? `Student registered successfully in new batch ${courseOffering.batch_identifier}`
+          : "Student registered successfully",
+        student_id,
+        account_id,
         course_offering: {
-          offering_id: offering_id,
-          course_name: courseOffering.course_name,
+          offering_id,
           batch_identifier: courseOffering.batch_identifier,
+          course_name: courseOffering.course_name,
+          course_code: courseOffering.course_code,
           start_date: courseOffering.start_date,
-          end_date: courseOffering.end_date
+          end_date: courseOffering.end_date,
+          current_enrollees: currentEnrolleeCount,
+          max_enrollees: courseOffering.max_enrollees,
+          is_new_batch: isNewBatch,
+          batch_status: currentEnrolleeCount >= courseOffering.max_enrollees ? 'full' : 'available'
         },
         credentials: {
-          email: email,
-          password: studentPassword
+          email,
+          password: generatedPassword,
         },
-        financial_info: {
-          total_due: finalTotalDue,
-          amount_paid: finalAmountPaid,
-          balance: balance
+        financial: {
+          total_due: totalDue,
+          amount_paid: amountPaid,
+          balance: balance,
+          due_date: dueDate
         },
-        email_sent: emailSent
-      };
-
-      res.status(201).json(responseData);
-
-    } catch (error) {
+        email_sent: emailSent,
+        email_error: emailError,
+      });
+    } catch (err) {
       await connection.rollback();
-      console.error('Student registration error:', error);
+      console.error("❌ Registration error:", err);
       
-      if (error.code === 'ER_DUP_ENTRY') {
+      if (err.code === 'ER_DUP_ENTRY') {
         return res.status(409).json({ 
           error: 'Student with this email already exists' 
         });
       }
       
-      res.status(500).json({ 
-        error: 'Failed to register student: ' + error.message 
+      res.status(500).json({
+        error: "Registration failed",
+        details:
+          process.env.NODE_ENV === "development" ? err.message : undefined,
       });
     } finally {
       connection.release();
     }
   }
 );
+
+// Helper function to generate random password
+function generateRandomPassword(length = 12) {
+  const charset =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
+  let password = "";
+
+  // Ensure at least one of each type
+  const lowercase = "abcdefghijklmnopqrstuvwxyz";
+  const uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const numbers = "0123456789";
+  const symbols = "!@#$%^&*";
+
+  password += lowercase[Math.floor(Math.random() * lowercase.length)];
+  password += uppercase[Math.floor(Math.random() * uppercase.length)];
+  password += numbers[Math.floor(Math.random() * numbers.length)];
+  password += symbols[Math.floor(Math.random() * symbols.length)];
+
+  // Fill the rest randomly
+  for (let i = 4; i < length; i++) {
+    password += charset[Math.floor(Math.random() * charset.length)];
+  }
+
+  // Shuffle the password
+  return password
+    .split("")
+    .sort(() => Math.random() - 0.5)
+    .join("");
+}
+
+// Enhanced email function
+async function sendPasswordEmail(
+  email,
+  password,
+  firstName,
+  lastName,
+  courseName,
+  batchIdentifier
+) {
+  if (!emailTransporter) {
+    throw new Error("Email service not configured");
+  }
+
+  const mailOptions = {
+    from: `"${process.env.EMAIL_FROM_NAME || "Trading Academy"}" <${
+      process.env.EMAIL_USER
+    }>`,
+    to: email,
+    subject: `Welcome to ${courseName} - Your Login Credentials`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #2d4a3d;">Welcome to Trading Academy!</h2>
+        <p>Dear ${firstName} ${lastName},</p>
+        <p>You have been successfully enrolled in <strong>${courseName}</strong> (Batch: ${batchIdentifier}).</p>
+        <div style="background-color: #f5f2e8; padding: 20px; border-radius: 5px; margin: 20px 0;">
+          <p><strong>Your login credentials:</strong></p>
+          <ul>
+            <li>Email: ${email}</li>
+            <li>Password: <code style="background-color: #fff; padding: 2px 4px; border-radius: 3px;">${password}</code></li>
+          </ul>
+        </div>
+        <p><strong>Important:</strong> Please change your password after your first login for security purposes.</p>
+        <p>You can log in to your account using your email address and the password provided above.</p>
+        <p>If you have any questions, please don't hesitate to contact our support team.</p>
+        <p>Best regards,<br>Trading Academy Team</p>
+      </div>
+    `,
+  };
+
+  await emailTransporter.sendMail(mailOptions);
+  return true;
+}
 
 // Additional endpoint to manually enroll a student
 app.post(

@@ -1100,7 +1100,7 @@ Please provide these credentials to the student manually.`);
           </div>
         </fieldset>
 
-        <fieldset style={styles.fieldset}>
+        {/* <fieldset style={styles.fieldset}>
           <legend style={styles.legend}>Financial Information</legend>
           <div style={styles.formRow}>
             <div style={styles.formGroup}>
@@ -1148,7 +1148,7 @@ Please provide these credentials to the student manually.`);
               <strong>Balance: ₱{parseFloat(formData.total_due - (formData.amount_paid || 0)).toLocaleString()}</strong>
             </div>
           )}
-        </fieldset>
+        </fieldset> */}
 
         <fieldset style={styles.fieldset}>
           <legend style={styles.legend}>Referral Information</legend>
