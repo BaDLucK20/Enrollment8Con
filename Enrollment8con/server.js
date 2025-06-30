@@ -2019,7 +2019,24 @@ app.get(
           COUNT(DISTINCT se.enrollment_id) as total_enrollments,
           SUM(DISTINCT sa.total_due) as total_course_cost,
           SUM(DISTINCT sa.amount_paid) as total_amount_paid,
-          SUM(DISTINCT sa.balance) as total_balance
+          SUM(DISTINCT sa.balance) as total_balance,
+          
+          -- Sponsor information
+          sp.sponsor_id,
+          sp.sponsor_name,
+          sp.sponsor_code,
+          sp.contact_person as sponsor_contact_person,
+          sp.contact_email as sponsor_contact_email,
+          sp.contact_phone as sponsor_contact_phone,
+          spt.type_name as sponsor_type,
+          ss.coverage_percentage,
+          ss.scholarship_status,
+          ss.approval_date as scholarship_approval_date,
+          CASE 
+            WHEN sp.sponsor_id IS NOT NULL THEN 1 
+            ELSE 0 
+          END as has_sponsor
+          
         FROM students s
         JOIN persons p ON s.person_id = p.person_id
         LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
@@ -2028,6 +2045,11 @@ app.get(
         LEFT JOIN course_offerings co ON se.offering_id = co.offering_id
         LEFT JOIN courses c ON co.course_id = c.course_id
         LEFT JOIN student_accounts sa ON se.student_id = sa.student_id AND se.offering_id = sa.offering_id
+        
+        -- Left join with sponsor tables
+        LEFT JOIN student_scholarships ss ON s.student_id = ss.student_id AND ss.scholarship_status = 'approved'
+        LEFT JOIN sponsors sp ON ss.sponsor_id = sp.sponsor_id
+        LEFT JOIN sponsor_types spt ON sp.sponsor_type_id = spt.sponsor_type_id
       `;
 
       const params = [];
@@ -2068,7 +2090,17 @@ app.get(
           s.academic_standing,
           s.gpa,
           s.registration_date,
-          tl.level_name
+          tl.level_name,
+          sp.sponsor_id,
+          sp.sponsor_name,
+          sp.sponsor_code,
+          sp.contact_person,
+          sp.contact_email,
+          sp.contact_phone,
+          spt.type_name,
+          ss.coverage_percentage,
+          ss.scholarship_status,
+          ss.approval_date
       `;
 
       if (name_sort) {
@@ -2088,10 +2120,26 @@ app.get(
         ...student,
         total_course_cost: parseFloat(student.total_course_cost) || 0,
         total_amount_paid: parseFloat(student.total_amount_paid) || 0,
-        total_balance: parseFloat(student.total_balance) || 0
+        total_balance: parseFloat(student.total_balance) || 0,
+        coverage_percentage: parseFloat(student.coverage_percentage) || 0,
+        has_sponsor: Boolean(student.has_sponsor),
+        sponsor_info: student.sponsor_id ? {
+          sponsor_id: student.sponsor_id,
+          sponsor_name: student.sponsor_name,
+          sponsor_code: student.sponsor_code,
+          sponsor_type: student.sponsor_type,
+          contact_person: student.sponsor_contact_person,
+          contact_email: student.sponsor_contact_email,
+          contact_phone: student.sponsor_contact_phone,
+          coverage_percentage: student.coverage_percentage,
+          scholarship_status: student.scholarship_status,
+          approval_date: student.scholarship_approval_date
+        } : null
       }));
 
       console.log(`Found ${processedStudents.length} students`);
+      console.log(`Students with sponsors: ${processedStudents.filter(s => s.has_sponsor).length}`);
+      
       res.json(processedStudents);
     } catch (error) {
       console.error("Students fetch error:", error);
@@ -9656,6 +9704,806 @@ app.post(
 // STUDENT REGISTRATION ENDPOINT (Public - Updated to use stored procedure)
 // ============================================================================
 
+// app.post(
+//   "/api/students/register",
+//   [
+//     authenticateToken,
+//     authorize(["admin", "instructor", "staff"]),
+//     body("first_name")
+//       .trim()
+//       .notEmpty()
+//       .withMessage("First name is required")
+//       .isLength({ max: 50 }),
+//     body("last_name")
+//       .trim()
+//       .notEmpty()
+//       .withMessage("Last name is required")
+//       .isLength({ max: 50 }),
+//     body("email")
+//       .isEmail()
+//       .normalizeEmail()
+//       .withMessage("Valid email is required"),
+//     body("course_id")
+//       .isInt({ min: 1 })
+//       .withMessage("Valid course ID is required"),
+
+//     // Optional fields - properly configured to allow null/undefined
+//     body("middle_name").optional({ checkFalsy: true }).trim(),
+//     body("birth_date").optional({ checkFalsy: true }).isISO8601(),
+//     body("birth_place").optional({ checkFalsy: true }).trim(),
+//     body("gender")
+//       .optional({ checkFalsy: true })
+//       .isIn(["Male", "Female", "Other"]),
+//     body("education").optional({ checkFalsy: true }).trim(),
+//     body("phone").optional({ checkFalsy: true }).trim(),
+//     body("address").optional({ checkFalsy: true }).trim(),
+//     body("trading_level_id").optional({ checkFalsy: true }).isInt({ min: 1 }),
+//     body("referred_by").optional({ checkFalsy: true }).isInt({ min: 1 }),
+//     body("device_type").optional({ checkFalsy: true }).isString(),
+//     body("learning_style").optional({ checkFalsy: true }).isString(),
+//     body("scheme_id").optional({ checkFalsy: true }).isInt({ min: 1 }),
+//     body("total_due").optional({ checkFalsy: true }).isFloat({ min: 0 }),
+//     body("amount_paid").optional({ checkFalsy: true }).isFloat({ min: 0 }),
+//   ],
+//   validateInput,
+//   async (req, res) => {
+//     const connection = await pool.getConnection();
+
+//     try {
+//       await connection.beginTransaction();
+
+//       const {
+//         first_name,
+//         middle_name,
+//         last_name,
+//         birth_date,
+//         birth_place,
+//         gender,
+//         email,
+//         education,
+//         phone,
+//         address,
+//         course_id,
+//         scheme_id,
+//         total_due,
+//         amount_paid,
+//         referred_by,
+//         trading_level_id,
+//         device_type,
+//         learning_style,
+//       } = req.body;
+
+//       console.log("📝 Received registration data:", {
+//         first_name,
+//         last_name,
+//         email,
+//         course_id,
+//         optional_fields: {
+//           middle_name,
+//           birth_date,
+//           birth_place,
+//           gender,
+//           education,
+//           phone,
+//           address,
+//         },
+//       });
+
+//       // Step 1: Get course details first
+//       const [courseInfo] = await connection.execute(`
+//         SELECT 
+//           c.course_name, 
+//           c.duration_weeks, 
+//           c.course_code, 
+//           c.course_id
+//         FROM courses c
+//         WHERE c.course_id = ?
+//       `, [course_id]);
+
+//       if (courseInfo.length === 0) {
+//         await connection.rollback();
+//         return res.status(404).json({ 
+//           error: 'Course not found' 
+//         });
+//       }
+
+//       const courseData = courseInfo[0];
+
+//       // Step 2: Check for existing enrollment
+//       const [existing] = await connection.execute(
+//         `
+//         SELECT sa.account_id, p.email
+//         FROM student_accounts sa
+//         JOIN students s ON sa.student_id = s.student_id
+//         JOIN persons p ON s.person_id = p.person_id
+//         JOIN course_offerings co ON sa.offering_id = co.offering_id
+//         WHERE p.email = ? AND co.course_id = ?
+//       `,
+//         [email, course_id]
+//       );
+
+//       if (existing.length > 0) {
+//         await connection.rollback();
+//         return res.status(409).json({
+//           error: "Student with this email is already enrolled in this course.",
+//         });
+//       }
+
+//       // Step 3: Find available course offerings or create new batch
+//       let [availableOfferings] = await connection.execute(`
+//         SELECT co.offering_id, co.course_id, co.batch_identifier, co.start_date, 
+//                co.end_date, co.max_enrollees, co.current_enrollees, co.status,
+//                c.course_name, c.duration_weeks, c.course_code
+//         FROM course_offerings co
+//         INNER JOIN courses c ON co.course_id = c.course_id
+//         WHERE co.course_id = ? 
+//           AND co.status IN ('planned', 'active')
+//           AND co.current_enrollees < co.max_enrollees
+//           AND co.end_date > NOW()
+//         ORDER BY 
+//           CASE WHEN co.status = 'planned' THEN 1 ELSE 2 END,
+//           co.start_date ASC
+//         LIMIT 1
+//       `, [course_id]);
+
+//       let courseOffering;
+//       let offering_id;
+//       let isNewBatch = false;
+
+//       // Check if we need to create a new batch
+//       if (availableOfferings.length === 0) {
+//         console.log('🆕 Creating new batch - no available offerings found...');
+        
+//         // Get the latest batch identifier to generate the next one
+//         const [latestBatch] = await connection.execute(`
+//           SELECT batch_identifier, start_date, max_enrollees
+//           FROM course_offerings
+//           WHERE course_id = ?
+//           ORDER BY CAST(SUBSTRING_INDEX(batch_identifier, '-', -1) AS UNSIGNED) DESC,
+//                    created_at DESC
+//           LIMIT 1
+//         `, [course_id]);
+
+//         let newBatchIdentifier;
+//         let newStartDate;
+//         let maxEnrollees = 30; // Default
+
+//         if (latestBatch.length > 0) {
+//           // Extract batch number and increment
+//           const latestBatchId = latestBatch[0].batch_identifier;
+//           const batchPattern = /^(.+)-(\d{4})-(\d+)$/;
+//           const match = latestBatchId.match(batchPattern);
+          
+//           if (match) {
+//             const [, coursePrefix, year, batchNum] = match;
+//             const currentYear = new Date().getFullYear();
+            
+//             // If it's a new year, start from 01, otherwise increment
+//             if (parseInt(year) < currentYear) {
+//               newBatchIdentifier = `${coursePrefix}-${currentYear}-01`;
+//             } else {
+//               const nextBatchNum = parseInt(batchNum) + 1;
+//               newBatchIdentifier = `${coursePrefix}-${year}-${String(nextBatchNum).padStart(2, '0')}`;
+//             }
+//           } else {
+//             // Fallback if batch identifier doesn't match expected pattern
+//             newBatchIdentifier = `${courseData.course_code}-${new Date().getFullYear()}-01`;
+//           }
+          
+//           // Set start date 2 weeks after the latest batch start date
+//           const latestStartDate = new Date(latestBatch[0].start_date);
+//           newStartDate = new Date(latestStartDate);
+//           newStartDate.setDate(newStartDate.getDate() + 14); // 2 weeks later
+          
+//           maxEnrollees = latestBatch[0].max_enrollees || 30;
+//         } else {
+//           // First batch for this course
+//           newBatchIdentifier = `${courseData.course_code}-${new Date().getFullYear()}-01`;
+//           newStartDate = new Date();
+//           newStartDate.setDate(newStartDate.getDate() + 7); // Start next week
+//         }
+        
+//         const newEndDate = new Date(newStartDate);
+//         newEndDate.setDate(newStartDate.getDate() + (courseData.duration_weeks * 7));
+
+//         // Create new course offering
+//         const [newOfferingResult] = await connection.execute(`
+//           INSERT INTO course_offerings (
+//             course_id, batch_identifier, start_date, end_date, 
+//             max_enrollees, current_enrollees, status, location, created_at, updated_at
+//           ) VALUES (?, ?, ?, ?, ?, 0, 'planned', 'Online', NOW(), NOW())
+//         `, [course_id, newBatchIdentifier, newStartDate, newEndDate, maxEnrollees]);
+
+//         offering_id = newOfferingResult.insertId;
+//         isNewBatch = true;
+
+//         // Create courseOffering object for the new batch
+//         courseOffering = {
+//           offering_id: offering_id,
+//           course_id: course_id,
+//           batch_identifier: newBatchIdentifier,
+//           start_date: newStartDate,
+//           end_date: newEndDate,
+//           max_enrollees: maxEnrollees,
+//           current_enrollees: 0,
+//           status: 'planned',
+//           course_name: courseData.course_name,
+//           duration_weeks: courseData.duration_weeks,
+//           course_code: courseData.course_code
+//         };
+
+//         // Create default pricing for new batch
+//         await connection.execute(`
+//           INSERT INTO course_pricing (
+//             offering_id, amount, pricing_type, currency, 
+//             effective_date, is_active
+//           ) VALUES (?, 0, 'regular', 'PHP', NOW(), 1)
+//         `, [offering_id]);
+
+//         console.log(`✅ Created new batch: ${newBatchIdentifier} for course ${courseData.course_name}`);
+//       } else {
+//         // Use existing available offering
+//         courseOffering = availableOfferings[0];
+//         offering_id = courseOffering.offering_id;
+        
+//         console.log("📚 Found available course offering:", {
+//           offering_id,
+//           course_name: courseOffering.course_name,
+//           batch: courseOffering.batch_identifier,
+//         });
+//       }
+
+//       // Step 4: Get pricing information
+//       const [pricingData] = await connection.execute(`
+//         SELECT amount FROM course_pricing 
+//         WHERE offering_id = ? AND pricing_type = 'regular' AND is_active = 1
+//         ORDER BY effective_date DESC 
+//         LIMIT 1
+//       `, [offering_id]);
+
+//       const serverCalculatedPrice = pricingData.length > 0 ? parseFloat(pricingData[0].amount) : 0;
+//       const totalDue = total_due ? parseFloat(total_due) : serverCalculatedPrice;
+//       const amountPaid = amount_paid ? parseFloat(amount_paid) : 0;
+//       const balance = totalDue - amountPaid;
+//       const dueDate = balance > 0 ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) : null;
+
+//       // Step 5: Generate and hash password
+//       const generatedPassword = generateRandomPassword();
+//       const password_hash = await bcrypt.hash(generatedPassword, 10);
+
+//       console.log("🔐 Generated password for student");
+
+//       // Step 6: Call stored procedure to create user + student
+//       await connection.query(
+//         `
+//         CALL sp_register_user_with_synced_ids(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, @p_account_id, @p_result);
+//       `,
+//         [
+//           password_hash,
+//           first_name,
+//           middle_name || null,
+//           last_name,
+//           birth_date || null,
+//           birth_place || null,
+//           gender || null,
+//           email,
+//           education || null,
+//           phone || null,
+//           address || null,
+//           "student",
+//         ]
+//       );
+
+//       const [selectResult] = await connection.query(`
+//         SELECT @p_account_id AS account_id, @p_result AS result;
+//       `);
+
+//       const resultRow = selectResult[0];
+//       const account_id = resultRow.account_id;
+//       const result = resultRow.result;
+
+//       console.log("👤 Stored procedure result:", { account_id, result });
+
+//       if (!account_id || !result.startsWith("SUCCESS")) {
+//         await connection.rollback();
+//         return res.status(500).json({
+//           error: "Failed to register student: " + result,
+//         });
+//       }
+
+//       // Step 7: Get the student_id
+//       const [studentResult] = await connection.execute(
+//         `
+//         SELECT student_id FROM students WHERE account_id = ?
+//       `,
+//         [account_id]
+//       );
+
+//       if (studentResult.length === 0) {
+//         await connection.rollback();
+//         return res.status(500).json({
+//           error: "Failed to retrieve student ID after registration",
+//         });
+//       }
+
+//       const student_id = studentResult[0].student_id;
+//       console.log("🎓 Student created with ID:", student_id);
+
+//       // Step 8: Update trading level if provided
+//       if (trading_level_id && trading_level_id !== 1) {
+//         await connection.execute(
+//           `
+//           UPDATE student_trading_levels 
+//           SET is_current = FALSE 
+//           WHERE student_id = ? AND is_current = TRUE
+//         `,
+//           [student_id]
+//         );
+
+//         await connection.execute(
+//           `
+//           INSERT INTO student_trading_levels (student_id, level_id, is_current, assigned_by, assigned_date)
+//           VALUES (?, ?, TRUE, ?, NOW())
+//         `,
+//           [student_id, trading_level_id, req.user.staffId || null]
+//         );
+
+//         console.log("📊 Updated trading level:", trading_level_id);
+//       }
+
+//       // Step 9: Update learning preferences if provided
+//       if (device_type || learning_style) {
+//         const updateFields = [];
+//         const updateValues = [];
+
+//         if (device_type) {
+//           updateFields.push("device_type = ?");
+//           updateValues.push(device_type);
+//         }
+
+//         if (learning_style) {
+//           updateFields.push("learning_style = ?");
+//           updateValues.push(learning_style);
+//         }
+
+//         if (updateFields.length > 0) {
+//           updateValues.push(student_id);
+//           await connection.execute(
+//             `
+//             UPDATE learning_preferences 
+//             SET ${updateFields.join(", ")}, updated_at = NOW()
+//             WHERE student_id = ?
+//           `,
+//             updateValues
+//           );
+
+//           console.log("🎯 Updated learning preferences");
+//         }
+//       }
+
+//       // Step 10: Insert into student_accounts
+//       await connection.execute(
+//         `
+//         INSERT INTO student_accounts (
+//           student_id, offering_id, total_due, amount_paid, balance,
+//           scheme_id, account_status, due_date, payment_reminder_count,
+//           created_at
+//         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+//       `,
+//         [
+//           student_id,
+//           offering_id,
+//           totalDue,
+//           amountPaid,
+//           balance,
+//           scheme_id ? parseInt(scheme_id) : null,
+//           balance > 0 ? "pending" : "paid",
+//           dueDate,
+//           0,
+//         ]
+//       );
+
+//       console.log("💰 Created student account with balance:", balance);
+
+//       // Step 11: Create enrollment record
+//       const startDate = new Date(courseOffering.start_date);
+//       const completionDate = new Date(startDate);
+//       completionDate.setDate(startDate.getDate() + courseOffering.duration_weeks * 7);
+
+//       await connection.execute(
+//         `
+//         INSERT INTO student_enrollments(
+//           student_id, offering_id, enrollment_date, enrollment_status, completion_date,
+//           final_grade, completion_percentage, attendance_percentage
+//         ) VALUES (?, ?, NOW(), 'enrolled', ?, ?, ?, ?)
+//       `,
+//         [student_id, offering_id, completionDate, null, 0.00, null]
+//       );
+
+//       // Step 12: Add referral if provided
+//       if (referred_by) {
+//         try {
+//           // Verify referrer exists
+//           const [referrerCheck] = await connection.execute(
+//             `
+//             SELECT student_id FROM students WHERE student_id = ?
+//           `,
+//             [referred_by]
+//           );
+
+//           if (referrerCheck.length > 0) {
+//             await connection.execute(
+//               `
+//               INSERT INTO student_referrals (
+//                 student_id, referrer_student_id, referral_date, source_id
+//               ) VALUES (?, ?, NOW(), 1)
+//             `,
+//               [student_id, referred_by]
+//             );
+
+//             console.log("👥 Added referral from:", referred_by);
+//           }
+//         } catch (referralError) {
+//           console.warn("⚠️ Failed to add referral:", referralError.message);
+//           // Don't fail the entire registration for referral issues
+//         }
+//       }
+
+//       // Step 13: Update course offering
+//       await connection.execute(
+//         `
+//         UPDATE course_offerings
+//         SET current_enrollees = current_enrollees + 1,
+//             status = IF(status = 'planned', 'active', status),
+//             updated_at = NOW()
+//         WHERE offering_id = ?
+//       `,
+//         [offering_id]
+//       );
+
+//       console.log("📈 Updated course offering enrollment count");
+
+//       await connection.commit();
+//       console.log("✅ Transaction committed successfully");
+
+//       // Step 14: Send email credentials
+//       let emailSent = false;
+//       let emailError = null;
+
+//       try {
+//         if (emailTransporter) {
+//           emailSent = await sendPasswordEmail(
+//             email,
+//             generatedPassword,
+//             first_name,
+//             last_name,
+//             courseOffering.course_name,
+//             courseOffering.batch_identifier
+//           );
+//           console.log("📧 Email sent successfully");
+//         } else {
+//           console.log("📧 Email service not configured");
+//         }
+//       } catch (err) {
+//         emailError = err.message;
+//         console.error("📧 Email sending failed:", err.message);
+//       }
+
+//       // Get updated enrollment count for response
+//       const [updatedOffering] = await connection.execute(`
+//         SELECT current_enrollees FROM course_offerings WHERE offering_id = ?
+//       `, [offering_id]);
+
+//       const currentEnrolleeCount = updatedOffering[0]?.current_enrollees || 0;
+
+//       // Final response
+//       res.status(201).json({
+//         message: isNewBatch 
+//           ? `Student registered successfully in new batch ${courseOffering.batch_identifier}`
+//           : "Student registered successfully",
+//         student_id,
+//         account_id,
+//         course_offering: {
+//           offering_id,
+//           batch_identifier: courseOffering.batch_identifier,
+//           course_name: courseOffering.course_name,
+//           course_code: courseOffering.course_code,
+//           start_date: courseOffering.start_date,
+//           end_date: courseOffering.end_date,
+//           current_enrollees: currentEnrolleeCount,
+//           max_enrollees: courseOffering.max_enrollees,
+//           is_new_batch: isNewBatch,
+//           batch_status: currentEnrolleeCount >= courseOffering.max_enrollees ? 'full' : 'available'
+//         },
+//         credentials: {
+//           email,
+//           password: generatedPassword,
+//         },
+//         financial: {
+//           total_due: totalDue,
+//           amount_paid: amountPaid,
+//           balance: balance,
+//           due_date: dueDate
+//         },
+//         email_sent: emailSent,
+//         email_error: emailError,
+//       });
+//     } catch (err) {
+//       await connection.rollback();
+//       console.error("❌ Registration error:", err);
+      
+//       if (err.code === 'ER_DUP_ENTRY') {
+//         return res.status(409).json({ 
+//           error: 'Student with this email already exists' 
+//         });
+//       }
+      
+//       res.status(500).json({
+//         error: "Registration failed",
+//         details:
+//           process.env.NODE_ENV === "development" ? err.message : undefined,
+//       });
+//     } finally {
+//       connection.release();
+//     }
+//   }
+// );
+
+// // Helper function to generate random password
+// function generateRandomPassword(length = 12) {
+//   const charset =
+//     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
+//   let password = "";
+
+//   // Ensure at least one of each type
+//   const lowercase = "abcdefghijklmnopqrstuvwxyz";
+//   const uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+//   const numbers = "0123456789";
+//   const symbols = "!@#$%^&*";
+
+//   password += lowercase[Math.floor(Math.random() * lowercase.length)];
+//   password += uppercase[Math.floor(Math.random() * uppercase.length)];
+//   password += numbers[Math.floor(Math.random() * numbers.length)];
+//   password += symbols[Math.floor(Math.random() * symbols.length)];
+
+//   // Fill the rest randomly
+//   for (let i = 4; i < length; i++) {
+//     password += charset[Math.floor(Math.random() * charset.length)];
+//   }
+
+//   // Shuffle the password
+//   return password
+//     .split("")
+//     .sort(() => Math.random() - 0.5)
+//     .join("");
+// }
+
+// // Enhanced email function
+// async function sendPasswordEmail(
+//   email,
+//   password,
+//   firstName,
+//   lastName,
+//   courseName,
+//   batchIdentifier
+// ) {
+//   if (!emailTransporter) {
+//     throw new Error("Email service not configured");
+//   }
+
+//   const mailOptions = {
+//     from: `"${process.env.EMAIL_FROM_NAME || "Trading Academy"}" <${
+//       process.env.EMAIL_USER
+//     }>`,
+//     to: email,
+//     subject: `Welcome to ${courseName} - Your Login Credentials`,
+//     html: `
+//       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+//         <h2 style="color: #2d4a3d;">Welcome to Trading Academy!</h2>
+//         <p>Dear ${firstName} ${lastName},</p>
+//         <p>You have been successfully enrolled in <strong>${courseName}</strong> (Batch: ${batchIdentifier}).</p>
+//         <div style="background-color: #f5f2e8; padding: 20px; border-radius: 5px; margin: 20px 0;">
+//           <p><strong>Your login credentials:</strong></p>
+//           <ul>
+//             <li>Email: ${email}</li>
+//             <li>Password: <code style="background-color: #fff; padding: 2px 4px; border-radius: 3px;">${password}</code></li>
+//           </ul>
+//         </div>
+//         <p><strong>Important:</strong> Please change your password after your first login for security purposes.</p>
+//         <p>You can log in to your account using your email address and the password provided above.</p>
+//         <p>If you have any questions, please don't hesitate to contact our support team.</p>
+//         <p>Best regards,<br>Trading Academy Team</p>
+//       </div>
+//     `,
+//   };
+
+//   await emailTransporter.sendMail(mailOptions);
+//   return true;
+// }
+
+// Add this new API endpoint to fetch sponsor types
+app.get('/api/sponsor-types', [
+  authenticateToken,
+  authorize(["admin", "instructor", "staff"])
+], async (req, res) => {
+  const connection = await pool.getConnection();
+  
+  try {
+    const [sponsorTypes] = await connection.execute(`
+      SELECT sponsor_type_id, type_name, type_description, 
+             default_coverage_percentage, max_students_per_sponsor,
+             requires_agreement, reporting_frequency, is_active
+      FROM sponsor_types 
+      WHERE is_active = 1
+      ORDER BY type_name ASC
+    `);
+    
+    console.log('✅ Sponsor types fetched successfully:', sponsorTypes.length);
+    res.json(sponsorTypes);
+  } catch (error) {
+    console.error('❌ Error fetching sponsor types:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch sponsor types',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  } finally {
+    connection.release();
+  }
+});
+
+// Helper function to generate sponsor code
+function generateSponsorCode(sponsorType, sponsorName) {
+  // Create prefix based on sponsor type
+  const typePrefix = sponsorType.substring(0, 3).toUpperCase();
+  
+  // Create name abbreviation (first 3 letters of each word)
+  const nameWords = sponsorName.trim().split(/\s+/);
+  const namePrefix = nameWords
+    .map(word => word.substring(0, 3).toUpperCase())
+    .join('')
+    .substring(0, 6); // Limit to 6 characters
+  
+  // Generate random number
+  const randomNum = Math.floor(Math.random() * 999) + 1;
+  const paddedNum = randomNum.toString().padStart(3, '0');
+  
+  return `${typePrefix}-${namePrefix}-${paddedNum}`;
+}
+
+// Helper function to create sponsor and scholarship records
+async function createSponsorAndScholarship(connection, sponsorInfo, studentId, staffId) {
+  console.log('🏢 Creating sponsor and scholarship records...');
+  
+  try {
+    // Step 1: Get sponsor type ID
+    const [sponsorTypeResult] = await connection.execute(`
+      SELECT sponsor_type_id, default_coverage_percentage 
+      FROM sponsor_types 
+      WHERE type_name = ? AND is_active = 1
+    `, [sponsorInfo.sponsor_type]);
+    
+    if (sponsorTypeResult.length === 0) {
+      throw new Error(`Sponsor type '${sponsorInfo.sponsor_type}' not found`);
+    }
+    
+    const sponsorTypeId = sponsorTypeResult[0].sponsor_type_id;
+    const defaultCoverage = sponsorTypeResult[0].default_coverage_percentage || 0;
+    
+    // Step 2: Check if sponsor already exists (by name and contact email)
+    const [existingSponsor] = await connection.execute(`
+      SELECT sponsor_id, sponsor_code, sponsor_name 
+      FROM sponsors 
+      WHERE sponsor_name = ? AND contact_email = ? AND is_active = 1
+    `, [sponsorInfo.sponsor_name, sponsorInfo.contact_email]);
+    
+    let sponsorId;
+    let sponsorCode;
+    let isNewSponsor = false;
+    
+    if (existingSponsor.length > 0) {
+      // Use existing sponsor
+      sponsorId = existingSponsor[0].sponsor_id;
+      sponsorCode = existingSponsor[0].sponsor_code;
+      console.log('📋 Using existing sponsor:', sponsorCode);
+      
+      // Update student count
+      await connection.execute(`
+        UPDATE sponsors 
+        SET students_sponsored = students_sponsored + 1,
+            updated_at = NOW()
+        WHERE sponsor_id = ?
+      `, [sponsorId]);
+    } else {
+      // Create new sponsor
+      isNewSponsor = true;
+      
+      // Generate unique sponsor code
+      let attempts = 0;
+      let codeExists = true;
+      
+      while (codeExists && attempts < 10) {
+        sponsorCode = generateSponsorCode(sponsorInfo.sponsor_type, sponsorInfo.sponsor_name);
+        
+        const [codeCheck] = await connection.execute(`
+          SELECT sponsor_id FROM sponsors WHERE sponsor_code = ?
+        `, [sponsorCode]);
+        
+        codeExists = codeCheck.length > 0;
+        attempts++;
+      }
+      
+      if (codeExists) {
+        throw new Error('Failed to generate unique sponsor code after multiple attempts');
+      }
+      
+      // Insert new sponsor
+      const [sponsorResult] = await connection.execute(`
+        INSERT INTO sponsors (
+          sponsor_type_id, sponsor_name, sponsor_code,
+          contact_person, contact_email, contact_phone,
+          students_sponsored, is_active, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 1, 1, NOW(), NOW())
+      `, [
+        sponsorTypeId,
+        sponsorInfo.sponsor_name,
+        sponsorCode,
+        sponsorInfo.contact_person,
+        sponsorInfo.contact_email,
+        sponsorInfo.contact_number
+      ]);
+      
+      sponsorId = sponsorResult.insertId;
+      console.log('🆕 Created new sponsor:', sponsorCode, 'ID:', sponsorId);
+    }
+    
+    // Step 3: Create scholarship record in the scholarships table
+    const [scholarshipResult] = await connection.execute(`
+      INSERT INTO scholarships (
+        student_id, sponsor_type, sponsor_name, sponsor_contact, approved_by
+      ) VALUES (?, ?, ?, ?, ?)
+    `, [
+      studentId,
+      sponsorInfo.sponsor_type,
+      sponsorInfo.sponsor_name,
+      sponsorInfo.contact_number,
+      staffId
+    ]);
+    
+    const scholarshipId = scholarshipResult.insertId;
+    console.log('🎓 Created scholarship record ID:', scholarshipId);
+    
+    // Step 4: Create detailed scholarship record in student_scholarships table
+    await connection.execute(`
+      INSERT INTO student_scholarships (
+        student_id, sponsor_id, scholarship_type, coverage_percentage,
+        scholarship_status, approved_by, approval_date, created_at, updated_at
+      ) VALUES (?, ?, 'partial', ?, 'approved', ?, NOW(), NOW(), NOW())
+    `, [
+      studentId,
+      sponsorId,
+      defaultCoverage,
+      staffId
+    ]);
+    
+    console.log('📜 Created detailed student scholarship record');
+    
+    return {
+      sponsor_id: sponsorId,
+      sponsor_code: sponsorCode,
+      sponsor_name: sponsorInfo.sponsor_name,
+      sponsor_type: sponsorInfo.sponsor_type,
+      scholarship_id: scholarshipId,
+      is_new_sponsor: isNewSponsor,
+      coverage_percentage: defaultCoverage
+    };
+    
+  } catch (error) {
+    console.error('❌ Error creating sponsor/scholarship:', error);
+    throw error;
+  }
+}
+
+// Updated student registration endpoint with sponsor support
 app.post(
   "/api/students/register",
   [
@@ -9696,6 +10544,14 @@ app.post(
     body("scheme_id").optional({ checkFalsy: true }).isInt({ min: 1 }),
     body("total_due").optional({ checkFalsy: true }).isFloat({ min: 0 }),
     body("amount_paid").optional({ checkFalsy: true }).isFloat({ min: 0 }),
+    
+    // Sponsor information validation
+    body("sponsor_info").optional().isObject(),
+    body("sponsor_info.sponsor_type").optional({ checkFalsy: true }).trim(),
+    body("sponsor_info.sponsor_name").optional({ checkFalsy: true }).trim(),
+    body("sponsor_info.contact_person").optional({ checkFalsy: true }).trim(),
+    body("sponsor_info.contact_email").optional({ checkFalsy: true }).isEmail(),
+    body("sponsor_info.contact_number").optional({ checkFalsy: true }).trim(),
   ],
   validateInput,
   async (req, res) => {
@@ -9723,6 +10579,7 @@ app.post(
         trading_level_id,
         device_type,
         learning_style,
+        sponsor_info, // New sponsor information
       } = req.body;
 
       console.log("📝 Received registration data:", {
@@ -9730,6 +10587,8 @@ app.post(
         last_name,
         email,
         course_id,
+        has_sponsor: !!sponsor_info,
+        sponsor_type: sponsor_info?.sponsor_type,
         optional_fields: {
           middle_name,
           birth_date,
@@ -9981,7 +10840,26 @@ app.post(
       const student_id = studentResult[0].student_id;
       console.log("🎓 Student created with ID:", student_id);
 
-      // Step 8: Update trading level if provided
+      // Step 8: Handle sponsor information if provided
+      let sponsorInfo = null;
+      if (sponsor_info && sponsor_info.sponsor_type) {
+        try {
+          console.log("🏢 Processing sponsor information...");
+          sponsorInfo = await createSponsorAndScholarship(
+            connection, 
+            sponsor_info, 
+            student_id, 
+            req.user.staffId || req.user.accountId || null
+          );
+          console.log("✅ Sponsor information processed successfully");
+        } catch (sponsorError) {
+          console.error("❌ Failed to create sponsor/scholarship:", sponsorError);
+          // Don't fail the entire registration, but log the error
+          console.warn("⚠️ Student registration will continue without sponsor assignment");
+        }
+      }
+
+      // Step 9: Update trading level if provided
       if (trading_level_id && trading_level_id !== 1) {
         await connection.execute(
           `
@@ -10003,7 +10881,7 @@ app.post(
         console.log("📊 Updated trading level:", trading_level_id);
       }
 
-      // Step 9: Update learning preferences if provided
+      // Step 10: Update learning preferences if provided
       if (device_type || learning_style) {
         const updateFields = [];
         const updateValues = [];
@@ -10033,7 +10911,7 @@ app.post(
         }
       }
 
-      // Step 10: Insert into student_accounts
+      // Step 11: Insert into student_accounts
       await connection.execute(
         `
         INSERT INTO student_accounts (
@@ -10057,7 +10935,7 @@ app.post(
 
       console.log("💰 Created student account with balance:", balance);
 
-      // Step 11: Create enrollment record
+      // Step 12: Create enrollment record
       const startDate = new Date(courseOffering.start_date);
       const completionDate = new Date(startDate);
       completionDate.setDate(startDate.getDate() + courseOffering.duration_weeks * 7);
@@ -10072,7 +10950,7 @@ app.post(
         [student_id, offering_id, completionDate, null, 0.00, null]
       );
 
-      // Step 12: Add referral if provided
+      // Step 13: Add referral if provided
       if (referred_by) {
         try {
           // Verify referrer exists
@@ -10101,7 +10979,7 @@ app.post(
         }
       }
 
-      // Step 13: Update course offering
+      // Step 14: Update course offering
       await connection.execute(
         `
         UPDATE course_offerings
@@ -10118,7 +10996,7 @@ app.post(
       await connection.commit();
       console.log("✅ Transaction committed successfully");
 
-      // Step 14: Send email credentials
+      // Step 15: Send email credentials
       let emailSent = false;
       let emailError = null;
 
@@ -10171,12 +11049,13 @@ app.post(
           email,
           password: generatedPassword,
         },
-        financial: {
+        financial_info: {
           total_due: totalDue,
           amount_paid: amountPaid,
           balance: balance,
           due_date: dueDate
         },
+        sponsor_info: sponsorInfo, // Include sponsor information in response
         email_sent: emailSent,
         email_error: emailError,
       });
@@ -10201,7 +11080,7 @@ app.post(
   }
 );
 
-// Helper function to generate random password
+// Helper function to generate random password (keep existing function)
 function generateRandomPassword(length = 12) {
   const charset =
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
@@ -10230,7 +11109,7 @@ function generateRandomPassword(length = 12) {
     .join("");
 }
 
-// Enhanced email function
+// Enhanced email function (keep existing function)
 async function sendPasswordEmail(
   email,
   password,

@@ -19,6 +19,13 @@ const StudentForm = () => {
     course_id: '',
     device_type: [],
     learning_style: [],
+    sponsor: [],
+    hasSponsor: '',       // 'yes' or 'no'
+    sponsorType: '',
+    sponsor_name: '',     // New field for sponsor name
+    contact_person: '',
+    contact_email: '',
+    contact_number: '',
     total_due: 0, // Will be auto-calculated
     amount_paid: 0,
   });
@@ -27,6 +34,7 @@ const StudentForm = () => {
   const [courses, setCourses] = useState([]);
   const [availableCourses, setAvailableCourses] = useState([]);
   const [courseOfferings, setCourseOfferings] = useState([]); // New state for course offerings with pricing
+  const [sponsorTypes, setSponsorTypes] = useState([]); // New state for sponsor types
   const [existingStudents, setExistingStudents] = useState([]);
   const [dataLoading, setDataLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -125,6 +133,18 @@ const StudentForm = () => {
     return response.json();
   };
 
+  // Fetch sponsor types
+  const fetchSponsorTypes = async () => {
+    try {
+      const sponsorTypesData = await makeAuthenticatedRequest('http://localhost:3000/api/sponsor-types');
+      setSponsorTypes(sponsorTypesData);
+      console.log('Sponsor types fetched successfully:', sponsorTypesData);
+    } catch (err) {
+      console.error('Failed to fetch sponsor types:', err);
+      setSponsorTypes([]);
+    }
+  };
+
   // Improved search for existing students to be referrers
   const searchReferrers = useCallback(async (searchValue) => {
     if (!searchValue.trim()) {
@@ -217,6 +237,7 @@ const StudentForm = () => {
           fetchTradingLevels(),
           fetchCourses(),
           fetchCourseOfferings(), // Add this to fetch pricing
+          fetchSponsorTypes(), // Add this to fetch sponsor types
           fetchExistingStudents()
         ]);
         setDataLoading(false);
@@ -282,6 +303,20 @@ const StudentForm = () => {
           [name]: checked ? [...list, value] : list.filter(item => item !== value)
         };
       });
+    } else if (name === 'hasSponsor') {
+      if (value === 'no') {
+        setFormData(prev => ({ 
+          ...prev, 
+          hasSponsor: 'no', 
+          sponsorType: '',
+          sponsor_name: '',
+          contact_person: '',
+          contact_email: '',
+          contact_number: ''
+        }));
+      } else {
+        setFormData(prev => ({ ...prev, [name]: value }));
+      }
     } else {
       setFormData(prev => ({ ...prev, [name]: value }));
     }
@@ -351,6 +386,36 @@ const StudentForm = () => {
     if (formData.learning_style.length === 0) {
       setError('Please select at least one learning style.');
       return false;
+    }
+
+    // Validate sponsor information if sponsor is selected
+    if (formData.hasSponsor === 'yes') {
+      if (!formData.sponsorType) {
+        setError('Please select a sponsor type.');
+        return false;
+      }
+      if (!formData.sponsor_name.trim()) {
+        setError('Please enter the sponsor name.');
+        return false;
+      }
+      if (!formData.contact_person.trim()) {
+        setError('Please enter the contact person name.');
+        return false;
+      }
+      if (!formData.contact_email.trim()) {
+        setError('Please enter the contact email.');
+        return false;
+      }
+      if (!formData.contact_number.trim()) {
+        setError('Please enter the contact number.');
+        return false;
+      }
+      // Basic email validation
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(formData.contact_email)) {
+        setError('Please enter a valid contact email address.');
+        return false;
+      }
     }
 
     setError('');
@@ -444,6 +509,17 @@ const StudentForm = () => {
       if (formData.learning_style && formData.learning_style.length > 0) {
         submitData.learning_style = formData.learning_style.join(',');
       }
+
+      // Handle sponsor information
+      if (formData.hasSponsor === 'yes') {
+        submitData.sponsor_info = {
+          sponsor_type: formData.sponsorType,
+          sponsor_name: formData.sponsor_name.trim(),
+          contact_person: formData.contact_person.trim(),
+          contact_email: formData.contact_email.trim(),
+          contact_number: formData.contact_number.trim()
+        };
+      }
       
       console.log('Submitting student registration data:', submitData);
       
@@ -454,78 +530,29 @@ const StudentForm = () => {
       
       console.log('Student registered successfully:', result);
       
-      // Step 2: Create enrollment record if student registration was successful
-      if (result.student_id && result.course_offering && result.course_offering.offering_id) {
-        try {
-          const enrollmentData = {
-            student_id: result.student_id,
-            offering_id: result.course_offering.offering_id,
-            enrollment_status: 'enrolled'
-          };
-          
-          console.log('Creating enrollment record:', enrollmentData);
-          
-          const enrollmentResponse = await makeAuthenticatedRequest('http://localhost:3000/api/student-enrollments', {
-            method: 'POST',
-            body: JSON.stringify(enrollmentData)
-          });
-          
-          if (!enrollmentResponse.ok) {
-            const enrollmentError = await enrollmentResponse.json();
-            console.warn('Failed to create enrollment record:', enrollmentError);
-            console.log('Student registered but enrollment record creation failed');
-          } else {
-            const enrollmentResult = await enrollmentResponse.json();
-            console.log('Enrollment record created successfully:', enrollmentResult);
-          }
-        } catch (enrollmentErr) {
-          console.warn('Error creating enrollment record:', enrollmentErr);
-        }
+      // Provide user feedback based on API response
+      let successMessage = `Student registered successfully for ${result.course_offering.course_name}!`;
+      
+      if (result.email_sent) {
+        successMessage += `\nLogin credentials have been sent to their email address.`;
+      } else {
+        successMessage += `\nLogin Credentials:\nEmail: ${result.credentials.email}\nPassword: ${result.credentials.password}`;
       }
       
-      // Provide user feedback based on API response
-      if (result.email_sent) {
-        setSuccess(`Student registered successfully for ${result.course_offering.course_name}! 
-Login credentials have been sent to their email address.
-Student ID: ${result.student_id}
+      successMessage += `\nStudent ID: ${result.student_id}
 Account ID: ${result.account_id}
 Batch: ${result.course_offering.batch_identifier}
 Offering ID: ${result.course_offering.offering_id}
 Total Due: ₱${parseFloat(result.financial_info?.total_due || formData.total_due).toLocaleString()}
 Amount Paid: ₱${parseFloat(result.financial_info?.amount_paid || formData.amount_paid).toLocaleString()}
 Balance: ₱${parseFloat(result.financial_info?.balance || (formData.total_due - formData.amount_paid)).toLocaleString()}
-Enrollment Status: Active`);
-      } else {
-        setSuccess(`Student registered successfully for ${result.course_offering.course_name}!
-Login Credentials:
-Email: ${result.credentials.email}
-Password: ${result.credentials.password}
-Student ID: ${result.student_id}
-Account ID: ${result.account_id}
-Batch: ${result.course_offering.batch_identifier}
-Offering ID: ${result.course_offering.offering_id}
-Total Due: ₱${parseFloat(result.financial_info?.total_due || formData.total_due).toLocaleString()}
-Amount Paid: ₱${parseFloat(result.financial_info?.amount_paid || formData.amount_paid).toLocaleString()}
-Balance: ₱${parseFloat(result.financial_info?.balance || (formData.total_due - formData.amount_paid)).toLocaleString()}
-Enrollment Status: Active
-${result.email_error ? `Email Error: ${result.email_error}` : 'Email service may be unavailable.'} 
-Please provide these credentials to the student manually.`);
-        
-        // Also log to console for admin reference
-        console.log('=== STUDENT LOGIN CREDENTIALS ===');
-        console.log('Email:', result.credentials.email);
-        console.log('Password:', result.credentials.password);
-        console.log('Student ID:', result.student_id);
-        console.log('Account ID:', result.account_id);
-        console.log('Course:', result.course_offering.course_name);
-        console.log('Batch:', result.course_offering.batch_identifier);
-        console.log('Offering ID:', result.course_offering.offering_id);
-        console.log('Total Due:', formData.total_due);
-        console.log('Amount Paid:', formData.amount_paid);
-        console.log('Balance:', formData.total_due - formData.amount_paid);
-        console.log('Enrollment Status: Active');
-        console.log('================================');
+Enrollment Status: Active`;
+
+      if (result.sponsor_info) {
+        successMessage += `\nSponsor: ${result.sponsor_info.sponsor_name} (${result.sponsor_info.sponsor_code})`;
       }
+
+      setSuccess(successMessage);
       
       // Reset the form
       setFormData({
@@ -544,6 +571,12 @@ Please provide these credentials to the student manually.`);
         device_type: [],
         learning_style: [],
         scheme_id: '',
+        hasSponsor: '',
+        sponsorType: '',
+        sponsor_name: '',
+        contact_person: '',
+        contact_email: '',
+        contact_number: '',
         total_due: 0,
         amount_paid: 0
       });
@@ -1084,7 +1117,7 @@ Please provide these credentials to the student manually.`);
 
           <div style={styles.checkboxGroup}>
             <label style={styles.label}>Learning Style</label>
-            {['On Site', 'Online'].map(style => (
+            {['Face-to-face', 'Online'].map(style => (
               <label key={style} style={styles.checkboxLabel}>
                 <input
                   type="checkbox"
@@ -1100,168 +1133,129 @@ Please provide these credentials to the student manually.`);
           </div>
         </fieldset>
 
-        {/* <fieldset style={styles.fieldset}>
-          <legend style={styles.legend}>Financial Information</legend>
-          <div style={styles.formRow}>
-            <div style={styles.formGroup}>
-              <label style={styles.label}>Total Due (Auto-calculated)</label>
-              <input 
-                style={styles.totalDueInput}
-                name="total_due" 
-                value={`₱${parseFloat(formData.total_due || 0).toLocaleString()}`}
-                readOnly
-                disabled
-              />
-              <small style={{ color: colors.olive, fontSize: '12px' }}>
-                This amount is automatically calculated based on the selected course
-              </small>
-            </div>
-
-            <div style={styles.formGroup}>
-              <label style={styles.label}>Amount Paid (Optional)</label>
-              <input 
-                type="number"
-                style={styles.input}
-                name="amount_paid" 
-                value={formData.amount_paid}
-                onChange={handleChange}
-                disabled={loading}
-                min="0"
-                max={formData.total_due}
-                step="0.01"
-                placeholder="0.00"
-              />
-              <small style={{ color: colors.olive, fontSize: '12px' }}>
-                Leave blank if no payment has been made yet
-              </small>
+        <fieldset style={styles.fieldset}>
+          <legend style={styles.legend}>Sponsor Information</legend>
+          
+          <div style={styles.formGroup}>
+            <label style={styles.label}>Do you have a sponsor?</label>
+            <div style={{ display: 'flex', gap: '20px', marginBottom: '16px' }}>
+              <label style={styles.checkboxLabel}>
+                <input
+                  type="radio"
+                  name="hasSponsor"
+                  value="yes"
+                  checked={formData.hasSponsor === 'yes'}
+                  onChange={handleChange}
+                  disabled={loading}
+                />
+                Yes
+              </label>
+              <label style={styles.checkboxLabel}>
+                <input
+                  type="radio"
+                  name="hasSponsor"
+                  value="no"
+                  checked={formData.hasSponsor === 'no'}
+                  onChange={handleChange}
+                  disabled={loading}
+                />
+                No
+              </label>
             </div>
           </div>
-          
-          {formData.total_due > 0 && (
-            <div style={{
-              backgroundColor: '#f8f9fa',
-              padding: '12px',
-              borderRadius: '6px',
-              border: '1px solid #e9ecef',
-              marginTop: '12px'
-            }}>
-              <strong>Balance: ₱{parseFloat(formData.total_due - (formData.amount_paid || 0)).toLocaleString()}</strong>
+
+          {/* Conditional Sponsor Information Fields */}
+          {formData.hasSponsor === 'yes' && (
+            <div>
+              <div style={styles.formRow}>
+                <div style={styles.formGroup}>
+                  <label style={styles.label}>
+                    Sponsor Type<span style={styles.required}>*</span>
+                  </label>
+                  <select
+                    name="sponsorType"
+                    value={formData.sponsorType}
+                    onChange={handleChange}
+                    style={styles.select}
+                    required
+                    disabled={loading}
+                  >
+                    <option value="">Select Sponsor Type</option>
+                    {sponsorTypes.length === 0 ? (
+                      <option value="" disabled>No sponsor types available</option>
+                    ) : (
+                      sponsorTypes.map((type) => (
+                        <option key={type.sponsor_type_id} value={type.type_name}>
+                          {type.type_name}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
+
+                <div style={styles.formGroup}>
+                  <label style={styles.label}>
+                    Sponsor Name<span style={styles.required}>*</span>
+                  </label>
+                  <input 
+                    style={styles.input} 
+                    name="sponsor_name" 
+                    value={formData.sponsor_name} 
+                    onChange={handleChange} 
+                    required
+                    disabled={loading}
+                    placeholder="Organization/Company/Individual Name"
+                  />
+                </div>
+
+                <div style={styles.formGroup}>
+                  <label style={styles.label}>
+                    Contact Person<span style={styles.required}>*</span>
+                  </label>
+                  <input 
+                    style={styles.input} 
+                    name="contact_person" 
+                    value={formData.contact_person} 
+                    onChange={handleChange} 
+                    required
+                    disabled={loading}
+                    placeholder="Full Name of Contact Person"
+                  />
+                </div>
+
+                <div style={styles.formGroup}>
+                  <label style={styles.label}>
+                    Contact Email<span style={styles.required}>*</span>
+                  </label>
+                  <input 
+                    type="email" 
+                    style={styles.input} 
+                    name="contact_email" 
+                    value={formData.contact_email} 
+                    onChange={handleChange} 
+                    required 
+                    disabled={loading}
+                    placeholder="contact@example.com"
+                  />
+                </div>
+
+                <div style={styles.formGroup}>
+                  <label style={styles.label}>
+                    Contact Number<span style={styles.required}>*</span>
+                  </label>
+                  <input 
+                    style={styles.input} 
+                    name="contact_number" 
+                    value={formData.contact_number} 
+                    onChange={handleChange} 
+                    required
+                    disabled={loading}
+                    placeholder="+63 XXX XXX XXXX"
+                  />
+                </div>
+              </div>
             </div>
           )}
-        </fieldset> */}
-
-        <fieldset style={styles.fieldset}>
-          <legend style={styles.legend}>Referral Information</legend>
-          <div style={styles.formRow}>
-            <div style={styles.fullWidthGroup}>
-              <label style={styles.label}>Referred by:</label>
-              <div style={styles.referrerInputGroup}>
-                <div style={styles.referrerInputIcon}>
-                  <SearchIcon />
-                </div>
-                <input 
-                  style={styles.referrerInput}
-                  placeholder="Search for existing student who referred them..."
-                  value={referrerSearchTerm}
-                  onChange={handleReferrerSearchChange}
-                  disabled={loading}
-                  onFocus={(e) => {
-                    e.target.style.borderColor = colors.primary;
-                    e.target.style.boxShadow = `0 0 0 3px ${colors.primary}20`;
-                    if (selectedReferrer && referrerSearchTerm.includes('(')) {
-                      setSelectedReferrer(null);
-                      setReferrerSearchTerm('');
-                    }
-                  }}
-                  onBlur={(e) => {
-                    e.target.style.borderColor = colors.gray[300];
-                    e.target.style.boxShadow = 'none';
-                  }}
-                />
-              </div>
-
-              {referrerSearchLoading && (
-                <div style={styles.loadingContainer}>
-                  <div style={{ display: 'inline-flex', alignItems: 'center' }}>
-                    <LoadingSpinner size={16} />
-                    <span style={{ marginLeft: '8px' }}>Searching students...</span>
-                  </div>
-                </div>
-              )}
-
-              {referrerSearchResults.length > 0 && !selectedReferrer && (
-                <div style={styles.referrerSearchResults}>
-                  {referrerSearchResults.map((referrer) => (
-                    <div
-                      key={referrer.student_id}
-                      style={styles.referrerSearchResultItem}
-                      onClick={() => handleReferrerSelect(referrer)}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.backgroundColor = colors.gray[50];
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.backgroundColor = 'transparent';
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div>
-                          <div style={{ fontWeight: '500', color: colors.gray[900] }}>
-                            {referrer.first_name} {referrer.last_name}
-                          </div>
-                          <div style={{ fontSize: '14px', color: colors.gray[500], marginTop: '2px' }}>
-                            ID: {referrer.student_id} • {referrer.email}
-                          </div>
-                        </div>
-                        <div style={{ textAlign: 'right' }}>
-                          <div style={{ fontSize: '12px', color: colors.gray[500] }}>
-                            Status: {referrer.graduation_status || 'Active'}
-                          </div>
-                          <div style={{ fontSize: '12px', color: colors.gray[500] }}>
-                            Level: {referrer.current_trading_level || 'Not assigned'}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {referrerSearchTerm && !referrerSearchLoading && referrerSearchResults.length === 0 && !selectedReferrer && (
-                <div style={styles.noResultsContainer}>
-                  <span style={{ color: colors.gray[500] }}>No students found matching your search</span>
-                </div>
-              )}
-
-              {selectedReferrer && (
-                <div style={styles.selectedReferrer}>
-                  <div>
-                    <div style={{ fontWeight: '500', color: colors.primary }}>
-                      {selectedReferrer.first_name} {selectedReferrer.last_name}
-                    </div>
-                    <div style={{ fontSize: '14px', color: colors.primaryLight, marginTop: '2px' }}>
-                      ID: {selectedReferrer.student_id} • {selectedReferrer.email}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    style={styles.closeButton}
-                    onClick={() => {
-                      setSelectedReferrer(null);
-                      setReferrerSearchTerm('');
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = colors.gray[200];
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = 'transparent';
-                    }}
-                  >
-                    <XIcon />
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
         </fieldset>
 
         {error && <div style={styles.error}>{error}</div>}
