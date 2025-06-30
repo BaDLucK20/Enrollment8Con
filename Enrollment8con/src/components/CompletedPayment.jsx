@@ -2,21 +2,19 @@ import React, { useState, useEffect } from "react";
 import {
   CheckCircle,
   Download,
-  Search,
   Filter,
   Eye,
   ChevronLeft,
   ChevronRight,
+  RefreshCw,
+  AlertCircle,
 } from "lucide-react";
 
 // API functions
 const API_BASE_URL = "http://localhost:3000/api";
 
 const getAuthHeaders = () => {
-  const token =
-    typeof window !== "undefined" && window.localStorage
-      ? window.localStorage.getItem("token")
-      : "";
+  const token = localStorage.getItem("token");
   return {
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/json",
@@ -32,6 +30,10 @@ const fetchCompletedPayments = async (filters = {}) => {
     if (filters.date_range)
       queryParams.append("date_range", filters.date_range);
 
+    console.log('🔍 Fetching completed payments...');
+    console.log('Filters:', filters);
+    console.log('Query URL:', `${API_BASE_URL}/payments/completed?${queryParams}`);
+
     const response = await fetch(
       `${API_BASE_URL}/payments/completed?${queryParams}`,
       {
@@ -39,49 +41,40 @@ const fetchCompletedPayments = async (filters = {}) => {
       }
     );
 
-    if (!response.ok) throw new Error("Failed to fetch completed payments");
-    return await response.json();
+    console.log('📡 API Response status:', response.status);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('❌ API Error:', errorText);
+      throw new Error(`API Error: ${response.status} - ${errorText}`);
+    }
+    
+    const data = await response.json();
+    
+    console.log('✅ Completed payments received:', data.length, 'payments');
+    if (data.length > 0) {
+      console.log('📋 Sample payments:', data.slice(0, 3).map(p => ({
+        id: p.payment_id,
+        status: p.payment_status,
+        student: `${p.first_name} ${p.last_name}`,
+        updated: p.updated_at
+      })));
+    }
+    
+    return data;
   } catch (error) {
-    console.error("Error fetching completed payments:", error);
+    console.error("❌ Error fetching completed payments:", error);
     throw error;
   }
 };
 
 const ITEMS_PER_PAGE = 15;
 
-// Responsive hook similar to UploadPayment
-const useResponsive = () => {
-  const [isMobile, setIsMobile] = useState(false);
-  const [screenSize, setScreenSize] = useState("lg");
-
-  useEffect(() => {
-    const checkScreenSize = () => {
-      const width = window.innerWidth;
-      setIsMobile(width < 768);
-
-      if (width < 640) {
-        setScreenSize("xs");
-      } else if (width < 768) {
-        setScreenSize("sm");
-      } else if (width < 1024) {
-        setScreenSize("md");
-      } else {
-        setScreenSize("lg");
-      }
-    };
-
-    checkScreenSize();
-    window.addEventListener("resize", checkScreenSize);
-
-    return () => window.removeEventListener("resize", checkScreenSize);
-  }, []);
-
-  return { isMobile, screenSize };
-};
-
 const CompletedPayments = () => {
   const [payments, setPayments] = useState([]);
+  const [allPayments, setAllPayments] = useState([]); // Store all payments for filtering
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [sortBy, setSortBy] = useState("latest");
   const [dateRange, setDateRange] = useState("all");
@@ -90,20 +83,26 @@ const CompletedPayments = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [error, setError] = useState("");
-  const { isMobile, screenSize } = useResponsive();
+  const [lastRefresh, setLastRefresh] = useState(new Date());
+  const [debugInfo, setDebugInfo] = useState(null);
 
   // Get unique courses for filter
   const uniqueCourses = [
-    ...new Set(payments.map((p) => p.course_name).filter(Boolean)),
+    ...new Set(allPayments.map((p) => p.course_name).filter(Boolean)),
   ];
 
-  useEffect(() => {
-    fetchPayments();
-  }, [searchTerm, sortBy, dateRange, courseFilter, currentPage]);
-
-  const fetchPayments = async () => {
+  // Fetch payments from API
+  const fetchPayments = async (silent = false) => {
     try {
-      setError("");
+      if (!silent) {
+        setLoading(true);
+        setError("");
+      } else {
+        setRefreshing(true);
+      }
+      
+      console.log('🚀 Starting fetchPayments...');
+
       const filters = {
         student_search: searchTerm,
         name_sort: sortBy === "name" ? "ascending" : undefined,
@@ -111,54 +110,148 @@ const CompletedPayments = () => {
       };
 
       const data = await fetchCompletedPayments(filters);
-
-      // Filter by course if selected
-      let filteredData = data;
-      if (courseFilter) {
-        filteredData = data.filter(
-          (payment) => payment.course_name === courseFilter
-        );
+      
+      // Store all payments for client-side filtering
+      setAllPayments(data);
+      
+      // Apply client-side filtering and sorting
+      applyFiltersAndPagination(data);
+      
+      setLastRefresh(new Date());
+      
+      if (!silent) {
+        console.log('✅ Payments loaded successfully');
       }
 
-      // Sort data
-      switch (sortBy) {
-        case "latest":
-          filteredData.sort(
-            (a, b) => new Date(b.updated_at) - new Date(a.updated_at)
-          );
-          break;
-        case "oldest":
-          filteredData.sort(
-            (a, b) => new Date(a.updated_at) - new Date(b.updated_at)
-          );
-          break;
-        case "amount-high":
-          filteredData.sort((a, b) => b.payment_amount - a.payment_amount);
-          break;
-        case "amount-low":
-          filteredData.sort((a, b) => a.payment_amount - b.payment_amount);
-          break;
-        case "name":
-          filteredData.sort((a, b) =>
-            `${a.first_name} ${a.last_name}`.localeCompare(
-              `${b.first_name} ${b.last_name}`
-            )
-          );
-          break;
-      }
-
-      // Apply pagination
-      const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
-      const endIndex = startIndex + ITEMS_PER_PAGE;
-      const paginatedData = filteredData.slice(startIndex, endIndex);
-
-      setPayments(paginatedData);
-      setTotalPages(Math.ceil(filteredData.length / ITEMS_PER_PAGE));
     } catch (error) {
-      setError("Failed to fetch completed payments. Please try again.");
-      console.error("Failed to fetch completed payments:", error);
+      console.error("❌ Failed to fetch completed payments:", error);
+      setError(`Failed to fetch completed payments: ${error.message}`);
     } finally {
       setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  // Apply filters and pagination to the data
+  const applyFiltersAndPagination = (data) => {
+    let filteredData = [...data];
+
+    console.log('🔄 Applying filters to', filteredData.length, 'payments');
+
+    // Filter by course if selected
+    if (courseFilter) {
+      filteredData = filteredData.filter(
+        (payment) => payment.course_name === courseFilter
+      );
+      console.log('📚 After course filter:', filteredData.length, 'payments');
+    }
+
+    // Sort data
+    switch (sortBy) {
+      case "latest":
+        filteredData.sort(
+          (a, b) => new Date(b.updated_at) - new Date(a.updated_at)
+        );
+        break;
+      case "oldest":
+        filteredData.sort(
+          (a, b) => new Date(a.updated_at) - new Date(b.updated_at)
+        );
+        break;
+      case "amount-high":
+        filteredData.sort((a, b) => b.payment_amount - a.payment_amount);
+        break;
+      case "amount-low":
+        filteredData.sort((a, b) => a.payment_amount - b.payment_amount);
+        break;
+      case "name":
+        filteredData.sort((a, b) =>
+          `${a.first_name} ${a.last_name}`.localeCompare(
+            `${b.first_name} ${b.last_name}`
+          )
+        );
+        break;
+    }
+
+    console.log('📊 After sorting:', filteredData.length, 'payments');
+
+    // Apply pagination
+    const totalPagesCalc = Math.ceil(filteredData.length / ITEMS_PER_PAGE);
+    setTotalPages(totalPagesCalc);
+    
+    // Reset to page 1 if current page is beyond available pages
+    const pageToUse = currentPage > totalPagesCalc ? 1 : currentPage;
+    if (pageToUse !== currentPage) {
+      setCurrentPage(pageToUse);
+    }
+
+    const startIndex = (pageToUse - 1) * ITEMS_PER_PAGE;
+    const endIndex = startIndex + ITEMS_PER_PAGE;
+    const paginatedData = filteredData.slice(startIndex, endIndex);
+
+    console.log('📄 Pagination: page', pageToUse, 'showing', paginatedData.length, 'of', filteredData.length, 'total');
+
+    setPayments(paginatedData);
+  };
+
+  // Initial load
+  useEffect(() => {
+    console.log('🎬 Component mounted - initial load');
+    fetchPayments();
+  }, []);
+
+  // Re-apply filters when filter values change
+  useEffect(() => {
+    if (allPayments.length > 0) {
+      console.log('🔄 Filters changed - reapplying filters');
+      applyFiltersAndPagination(allPayments);
+    }
+  }, [searchTerm, sortBy, dateRange, courseFilter, currentPage, allPayments]);
+
+  // Listen for payment status changes
+  useEffect(() => {
+    const handlePaymentStatusChange = (e) => {
+      console.log('📢 Payment status change event received:', e.detail);
+      if (e.detail?.action === 'approved') {
+        console.log('💰 Payment approved - refreshing in 2 seconds...');
+        setTimeout(() => {
+          fetchPayments(true);
+        }, 2000);
+      }
+    };
+
+    const handleStorageChange = (e) => {
+      if (e.key === 'payment_status_updated') {
+        console.log('🔄 Payment status updated - refreshing...');
+        setTimeout(() => {
+          fetchPayments(true);
+        }, 1000);
+      }
+    };
+
+    window.addEventListener('paymentStatusChanged', handlePaymentStatusChange);
+    window.addEventListener('storage', handleStorageChange);
+    
+    return () => {
+      window.removeEventListener('paymentStatusChanged', handlePaymentStatusChange);
+      window.removeEventListener('storage', handleStorageChange);
+    };
+  }, []);
+
+  // Debug function to check API directly
+  const checkDebugInfo = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/debug/completed-payments`, {
+        headers: getAuthHeaders(),
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setDebugInfo(data);
+        console.log('🔍 Debug info:', data);
+      }
+    } catch (error) {
+      console.error('Debug check failed:', error);
     }
   };
 
@@ -175,14 +268,14 @@ const CompletedPayments = () => {
               payment.updated_at
             },${payment.method_name},${
               payment.reference_number || "N/A"
-            },Completed`
+            },${payment.payment_status}`
         )
         .join("\n");
 
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `completed_payments_page_${currentPage}.csv`);
+    link.setAttribute("download", `completed_payments_${new Date().toISOString().split('T')[0]}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -195,24 +288,19 @@ const CompletedPayments = () => {
   };
 
   const formatDate = (dateString) => {
+    if (!dateString) return 'N/A';
     return new Date(dateString).toLocaleDateString("en-US", {
       year: "numeric",
       month: "short",
       day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
     });
   };
 
   const formatCurrency = (amount) => {
     if (!amount || amount === 0) return "₱0";
-
-    // For very large numbers, use abbreviated format
-    if (amount >= 1000000) {
-      return `₱${(amount / 1000000).toFixed(1)}M`;
-    } else if (amount >= 1000) {
-      return `₱${(amount / 1000).toFixed(1)}K`;
-    }
-
-    return `₱${amount.toLocaleString()}`;
+    return `₱${parseInt(amount).toLocaleString()}`;
   };
 
   const totalAmount = payments.reduce(
@@ -220,85 +308,120 @@ const CompletedPayments = () => {
     0
   );
 
-  // Improved responsive styles based on UploadPayment patterns
+  // Styles
   const styles = {
     container: {
-      width: "100%",
-      // Remove background color to let dashboard handle it
+      padding: "1.5rem",
+      maxWidth: "1200px",
+      margin: "0 auto",
     },
-    mainContent: {
-      padding: isMobile ? "0" : "0",
-      width: "100%",
+    header: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: "2rem",
+      flexWrap: "wrap",
+      gap: "1rem",
     },
-    contentWrapper: {
-      maxWidth: "100%",
-      margin: "0",
-      padding: isMobile ? "1rem" : "1.5rem",
+    title: {
+      fontSize: "2rem",
+      fontWeight: "bold",
+      color: "#1f2937",
     },
-    errorMessage: {
+    subtitle: {
+      color: "#6b7280",
+      fontSize: "1rem",
+      marginTop: "0.5rem",
+    },
+    lastRefresh: {
+      color: "#9ca3af",
+      fontSize: "0.75rem",
+      fontStyle: "italic",
+      marginTop: "0.25rem",
+    },
+    actions: {
+      display: "flex",
+      gap: "0.75rem",
+      alignItems: "center",
+    },
+    button: {
+      padding: "0.75rem 1rem",
+      borderRadius: "0.5rem",
+      border: "none",
+      cursor: "pointer",
+      fontSize: "0.875rem",
+      fontWeight: "500",
+      display: "flex",
+      alignItems: "center",
+      gap: "0.5rem",
+      transition: "all 0.2s",
+    },
+    refreshButton: {
+      backgroundColor: "#10b981",
+      color: "white",
+    },
+    exportButton: {
+      backgroundColor: "#3b82f6",
+      color: "white",
+    },
+    debugButton: {
+      backgroundColor: "#f59e0b",
+      color: "white",
+    },
+    errorAlert: {
       backgroundColor: "#fef2f2",
+      border: "1px solid #fecaca",
       color: "#dc2626",
-      padding: isMobile ? "0.75rem" : "1rem",
+      padding: "1rem",
       borderRadius: "0.5rem",
       marginBottom: "1rem",
-      border: "1px solid #fecaca",
-      fontSize: isMobile ? "0.875rem" : "1rem",
+      display: "flex",
+      alignItems: "center",
+      gap: "0.5rem",
+    },
+    debugAlert: {
+      backgroundColor: "#fffbeb",
+      border: "1px solid #fed7aa",
+      color: "#92400e",
+      padding: "1rem",
+      borderRadius: "0.5rem",
+      marginBottom: "1rem",
+      fontSize: "0.875rem",
     },
     statsGrid: {
       display: "grid",
-      gridTemplateColumns: isMobile
-        ? screenSize === "xs"
-          ? "1fr"
-          : "repeat(2, 1fr)"
-        : "repeat(auto-fit, minmax(220px, 1fr))", // Increased min width
-      gap: isMobile ? "0.75rem" : "1rem",
-      marginBottom: "1.5rem",
+      gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+      gap: "1rem",
+      marginBottom: "2rem",
     },
-    statsCard: {
+    statCard: {
       backgroundColor: "#e0f2fe",
-      padding: isMobile ? "0.75rem" : "1.25rem",
+      padding: "1.5rem",
       borderRadius: "0.5rem",
       textAlign: "center",
       border: "1px solid #b3e5fc",
-      minHeight: isMobile ? "60px" : "80px",
-      display: "flex",
-      flexDirection: "column",
-      justifyContent: "center",
-      minWidth: 0, // Allow shrinking
-      overflow: "hidden", // Prevent overflow
     },
-    statsNumber: {
-      fontSize: isMobile ? "1.125rem" : "1.875rem", // Slightly smaller to prevent overflow
-      fontWeight: "700",
+    statNumber: {
+      fontSize: "2rem",
+      fontWeight: "bold",
       color: "#1f2937",
-      marginBottom: "0.25rem",
-      lineHeight: "1.1",
-      wordBreak: "break-word", // Break long numbers if needed
-      overflow: "hidden",
-      textOverflow: "ellipsis",
-      maxWidth: "100%", // Ensure it doesn't exceed container width
+      marginBottom: "0.5rem",
     },
-    statsLabel: {
-      fontSize: isMobile ? "0.625rem" : "0.75rem",
+    statLabel: {
+      fontSize: "0.875rem",
       color: "#6b7280",
       fontWeight: "500",
-      lineHeight: "1.2",
-      overflow: "hidden",
-      textOverflow: "ellipsis",
-      wordBreak: "break-word",
     },
-    filtersContainer: {
+    filtersCard: {
       backgroundColor: "white",
-      padding: isMobile ? "1rem" : "1.25rem",
-      marginBottom: "1rem",
+      padding: "1.5rem",
       borderRadius: "0.5rem",
-      boxShadow: "0 1px 3px 0 rgba(0, 0, 0, 0.1)",
-      border: "1px solid #e5e7eb",
+      marginBottom: "1.5rem",
+      boxShadow: "0 1px 3px rgba(0, 0, 0, 0.1)",
     },
     filtersTitle: {
-      fontSize: isMobile ? "1rem" : "1.125rem",
+      fontSize: "1.125rem",
       fontWeight: "600",
-      color: "#1f2937",
       marginBottom: "1rem",
       display: "flex",
       alignItems: "center",
@@ -306,173 +429,137 @@ const CompletedPayments = () => {
     },
     filtersGrid: {
       display: "grid",
-      gridTemplateColumns: isMobile
-        ? "1fr"
-        : screenSize === "md"
-        ? "repeat(2, 1fr)"
-        : "repeat(4, 1fr)",
-      gap: isMobile ? "0.75rem" : "1rem",
+      gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
+      gap: "1rem",
     },
     inputGroup: {
       display: "flex",
       flexDirection: "column",
     },
     label: {
-      fontSize: isMobile ? "0.8rem" : "0.875rem",
+      fontSize: "0.875rem",
       fontWeight: "500",
       color: "#374151",
       marginBottom: "0.5rem",
     },
     input: {
-      padding: isMobile ? "0.6rem" : "0.75rem",
+      padding: "0.75rem",
       border: "1px solid #d1d5db",
       borderRadius: "0.375rem",
-      fontSize: isMobile ? "0.9rem" : "0.875rem",
-      outline: "none",
-      transition: "border-color 0.2s",
-      width: "100%",
-      boxSizing: "border-box",
+      fontSize: "0.875rem",
     },
     select: {
-      padding: isMobile ? "0.6rem" : "0.75rem",
+      padding: "0.75rem",
       border: "1px solid #d1d5db",
       borderRadius: "0.375rem",
-      fontSize: isMobile ? "0.9rem" : "0.875rem",
-      outline: "none",
+      fontSize: "0.875rem",
       backgroundColor: "white",
-      cursor: "pointer",
-      width: "100%",
-      boxSizing: "border-box",
     },
-    tableContainer: {
+    tableCard: {
       backgroundColor: "white",
       borderRadius: "0.5rem",
       overflow: "hidden",
-      boxShadow: "0 1px 3px 0 rgba(0, 0, 0, 0.1)",
-      border: "1px solid #e5e7eb",
+      boxShadow: "0 1px 3px rgba(0, 0, 0, 0.1)",
     },
     tableHeader: {
       background: "linear-gradient(135deg, #065f46 0%, #047857 100%)",
       color: "white",
-      padding: isMobile ? "0.75rem" : "1rem 1.25rem",
+      padding: "1rem 1.5rem",
       display: "flex",
-      flexDirection: isMobile ? "column" : "row",
       justifyContent: "space-between",
-      alignItems: isMobile ? "flex-start" : "center",
-      gap: isMobile ? "0.5rem" : "0",
+      alignItems: "center",
     },
     tableTitle: {
-      fontSize: isMobile ? "1rem" : "1.125rem",
+      fontSize: "1.125rem",
       fontWeight: "600",
-      margin: 0,
     },
     tableInfo: {
-      fontSize: isMobile ? "0.75rem" : "0.875rem",
+      fontSize: "0.875rem",
       opacity: 0.9,
-    },
-    tableWrapper: {
-      overflowX: "auto",
-      WebkitOverflowScrolling: "touch",
     },
     table: {
       width: "100%",
       borderCollapse: "collapse",
-      minWidth: isMobile ? "700px" : "900px",
-    },
-    tableHeaderRow: {
-      backgroundColor: "#065f46",
-      color: "white",
     },
     th: {
-      padding: isMobile ? "0.6rem 0.4rem" : "0.875rem 1rem",
+      padding: "1rem",
       textAlign: "left",
-      fontSize: isMobile ? "0.7rem" : "0.875rem",
+      fontSize: "0.875rem",
       fontWeight: "600",
+      backgroundColor: "#065f46",
+      color: "white",
       borderRight: "1px solid rgba(255,255,255,0.1)",
-      whiteSpace: "nowrap",
     },
     td: {
-      padding: isMobile ? "0.6rem 0.4rem" : "0.875rem 1rem",
-      fontSize: isMobile ? "0.7rem" : "0.875rem",
+      padding: "1rem",
+      fontSize: "0.875rem",
       borderBottom: "1px solid #f3f4f6",
       borderRight: "1px solid #f3f4f6",
-      whiteSpace: "nowrap",
     },
-    statusCompleted: {
-      color: "#059669",
-      fontWeight: "500",
-      backgroundColor: "#d1fae5",
-      padding: isMobile ? "0.125rem 0.5rem" : "0.25rem 0.75rem",
+    statusBadge: {
+      padding: "0.25rem 0.75rem",
       borderRadius: "9999px",
-      fontSize: isMobile ? "0.625rem" : "0.75rem",
+      fontSize: "0.75rem",
+      fontWeight: "500",
       textTransform: "uppercase",
-      display: "inline-block",
+      backgroundColor: "#d1fae5",
+      color: "#059669",
+    },
+    actionButton: {
+      padding: "0.5rem",
+      backgroundColor: "transparent",
+      border: "none",
+      color: "#059669",
+      cursor: "pointer",
+      borderRadius: "0.25rem",
+      display: "flex",
+      alignItems: "center",
+      gap: "0.25rem",
+      fontSize: "0.875rem",
     },
     noResults: {
       textAlign: "center",
-      padding: isMobile ? "2rem 1rem" : "3rem 1rem",
+      padding: "3rem",
       color: "#6b7280",
-      fontSize: isMobile ? "0.8rem" : "0.875rem",
     },
     loading: {
       display: "flex",
       justifyContent: "center",
       alignItems: "center",
-      padding: isMobile ? "2rem" : "3rem",
+      padding: "3rem",
     },
     spinner: {
-      width: isMobile ? "1.5rem" : "2rem",
-      height: isMobile ? "1.5rem" : "2rem",
+      width: "2rem",
+      height: "2rem",
       border: "3px solid #f3f4f6",
       borderTop: "3px solid #059669",
       borderRadius: "50%",
       animation: "spin 1s linear infinite",
     },
-    actionButton: {
-      background: "none",
-      border: "none",
-      color: "#059669",
-      cursor: "pointer",
-      fontSize: isMobile ? "0.75rem" : "0.875rem",
-      padding: isMobile ? "0.25rem 0.5rem" : "0.5rem 0.75rem",
-      borderRadius: "0.25rem",
-      transition: "background-color 0.2s",
-      display: "inline-flex",
-      alignItems: "center",
-      gap: "0.25rem",
-      marginRight: isMobile ? "0.25rem" : "0.5rem",
-    },
     pagination: {
       display: "flex",
       justifyContent: "center",
       alignItems: "center",
-      gap: isMobile ? "0.25rem" : "0.5rem",
-      padding: isMobile ? "0.75rem" : "1rem",
+      gap: "0.5rem",
+      padding: "1rem",
       backgroundColor: "white",
       borderTop: "1px solid #f3f4f6",
-      flexWrap: "wrap",
     },
     paginationButton: {
-      padding: isMobile ? "0.4rem 0.6rem" : "0.5rem 1rem",
+      padding: "0.5rem 1rem",
       border: "1px solid #d1d5db",
       backgroundColor: "white",
       cursor: "pointer",
       borderRadius: "0.375rem",
-      fontSize: isMobile ? "0.75rem" : "0.875rem",
+      fontSize: "0.875rem",
       display: "flex",
       alignItems: "center",
       gap: "0.25rem",
-      transition: "all 0.2s",
-    },
-    paginationButtonDisabled: {
-      opacity: 0.5,
-      cursor: "not-allowed",
     },
     paginationInfo: {
-      fontSize: isMobile ? "0.75rem" : "0.875rem",
+      fontSize: "0.875rem",
       color: "#6b7280",
-      margin: isMobile ? "0 0.25rem" : "0 0.5rem",
-      textAlign: "center",
+      margin: "0 1rem",
     },
     modal: {
       position: "fixed",
@@ -485,38 +572,32 @@ const CompletedPayments = () => {
       alignItems: "center",
       justifyContent: "center",
       zIndex: 50,
-      padding: isMobile ? "0.5rem" : "1rem",
+      padding: "1rem",
     },
     modalContent: {
       backgroundColor: "white",
       borderRadius: "0.75rem",
-      padding: isMobile ? "1rem" : "2rem",
-      maxWidth: isMobile ? "95vw" : "600px",
+      padding: "2rem",
+      maxWidth: "600px",
       width: "100%",
-      maxHeight: isMobile ? "95vh" : "90vh",
+      maxHeight: "90vh",
       overflowY: "auto",
-      boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1)",
     },
     modalTitle: {
-      fontSize: isMobile ? "1.125rem" : "1.5rem",
-      fontWeight: "700",
+      fontSize: "1.5rem",
+      fontWeight: "bold",
       marginBottom: "1.5rem",
-      color: "#1f2937",
     },
     modalDetails: {
       display: "grid",
-      gap: isMobile ? "0.75rem" : "1rem",
-      fontSize: isMobile ? "0.875rem" : "1rem",
+      gap: "1rem",
       marginBottom: "2rem",
     },
-    modalDetailRow: {
+    modalRow: {
       display: "flex",
       justifyContent: "space-between",
-      padding: isMobile ? "0.5rem 0" : "0.75rem 0",
+      padding: "0.75rem 0",
       borderBottom: "1px solid #f3f4f6",
-      flexDirection: isMobile ? "column" : "row",
-      alignItems: isMobile ? "flex-start" : "center",
-      gap: isMobile ? "0.25rem" : "0",
     },
     modalLabel: {
       fontWeight: "600",
@@ -524,31 +605,6 @@ const CompletedPayments = () => {
     },
     modalValue: {
       color: "#1f2937",
-      textAlign: isMobile ? "left" : "right",
-      wordBreak: "break-word",
-    },
-    modalActions: {
-      display: "flex",
-      justifyContent: "flex-end",
-      gap: "0.75rem",
-    },
-    closeButton: {
-      padding: isMobile ? "0.6rem 1.25rem" : "0.75rem 1.5rem",
-      color: "#4b5563",
-      backgroundColor: "#f3f4f6",
-      borderRadius: "0.5rem",
-      border: "none",
-      cursor: "pointer",
-      fontSize: isMobile ? "0.8rem" : "0.875rem",
-      fontWeight: "500",
-      transition: "background-color 0.2s",
-    },
-    iconInline: {
-      display: "inline",
-      width: isMobile ? "0.875rem" : "1rem",
-      height: isMobile ? "0.875rem" : "1rem",
-      marginRight: "0.5rem",
-      verticalAlign: "middle",
     },
   };
 
@@ -572,231 +628,219 @@ const CompletedPayments = () => {
 
   return (
     <div style={styles.container}>
-      {/* Main Content */}
-      <div style={styles.mainContent}>
-        <div style={styles.contentWrapper}>
-          {/* Error Message */}
-          {error && <div style={styles.errorMessage}>{error}</div>}
+      <style>
+        {`
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+        `}
+      </style>
 
-          {/* Stats Cards */}
-          <div style={styles.statsGrid}>
-            <div style={styles.statsCard}>
-              <div style={styles.statsNumber}>{payments.length}</div>
-              <div style={styles.statsLabel}>Completed (This Page)</div>
-            </div>
-            <div style={styles.statsCard}>
-              <div
-                style={styles.statsNumber}
-                title={`₱${totalAmount.toLocaleString()}`} // Show full amount on hover
-              >
-                {formatCurrency(totalAmount)}
-              </div>
-              <div style={styles.statsLabel}>Total Collected (This Page)</div>
-            </div>
-            <div style={styles.statsCard}>
-              <div style={styles.statsNumber}>{currentPage}</div>
-              <div style={styles.statsLabel}>Current Page</div>
-            </div>
-            <div style={styles.statsCard}>
-              <div style={styles.statsNumber}>{totalPages}</div>
-              <div style={styles.statsLabel}>Total Pages</div>
-            </div>
+      {/* Header */}
+      <div style={styles.header}>
+        <div>
+          <h1 style={styles.title}>Completed Payments</h1>
+          <p style={styles.subtitle}>
+            View and manage all successfully completed student payments
+          </p>
+          <p style={styles.lastRefresh}>
+            Last updated: {formatDate(lastRefresh)}
+          </p>
+        </div>
+        <div style={styles.actions}>
+          <button
+            onClick={handleExport}
+            style={{ ...styles.button, ...styles.exportButton }}
+          >
+            <Download size={16} />
+            Export
+          </button>
+        </div>
+      </div>
+
+      {/* Error Message */}
+      {error && (
+        <div style={styles.errorAlert}>
+          <AlertCircle size={20} />
+          {error}
+        </div>
+      )}
+
+      {/* Debug Info */}
+      {debugInfo && (
+        <div style={styles.debugAlert}>
+          <strong>Debug Info:</strong> Found {debugInfo.totalCompleted} completed payments in database.
+          Status counts: {debugInfo.statusCounts.map(s => `${s.payment_status}: ${s.count}`).join(', ')}
+        </div>
+      )}
+
+      {/* Stats Cards */}
+      <div style={styles.statsGrid}>
+        <div style={styles.statCard}>
+          <div style={styles.statNumber}>{payments.length}</div>
+          <div style={styles.statLabel}>Showing This Page</div>
+        </div>
+        <div style={styles.statCard}>
+          <div style={styles.statNumber}>{allPayments.length}</div>
+          <div style={styles.statLabel}>Total Completed</div>
+        </div>
+        <div style={styles.statCard}>
+          <div style={styles.statNumber}>{formatCurrency(totalAmount)}</div>
+          <div style={styles.statLabel}>Page Total</div>
+        </div>
+        <div style={styles.statCard}>
+          <div style={styles.statNumber}>{totalPages}</div>
+          <div style={styles.statLabel}>Total Pages</div>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div style={styles.filtersCard}>
+        <h3 style={styles.filtersTitle}>
+          <Filter size={20} />
+          Filter Completed Payments
+        </h3>
+        <div style={styles.filtersGrid}>
+          <div style={styles.inputGroup}>
+            <label style={styles.label}>Search by Name/ID</label>
+            <input
+              type="text"
+              placeholder="Enter student name or ID..."
+              value={searchTerm}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setCurrentPage(1);
+              }}
+              style={styles.input}
+            />
           </div>
-
-          {/* Filters */}
-          <div style={styles.filtersContainer}>
-            <h3 style={styles.filtersTitle}>
-              <Filter style={styles.iconInline} />
-              Filter Completed Payments
-            </h3>
-            <div style={styles.filtersGrid}>
-              <div style={styles.inputGroup}>
-                <label style={styles.label}>Search by Name/ID</label>
-                <input
-                  type="text"
-                  placeholder="Enter student name or ID..."
-                  value={searchTerm}
-                  onChange={(e) => {
-                    setSearchTerm(e.target.value);
-                    setCurrentPage(1);
-                  }}
-                  style={styles.input}
-                  onFocus={(e) => {
-                    e.target.style.borderColor = "#10b981";
-                    e.target.style.boxShadow =
-                      "0 0 0 3px rgba(16, 185, 129, 0.1)";
-                  }}
-                  onBlur={(e) => {
-                    e.target.style.borderColor = "#d1d5db";
-                    e.target.style.boxShadow = "none";
-                  }}
-                />
-              </div>
-              <div style={styles.inputGroup}>
-                <label style={styles.label}>Sort By</label>
-                <select
-                  value={sortBy}
-                  onChange={(e) => {
-                    setSortBy(e.target.value);
-                    setCurrentPage(1);
-                  }}
-                  style={styles.select}
-                  onFocus={(e) => {
-                    e.target.style.borderColor = "#10b981";
-                    e.target.style.boxShadow =
-                      "0 0 0 3px rgba(16, 185, 129, 0.1)";
-                  }}
-                  onBlur={(e) => {
-                    e.target.style.borderColor = "#d1d5db";
-                    e.target.style.boxShadow = "none";
-                  }}
-                >
-                  <option value="latest">Latest Completed</option>
-                  <option value="oldest">Oldest First</option>
-                  <option value="amount-high">Amount High to Low</option>
-                  <option value="amount-low">Amount Low to High</option>
-                  <option value="name">Student Name</option>
-                </select>
-              </div>
-              <div style={styles.inputGroup}>
-                <label style={styles.label}>Date Range</label>
-                <select
-                  value={dateRange}
-                  onChange={(e) => {
-                    setDateRange(e.target.value);
-                    setCurrentPage(1);
-                  }}
-                  style={styles.select}
-                  onFocus={(e) => {
-                    e.target.style.borderColor = "#10b981";
-                    e.target.style.boxShadow =
-                      "0 0 0 3px rgba(16, 185, 129, 0.1)";
-                  }}
-                  onBlur={(e) => {
-                    e.target.style.borderColor = "#d1d5db";
-                    e.target.style.boxShadow = "none";
-                  }}
-                >
-                  <option value="all">All Time</option>
-                  <option value="week">Last 7 Days</option>
-                  <option value="month">Last 30 Days</option>
-                  <option value="quarter">Last 90 Days</option>
-                </select>
-              </div>
-              <div style={styles.inputGroup}>
-                <label style={styles.label}>Course Filter</label>
-                <select
-                  value={courseFilter}
-                  onChange={(e) => {
-                    setCourseFilter(e.target.value);
-                    setCurrentPage(1);
-                  }}
-                  style={styles.select}
-                  onFocus={(e) => {
-                    e.target.style.borderColor = "#10b981";
-                    e.target.style.boxShadow =
-                      "0 0 0 3px rgba(16, 185, 129, 0.1)";
-                  }}
-                  onBlur={(e) => {
-                    e.target.style.borderColor = "#d1d5db";
-                    e.target.style.boxShadow = "none";
-                  }}
-                >
-                  <option value="">All Courses</option>
-                  {uniqueCourses.map((course) => (
-                    <option key={course} value={course}>
-                      {course}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
+          <div style={styles.inputGroup}>
+            <label style={styles.label}>Sort By</label>
+            <select
+              value={sortBy}
+              onChange={(e) => {
+                setSortBy(e.target.value);
+                setCurrentPage(1);
+              }}
+              style={styles.select}
+            >
+              <option value="latest">Latest Completed</option>
+              <option value="oldest">Oldest First</option>
+              <option value="amount-high">Amount High to Low</option>
+              <option value="amount-low">Amount Low to High</option>
+              <option value="name">Student Name</option>
+            </select>
           </div>
+          <div style={styles.inputGroup}>
+            <label style={styles.label}>Date Range</label>
+            <select
+              value={dateRange}
+              onChange={(e) => {
+                setDateRange(e.target.value);
+                setCurrentPage(1);
+              }}
+              style={styles.select}
+            >
+              <option value="all">All Time</option>
+              <option value="week">Last 7 Days</option>
+              <option value="month">Last 30 Days</option>
+              <option value="quarter">Last 90 Days</option>
+            </select>
+          </div>
+          <div style={styles.inputGroup}>
+            <label style={styles.label}>Course Filter</label>
+            <select
+              value={courseFilter}
+              onChange={(e) => {
+                setCourseFilter(e.target.value);
+                setCurrentPage(1);
+              }}
+              style={styles.select}
+            >
+              <option value="">All Courses</option>
+              {uniqueCourses.map((course) => (
+                <option key={course} value={course}>
+                  {course}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </div>
 
-          {/* Table */}
-          <div style={styles.tableContainer}>
-            <div style={styles.tableHeader}>
-              <h3 style={styles.tableTitle}>Completed Payments</h3>
-              <span style={styles.tableInfo}>
-                Page {currentPage} of {totalPages} | Showing {payments.length}{" "}
-                of {totalPages * ITEMS_PER_PAGE} results
-              </span>
-            </div>
+      {/* Table */}
+      <div style={styles.tableCard}>
+        <div style={styles.tableHeader}>
+          <h3 style={styles.tableTitle}>Completed Payments</h3>
+          <span style={styles.tableInfo}>
+            Page {currentPage} of {totalPages} | Showing {payments.length} of {allPayments.length} total
+          </span>
+        </div>
 
-            {payments.length === 0 ? (
-              <div style={styles.noResults}>
-                <CheckCircle size={isMobile ? 36 : 48} color="#ccc" />
-                <p>No completed payments found</p>
-              </div>
-            ) : (
-              <div style={styles.tableWrapper}>
-                <table style={styles.table}>
-                  <thead>
-                    <tr style={styles.tableHeaderRow}>
-                      <th style={styles.th}>Payment ID</th>
-                      <th style={styles.th}>Student Name</th>
-                      <th style={styles.th}>Course</th>
-                      <th style={styles.th}>Amount Paid</th>
-                      <th style={styles.th}>Completed Date</th>
-                      <th style={styles.th}>Payment Method</th>
-                      <th style={styles.th}>Status</th>
-                      <th style={styles.th}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {payments.map((payment) => (
-                      <tr key={payment.payment_id}>
-                        <td style={styles.td}>{payment.payment_id}</td>
-                        <td style={styles.td}>
-                          {payment.first_name} {payment.last_name}
-                        </td>
-                        <td style={styles.td}>{payment.course_name}</td>
-                        <td style={styles.td}>
-                          {formatCurrency(payment.payment_amount)}
-                        </td>
-                        <td style={styles.td}>
-                          {formatDate(payment.updated_at)}
-                        </td>
-                        <td style={styles.td}>{payment.method_name}</td>
-                        <td style={styles.td}>
-                          <span style={styles.statusCompleted}>Completed</span>
-                        </td>
-                        <td style={styles.td}>
-                          <button
-                            onClick={() => setSelectedPayment(payment)}
-                            style={styles.actionButton}
-                            title="View Details"
-                            onMouseEnter={(e) => {
-                              e.target.style.backgroundColor = "#f0fdf4";
-                            }}
-                            onMouseLeave={(e) => {
-                              e.target.style.backgroundColor = "transparent";
-                            }}
-                          >
-                            <Eye size={isMobile ? 12 : 14} />
-                            {!isMobile && "View"}
-                          </button>
-                          <button
-                            onClick={handleExport}
-                            style={styles.actionButton}
-                            title="Export Data"
-                            onMouseEnter={(e) => {
-                              e.target.style.backgroundColor = "#f0fdf4";
-                            }}
-                            onMouseLeave={(e) => {
-                              e.target.style.backgroundColor = "transparent";
-                            }}
-                          >
-                            <Download size={isMobile ? 12 : 14} />
-                            {!isMobile && "Export"}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+        {payments.length === 0 ? (
+          <div style={styles.noResults}>
+            <CheckCircle size={48} color="#ccc" />
+            <p>No completed payments found</p>
+            {allPayments.length === 0 && (
+              <p>
+                <button onClick={checkDebugInfo} style={{...styles.button, ...styles.debugButton}}>
+                  Check Database Status
+                </button>
+              </p>
             )}
+          </div>
+        ) : (
+          <>
+            <div style={{ overflowX: "auto" }}>
+              <table style={styles.table}>
+                <thead>
+                  <tr>
+                    <th style={styles.th}>Payment ID</th>
+                    <th style={styles.th}>Student Name</th>
+                    <th style={styles.th}>Course</th>
+                    <th style={styles.th}>Amount</th>
+                    <th style={styles.th}>Completed Date</th>
+                    <th style={styles.th}>Payment Method</th>
+                    <th style={styles.th}>Status</th>
+                    <th style={styles.th}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {payments.map((payment) => (
+                    <tr key={payment.payment_id}>
+                      <td style={styles.td}>{payment.payment_id}</td>
+                      <td style={styles.td}>
+                        {payment.first_name} {payment.last_name}
+                      </td>
+                      <td style={styles.td}>{payment.course_name}</td>
+                      <td style={styles.td}>
+                        {formatCurrency(payment.payment_amount)}
+                      </td>
+                      <td style={styles.td}>
+                        {formatDate(payment.updated_at)}
+                      </td>
+                      <td style={styles.td}>{payment.method_name || 'N/A'}</td>
+                      <td style={styles.td}>
+                        <span style={styles.statusBadge}>
+                          {payment.payment_status}
+                        </span>
+                      </td>
+                      <td style={styles.td}>
+                        <button
+                          onClick={() => setSelectedPayment(payment)}
+                          style={styles.actionButton}
+                          title="View Details"
+                        >
+                          <Eye size={14} />
+                          View
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
             {/* Pagination */}
             {totalPages > 1 && (
@@ -804,27 +848,10 @@ const CompletedPayments = () => {
                 <button
                   onClick={() => handlePageChange(currentPage - 1)}
                   disabled={currentPage === 1}
-                  style={{
-                    ...styles.paginationButton,
-                    ...(currentPage === 1
-                      ? styles.paginationButtonDisabled
-                      : {}),
-                  }}
-                  onMouseEnter={(e) => {
-                    if (currentPage !== 1) {
-                      e.target.style.backgroundColor = "#f9fafb";
-                      e.target.style.borderColor = "#059669";
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (currentPage !== 1) {
-                      e.target.style.backgroundColor = "white";
-                      e.target.style.borderColor = "#d1d5db";
-                    }
-                  }}
+                  style={styles.paginationButton}
                 >
                   <ChevronLeft size={16} />
-                  {!isMobile && "Previous"}
+                  Previous
                 </button>
 
                 <span style={styles.paginationInfo}>
@@ -834,129 +861,79 @@ const CompletedPayments = () => {
                 <button
                   onClick={() => handlePageChange(currentPage + 1)}
                   disabled={currentPage === totalPages}
-                  style={{
-                    ...styles.paginationButton,
-                    ...(currentPage === totalPages
-                      ? styles.paginationButtonDisabled
-                      : {}),
-                  }}
-                  onMouseEnter={(e) => {
-                    if (currentPage !== totalPages) {
-                      e.target.style.backgroundColor = "#f9fafb";
-                      e.target.style.borderColor = "#059669";
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (currentPage !== totalPages) {
-                      e.target.style.backgroundColor = "white";
-                      e.target.style.borderColor = "#d1d5db";
-                    }
-                  }}
+                  style={styles.paginationButton}
                 >
-                  {!isMobile && "Next"}
+                  Next
                   <ChevronRight size={16} />
                 </button>
               </div>
             )}
-          </div>
+          </>
+        )}
+      </div>
 
-          {/* Payment Details Modal */}
-          {selectedPayment && (
-            <div style={styles.modal}>
-              <div style={styles.modalContent}>
-                <h3 style={styles.modalTitle}>Payment Details</h3>
-                <div style={styles.modalDetails}>
-                  <div style={styles.modalDetailRow}>
-                    <span style={styles.modalLabel}>Payment ID:</span>
-                    <span style={styles.modalValue}>
-                      {selectedPayment.payment_id}
-                    </span>
-                  </div>
-                  <div style={styles.modalDetailRow}>
-                    <span style={styles.modalLabel}>Student Name:</span>
-                    <span style={styles.modalValue}>
-                      {selectedPayment.first_name} {selectedPayment.last_name}
-                    </span>
-                  </div>
-                  <div style={styles.modalDetailRow}>
-                    <span style={styles.modalLabel}>Student ID:</span>
-                    <span style={styles.modalValue}>
-                      {selectedPayment.student_id}
-                    </span>
-                  </div>
-                  <div style={styles.modalDetailRow}>
-                    <span style={styles.modalLabel}>Course:</span>
-                    <span style={styles.modalValue}>
-                      {selectedPayment.course_name}
-                    </span>
-                  </div>
-                  <div style={styles.modalDetailRow}>
-                    <span style={styles.modalLabel}>Batch:</span>
-                    <span style={styles.modalValue}>
-                      {selectedPayment.batch_identifier}
-                    </span>
-                  </div>
-                  <div style={styles.modalDetailRow}>
-                    <span style={styles.modalLabel}>Amount:</span>
-                    <span style={styles.modalValue}>
-                      {formatCurrency(selectedPayment.payment_amount)}
-                    </span>
-                  </div>
-                  <div style={styles.modalDetailRow}>
-                    <span style={styles.modalLabel}>Payment Method:</span>
-                    <span style={styles.modalValue}>
-                      {selectedPayment.method_name}
-                    </span>
-                  </div>
-                  <div style={styles.modalDetailRow}>
-                    <span style={styles.modalLabel}>Reference Number:</span>
-                    <span style={styles.modalValue}>
-                      {selectedPayment.reference_number || "N/A"}
-                    </span>
-                  </div>
-                  <div style={styles.modalDetailRow}>
-                    <span style={styles.modalLabel}>Processing Fee:</span>
-                    <span style={styles.modalValue}>
-                      {formatCurrency(selectedPayment.processing_fee || 0)}
-                    </span>
-                  </div>
-                  <div style={styles.modalDetailRow}>
-                    <span style={styles.modalLabel}>Payment Date:</span>
-                    <span style={styles.modalValue}>
-                      {formatDate(selectedPayment.payment_date)}
-                    </span>
-                  </div>
-                  <div
-                    style={{
-                      ...styles.modalDetailRow,
-                      borderBottom: "none",
-                    }}
-                  >
-                    <span style={styles.modalLabel}>Completed Date:</span>
-                    <span style={styles.modalValue}>
-                      {formatDate(selectedPayment.updated_at)}
-                    </span>
-                  </div>
-                </div>
-                <div style={styles.modalActions}>
-                  <button
-                    onClick={() => setSelectedPayment(null)}
-                    style={styles.closeButton}
-                    onMouseEnter={(e) => {
-                      e.target.style.backgroundColor = "#e5e7eb";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.target.style.backgroundColor = "#f3f4f6";
-                    }}
-                  >
-                    Close
-                  </button>
-                </div>
+      {/* Payment Details Modal */}
+      {selectedPayment && (
+        <div style={styles.modal} onClick={() => setSelectedPayment(null)}>
+          <div style={styles.modalContent} onClick={(e) => e.stopPropagation()}>
+            <h3 style={styles.modalTitle}>Payment Details</h3>
+            <div style={styles.modalDetails}>
+              <div style={styles.modalRow}>
+                <span style={styles.modalLabel}>Payment ID:</span>
+                <span style={styles.modalValue}>{selectedPayment.payment_id}</span>
+              </div>
+              <div style={styles.modalRow}>
+                <span style={styles.modalLabel}>Student Name:</span>
+                <span style={styles.modalValue}>
+                  {selectedPayment.first_name} {selectedPayment.last_name}
+                </span>
+              </div>
+              <div style={styles.modalRow}>
+                <span style={styles.modalLabel}>Student ID:</span>
+                <span style={styles.modalValue}>{selectedPayment.student_id}</span>
+              </div>
+              <div style={styles.modalRow}>
+                <span style={styles.modalLabel}>Course:</span>
+                <span style={styles.modalValue}>{selectedPayment.course_name}</span>
+              </div>
+              <div style={styles.modalRow}>
+                <span style={styles.modalLabel}>Amount:</span>
+                <span style={styles.modalValue}>
+                  {formatCurrency(selectedPayment.payment_amount)}
+                </span>
+              </div>
+              <div style={styles.modalRow}>
+                <span style={styles.modalLabel}>Payment Method:</span>
+                <span style={styles.modalValue}>{selectedPayment.method_name || 'N/A'}</span>
+              </div>
+              <div style={styles.modalRow}>
+                <span style={styles.modalLabel}>Reference Number:</span>
+                <span style={styles.modalValue}>
+                  {selectedPayment.reference_number || "N/A"}
+                </span>
+              </div>
+              <div style={styles.modalRow}>
+                <span style={styles.modalLabel}>Completed Date:</span>
+                <span style={styles.modalValue}>
+                  {formatDate(selectedPayment.updated_at)}
+                </span>
+              </div>
+              <div style={styles.modalRow}>
+                <span style={styles.modalLabel}>Status:</span>
+                <span style={styles.modalValue}>{selectedPayment.payment_status}</span>
               </div>
             </div>
-          )}
+            <div style={{ textAlign: 'right' }}>
+              <button
+                onClick={() => setSelectedPayment(null)}
+                style={{...styles.button, backgroundColor: '#6b7280', color: 'white'}}
+              >
+                Close
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };

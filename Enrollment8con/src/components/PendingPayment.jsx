@@ -690,8 +690,8 @@ const PendingPayments = ({ onPaymentProcessed }) => {
     try {
       // Map frontend actions to backend statuses
       let status;
-      if (action === "approved") {
-        status = "completed"; // Use 'completed' instead of 'confirmed'
+      if (action === "confirm") {
+        status = "completed" || "confirmed";
       } else {
         status = action;
       }
@@ -705,7 +705,7 @@ const PendingPayments = ({ onPaymentProcessed }) => {
       setSelectedPayment(null);
       
       // Show success message
-      const actionText = action === "approved" ? "approved" : action;
+      const actionText = action === "confirmed" ? "confirmed" : action;
       setSuccess(`Payment ${paymentId} has been ${actionText} successfully!`);
 
       // Call callback if provided
@@ -865,9 +865,9 @@ const PendingPayments = ({ onPaymentProcessed }) => {
           )}
           onMouseEnter={() => setHoveredButton(`approve-${payment.payment_id}`)}
           onMouseLeave={() => setHoveredButton(null)}
-          onClick={() => handlePaymentAction(payment.payment_id, "approved")}
+          onClick={() => handlePaymentAction(payment.payment_id, "confirmed")}
           disabled={processing === payment.payment_id}
-          title="Approve Payment"
+          title="Confirmed Payment"
         >
           <Check style={styles.icon} />
         </button>
@@ -1111,7 +1111,7 @@ const PendingPayments = ({ onPaymentProcessed }) => {
                           }
                           onMouseLeave={() => setHoveredButton(null)}
                           onClick={() =>
-                            handlePaymentAction(payment.payment_id, "approved")
+                            handlePaymentAction(payment.payment_id, "confirmed")
                           }
                           disabled={processing === payment.payment_id}
                           title="Approve Payment"
@@ -1349,7 +1349,7 @@ const PendingPayments = ({ onPaymentProcessed }) => {
               </button>
               <button
                 onClick={() =>
-                  handlePaymentAction(selectedPayment.payment_id, "approved")
+                  handlePaymentAction(selectedPayment.payment_id, "confirmed")
                 }
                 style={getButtonStyle(
                   styles.approveActionButton,

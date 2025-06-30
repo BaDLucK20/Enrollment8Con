@@ -61,6 +61,14 @@ const Batch = () => {
     initializeData();
   }, []);
 
+  // Clear batch selection when selected students change
+  useEffect(() => {
+    if (showBatchReassignment) {
+      setNewBatchId('');
+      setReassignmentError('');
+    }
+  }, [selectedStudents, showBatchReassignment]);
+
   const initializeData = async () => {
     try {
       setLoading(true);
@@ -181,6 +189,86 @@ const Batch = () => {
     const allBatches = [...studentBatchIdentifiers, ...courseOfferingBatches, ...studentBatchYears];
     return [...new Set(allBatches)].sort();
   }, [students, courseOfferings]);
+
+  // Get courses for selected students
+  const getCoursesForSelectedStudents = useMemo(() => {
+    const selectedStudentData = students.filter(student => 
+      selectedStudents.has(student.student_id)
+    );
+    
+    const courseIds = new Set();
+    const courseCodes = new Set();
+    
+    selectedStudentData.forEach(student => {
+      // Handle enrolled_courses (comma-separated string)
+      if (student.enrolled_courses) {
+        const enrolledCourses = student.enrolled_courses.split(',').map(c => c.trim());
+        enrolledCourses.forEach(courseStr => {
+          // Extract course code from strings like "BA001 - Business Analytics"
+          const courseCode = courseStr.split(' - ')[0].trim();
+          courseCodes.add(courseCode);
+          
+          // Also try to find the full course by name match
+          const matchingCourse = courses.find(c => 
+            courseStr.toLowerCase().includes(c.course_name.toLowerCase()) ||
+            courseStr.toLowerCase().includes(c.course_code.toLowerCase())
+          );
+          if (matchingCourse) {
+            courseIds.add(matchingCourse.course_id);
+            courseCodes.add(matchingCourse.course_code);
+          }
+        });
+      }
+      
+      // Handle direct course_id
+      if (student.course_id) {
+        courseIds.add(parseInt(student.course_id));
+      }
+      
+      // Handle course_code
+      if (student.course_code) {
+        courseCodes.add(student.course_code);
+        // Also find the course_id for this code
+        const matchingCourse = courses.find(c => c.course_code === student.course_code);
+        if (matchingCourse) {
+          courseIds.add(matchingCourse.course_id);
+        }
+      }
+    });
+    
+    return { courseIds, courseCodes };
+  }, [students, selectedStudents, courses]);
+
+  // Get filtered batches based on selected students' courses
+  const availableBatchesForSelectedStudents = useMemo(() => {
+    if (selectedStudents.size === 0) {
+      return [];
+    }
+    
+    const { courseIds, courseCodes } = getCoursesForSelectedStudents;
+    
+    // If no courses identified, return empty array
+    if (courseIds.size === 0 && courseCodes.size === 0) {
+      return [];
+    }
+    
+    // Filter course offerings to only include relevant courses
+    const relevantOfferings = courseOfferings.filter(offering => {
+      // Find the course for this offering
+      const course = courses.find(c => c.course_id === offering.course_id);
+      if (!course) return false;
+      
+      // Check if this course is in the selected students' courses
+      return courseIds.has(course.course_id) || courseCodes.has(course.course_code);
+    });
+    
+    // Extract unique batch identifiers
+    const batchIdentifiers = relevantOfferings
+      .map(offering => offering.batch_identifier)
+      .filter(Boolean);
+      
+    return [...new Set(batchIdentifiers)].sort();
+  }, [selectedStudents, courseOfferings, courses, getCoursesForSelectedStudents]);
 
   // Get unique courses
   const uniqueCourses = useMemo(() => {
@@ -344,6 +432,11 @@ const Batch = () => {
   const handleBatchReassignment = async () => {
     if (selectedStudents.size === 0) {
       setReassignmentError('Please select at least one student.');
+      return;
+    }
+
+    if (availableBatchesForSelectedStudents.length === 0) {
+      setReassignmentError('No available batches found for the selected students\' enrolled courses.');
       return;
     }
 
@@ -531,6 +624,11 @@ const Batch = () => {
                 <p style={{ fontSize: '14px', color: colors.olive, marginTop: '8px' }}>
                   You are about to reassign {selectedStudents.size} student(s) to a new batch.
                 </p>
+                {selectedStudents.size > 0 && availableBatchesForSelectedStudents.length === 0 && (
+                  <p style={{ fontSize: '14px', color: colors.coral, marginTop: '8px', fontWeight: 'bold' }}>
+                    No available batches found for the selected students' enrolled courses.
+                  </p>
+                )}
               </div>
 
               <div style={styles.batchSelection}>
@@ -539,12 +637,23 @@ const Batch = () => {
                   value={newBatchId}
                   onChange={(e) => setNewBatchId(e.target.value)}
                   style={styles.formSelect}
+                  disabled={availableBatchesForSelectedStudents.length === 0}
                 >
-                  <option value="">Select a batch...</option>
-                  {uniqueBatches.map(batch => (
+                  <option value="">
+                    {availableBatchesForSelectedStudents.length === 0 
+                      ? 'No batches available for selected students\' courses'
+                      : 'Select a batch...'
+                    }
+                  </option>
+                  {availableBatchesForSelectedStudents.map(batch => (
                     <option key={batch} value={batch}>{batch}</option>
                   ))}
                 </select>
+                {selectedStudents.size > 0 && availableBatchesForSelectedStudents.length > 0 && (
+                  <p style={{ fontSize: '12px', color: colors.olive, marginTop: '4px' }}>
+                    Showing {availableBatchesForSelectedStudents.length} batch(es) for the selected students' enrolled courses.
+                  </p>
+                )}
               </div>
 
               {reassignmentError && (
@@ -564,10 +673,10 @@ const Batch = () => {
                 <button
                   style={{
                     ...styles.submitButton,
-                    opacity: (!newBatchId || reassignmentLoading) ? 0.6 : 1
+                    opacity: (!newBatchId || reassignmentLoading || availableBatchesForSelectedStudents.length === 0) ? 0.6 : 1
                   }}
                   onClick={handleBatchReassignment}
-                  disabled={!newBatchId || reassignmentLoading}
+                  disabled={!newBatchId || reassignmentLoading || availableBatchesForSelectedStudents.length === 0}
                 >
                   {reassignmentLoading ? 'Processing...' : 'Reassign Batch'}
                 </button>
@@ -1110,16 +1219,7 @@ const Batch = () => {
             <Calendar size={20} />
             By Batch
           </button>
-          {/* <button
-            style={{
-              ...styles.viewTab,
-              ...(activeView === 'byCourse' ? styles.activeViewTab : styles.inactiveViewTab)
-            }}
-            onClick={() => setActiveView('byCourse')}
-          >
-            <BookOpen size={20} />
-            By Course
-          </button> */}
+          
           <button
             style={{
               ...styles.viewTab,
@@ -1150,7 +1250,11 @@ const Batch = () => {
         
         <button
           style={styles.bulkActionButton}
-          onClick={() => setShowBatchReassignment(true)}
+          onClick={() => {
+            setShowBatchReassignment(true);
+            setNewBatchId(''); // Clear previous selection when opening modal
+            setReassignmentError(''); // Clear any previous errors
+          }}
           disabled={selectedStudents.size === 0}
         >
           <Edit3 size={16} />
@@ -1190,46 +1294,6 @@ const Batch = () => {
                     {isExpanded && (
                       <div style={styles.studentsGrid}>
                         {batchStudents.map(student => renderStudentCard(student))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })
-          )}
-        </div>
-      )}
-
-      {activeView === 'byCourse' && (
-        <div>
-          {Object.keys(studentsByCourse).length === 0 ? (
-            <div style={styles.emptyState}>
-              No students found matching the current filters.
-            </div>
-          ) : (
-            Object.entries(studentsByCourse)
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([courseName, courseStudents]) => {
-                const isExpanded = expandedSections.has(`course-${courseName}`);
-                
-                return (
-                  <div key={courseName} style={styles.contentSection}>
-                    <div 
-                      style={styles.sectionHeader}
-                      onClick={() => toggleSection(`course-${courseName}`)}
-                    >
-                      <div style={styles.sectionTitle}>
-                        <BookOpen size={20} />
-                        {courseName}
-                        <span style={styles.sectionCount}>
-                          {courseStudents.length} students
-                        </span>
-                      </div>
-                      {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
-                    </div>
-                    
-                    {isExpanded && (
-                      <div style={styles.studentsGrid}>
-                        {courseStudents.map(student => renderStudentCard(student))}
                       </div>
                     )}
                   </div>

@@ -2859,8 +2859,9 @@ app.get(
     }
   }
 );
-
 app.put('/api/payments/:id/status', authenticateToken, async (req, res) => {
+  const connection = await pool.getConnection();
+  
   try {
     const { id: paymentId } = req.params;
     const { status, notes } = req.body;
@@ -2911,63 +2912,194 @@ app.put('/api/payments/:id/status', authenticateToken, async (req, res) => {
       processedBy
     });
 
-    // First, check if payment exists
-    const [existingPayment] = await pool.execute(
-      'SELECT payment_id, payment_status FROM payments WHERE payment_id = ?',
+    // Start transaction
+    await connection.beginTransaction();
+
+    // First, check if payment exists and get full payment details
+    const [existingPayment] = await connection.execute(
+      `SELECT p.*, s.first_name, s.last_name, s.student_id, 
+              c.course_name, b.batch_identifier,
+              pm.method_name
+       FROM payments p
+       JOIN students s ON p.student_id = s.student_id
+       JOIN courses c ON p.course_id = c.course_id
+       JOIN batches b ON p.batch_id = b.batch_id
+       JOIN payment_methods pm ON p.method_id = pm.method_id
+       WHERE p.payment_id = ?`,
       [numericPaymentId]
     );
 
     if (existingPayment.length === 0) {
+      await connection.rollback();
       return res.status(404).json({
         success: false,
         message: 'Payment not found'
       });
     }
 
-    console.log('Found existing payment:', existingPayment[0]);
+    const payment = existingPayment[0];
+    console.log('Found existing payment:', payment);
 
-    // Update payment status using direct SQL (no stored procedures)
+    // Update payment status in payments table
     const updateQuery = `
       UPDATE payments 
       SET payment_status = ?, 
           notes = ?, 
-          updated_at = NOW()
+          updated_at = NOW(),
+          processed_by = ?
       WHERE payment_id = ?
     `;
 
-    const updateParams = [status, notes || null, numericPaymentId];
+    const updateParams = [status, notes || null, processedBy, numericPaymentId];
 
     console.log('Executing update query:', updateQuery);
     console.log('With parameters:', updateParams);
 
-    const [updateResult] = await pool.execute(updateQuery, updateParams);
+    const [updateResult] = await connection.execute(updateQuery, updateParams);
 
     console.log('Update result:', updateResult);
 
     if (updateResult.affectedRows === 0) {
+      await connection.rollback();
       return res.status(400).json({
         success: false,
         message: 'Failed to update payment status'
       });
     }
 
+    // If status is completed or confirmed, insert into completedpayments table
+    if (status === 'completed' || status === 'confirmed') {
+      console.log('Inserting into completedpayments table...');
+      
+      // Check if record already exists in completedpayments
+      const [existingCompleted] = await connection.execute(
+        'SELECT payment_id FROM completedpayments WHERE payment_id = ?',
+        [numericPaymentId]
+      );
+
+      if (existingCompleted.length === 0) {
+        // Insert into completedpayments table
+        const insertCompletedQuery = `
+          INSERT INTO completedpayments (
+            payment_id,
+            student_id,
+            course_id,
+            batch_id,
+            payment_amount,
+            payment_date,
+            method_id,
+            reference_number,
+            notes,
+            processed_by,
+            completed_at,
+            created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+        `;
+
+        const insertParams = [
+          payment.payment_id,
+          payment.student_id,
+          payment.course_id,
+          payment.batch_id,
+          payment.payment_amount,
+          payment.payment_date,
+          payment.method_id,
+          payment.reference_number,
+          notes || payment.notes,
+          processedBy
+        ];
+
+        console.log('Inserting completed payment:', insertParams);
+
+        const [insertResult] = await connection.execute(insertCompletedQuery, insertParams);
+        
+        console.log('Insert completed payment result:', insertResult);
+
+        if (insertResult.affectedRows === 0) {
+          await connection.rollback();
+          return res.status(500).json({
+            success: false,
+            message: 'Failed to insert into completed payments'
+          });
+        }
+      } else {
+        console.log('Payment already exists in completedpayments table');
+        
+        // Update existing record in completedpayments
+        const updateCompletedQuery = `
+          UPDATE completedpayments 
+          SET notes = ?, 
+              processed_by = ?,
+              completed_at = NOW(),
+              updated_at = NOW()
+          WHERE payment_id = ?
+        `;
+
+        await connection.execute(updateCompletedQuery, [notes || payment.notes, processedBy, numericPaymentId]);
+      }
+
+      // Update student balance if needed
+      try {
+        const updateBalanceQuery = `
+          UPDATE students 
+          SET balance = balance - ?
+          WHERE student_id = ? AND balance >= ?
+        `;
+        
+        const [balanceResult] = await connection.execute(updateBalanceQuery, [
+          payment.payment_amount,
+          payment.student_id,
+          payment.payment_amount
+        ]);
+
+        console.log('Balance update result:', balanceResult);
+      } catch (balanceError) {
+        console.warn('Balance update failed (non-critical):', balanceError.message);
+        // Don't fail the transaction for balance update issues
+      }
+    }
+
+    // If status is failed, we might want to add to a failed_payments table or just keep in payments
+    if (status === 'failed') {
+      console.log('Payment marked as failed');
+      // Could add logic here to handle failed payments specifically
+    }
+
+    // Commit transaction
+    await connection.commit();
+
     // Verify the update worked
-    const [verifyResult] = await pool.execute(
+    const [verifyResult] = await connection.execute(
       'SELECT payment_id, payment_status, notes, updated_at FROM payments WHERE payment_id = ?',
       [numericPaymentId]
     );
 
     console.log('Verification result:', verifyResult[0]);
 
+    // If completed, also verify it's in completedpayments
+    let completedPaymentVerification = null;
+    if (status === 'completed' || status === 'confirmed') {
+      const [completedVerify] = await connection.execute(
+        'SELECT payment_id, completed_at FROM completedpayments WHERE payment_id = ?',
+        [numericPaymentId]
+      );
+      completedPaymentVerification = completedVerify[0] || null;
+      console.log('Completed payment verification:', completedPaymentVerification);
+    }
+
     res.json({
       success: true,
       message: 'Payment status updated successfully',
       paymentId: numericPaymentId,
       newStatus: status,
-      payment: verifyResult[0]
+      payment: verifyResult[0],
+      completedPayment: completedPaymentVerification
     });
 
   } catch (error) {
+    // Rollback transaction on error
+    await connection.rollback();
+    
     console.error('Payment status update error:', error);
     console.error('Error stack:', error.stack);
     
@@ -2979,6 +3111,9 @@ app.put('/api/payments/:id/status', authenticateToken, async (req, res) => {
         stack: error.stack
       } : 'Internal server error'
     });
+  } finally {
+    // Release connection back to pool
+    connection.release();
   }
 });
 
@@ -3332,6 +3467,10 @@ app.get(
     try {
       const { name_sort, student_search, date_range } = req.query;
 
+      console.log('=== FETCHING COMPLETED PAYMENTS ===');
+      console.log('Request filters:', { name_sort, student_search, date_range });
+
+      // SIMPLIFIED query - remove complex JOINs that might be filtering out payments
       let query = `
         SELECT 
           p.payment_id, 
@@ -3344,29 +3483,28 @@ app.get(
           p.created_at,
           p.updated_at,
           pm.method_name,
-          sa.account_id,
-          sa.total_due, 
-          sa.balance,
-          s.student_id, 
-          per.first_name, 
-          per.last_name,
-          per.email,
-          c.course_name, 
-          co.batch_identifier,
-          co.offering_id,
+          COALESCE(sa.account_id, 'N/A') as account_id,
+          COALESCE(sa.total_due, 0) as total_due, 
+          COALESCE(sa.balance, 0) as balance,
+          COALESCE(s.student_id, 'Unknown') as student_id, 
+          COALESCE(per.first_name, 'Unknown') as first_name, 
+          COALESCE(per.last_name, 'Student') as last_name,
+          COALESCE(per.email, '') as email,
+          COALESCE(c.course_name, 'Unknown Course') as course_name, 
+          COALESCE(co.batch_identifier, 'Unknown Batch') as batch_identifier,
           pm.method_id,
-          ci_phone.contact_value as phone
+          COALESCE(ci_phone.contact_value, '') as phone
         FROM payments p
-        JOIN payment_methods pm ON p.method_id = pm.method_id
-        JOIN student_accounts sa ON p.account_id = sa.account_id
-        JOIN students s ON sa.student_id = s.student_id
-        JOIN persons per ON s.person_id = per.person_id
-        JOIN course_offerings co ON sa.offering_id = co.offering_id
-        JOIN courses c ON co.course_id = c.course_id
+        LEFT JOIN payment_methods pm ON p.method_id = pm.method_id
+        LEFT JOIN student_accounts sa ON p.account_id = sa.account_id
+        LEFT JOIN students s ON sa.student_id = s.student_id
+        LEFT JOIN persons per ON s.person_id = per.person_id
+        LEFT JOIN course_offerings co ON sa.offering_id = co.offering_id
+        LEFT JOIN courses c ON co.course_id = c.course_id
         LEFT JOIN contact_info ci_phone ON s.person_id = ci_phone.person_id 
           AND ci_phone.contact_type = 'phone' 
           AND ci_phone.is_primary = TRUE
-        WHERE p.payment_status IN ('completed', 'confirmed')
+        WHERE p.payment_status IN ('completed', 'confirmed', 'approved')
       `;
 
       const params = [];
@@ -3374,9 +3512,9 @@ app.get(
       // Filter by student name search
       if (student_search) {
         query +=
-          " AND (per.first_name LIKE ? OR per.last_name LIKE ? OR s.student_id LIKE ?)";
+          " AND (per.first_name LIKE ? OR per.last_name LIKE ? OR s.student_id LIKE ? OR p.payment_id LIKE ?)";
         const searchParam = `%${student_search}%`;
-        params.push(searchParam, searchParam, searchParam);
+        params.push(searchParam, searchParam, searchParam, searchParam);
       }
 
       // Filter by date range
@@ -3403,7 +3541,7 @@ app.get(
         params.push(filterDate.toISOString().split("T")[0]);
       }
 
-      // Sort by student name or payment date
+      // Sort by most recently updated first
       if (name_sort) {
         query += ` ORDER BY per.first_name ${
           name_sort === "ascending" ? "ASC" : "DESC"
@@ -3418,10 +3556,37 @@ app.get(
       const [payments] = await pool.execute(query, params);
 
       console.log(`Found ${payments.length} completed payments`);
+      
+      // Enhanced logging for debugging
+      if (payments.length > 0) {
+        console.log('First 3 completed payments:');
+        payments.slice(0, 3).forEach((p, index) => {
+          console.log(`${index + 1}. ID: ${p.payment_id}, Status: ${p.payment_status}, Student: ${p.first_name} ${p.last_name}, Updated: ${p.updated_at}`);
+        });
+      } else {
+        console.log('No completed payments found - checking if any payments exist...');
+        
+        // Debug query to see what payments exist
+        const [allPayments] = await pool.execute(
+          "SELECT payment_id, payment_status, updated_at FROM payments ORDER BY updated_at DESC LIMIT 10"
+        );
+        
+        console.log('Recent payments in database:');
+        allPayments.forEach(p => {
+          console.log(`- ID: ${p.payment_id}, Status: ${p.payment_status}, Updated: ${p.updated_at}`);
+        });
+      }
+
       res.json(payments);
+      
     } catch (error) {
-      console.error("Completed payments fetch error:", error);
-      res.status(500).json({ error: "Failed to fetch completed payments" });
+      console.error("=== COMPLETED PAYMENTS FETCH ERROR ===");
+      console.error("Error details:", error);
+      console.error("Error stack:", error.stack);
+      res.status(500).json({ 
+        error: "Failed to fetch completed payments",
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
     }
   }
 );
@@ -5084,6 +5249,200 @@ app.get(
     } catch (error) {
       console.error("Batch students fetch error:", error);
       res.status(500).json({ error: "Failed to fetch batch students" });
+    }
+  }
+);
+
+app.get(
+  "/api/batches-with-students",
+  authenticateToken,
+  authorize(["admin", "staff"]),
+  async (req, res) => {
+    try {
+      const [batches] = await pool.execute(`
+        SELECT
+          co.offering_id,
+          co.batch_identifier,
+          co.start_date,
+          co.end_date,
+          co.status,
+          co.max_enrollees,
+          co.current_enrollees,
+          co.location,
+          c.course_id,
+          c.course_code,
+          c.course_name,
+          COUNT(se.student_id) as actual_enrolled_count,
+          GROUP_CONCAT(
+            CONCAT(p.first_name, ' ', p.last_name) 
+            ORDER BY p.first_name ASC 
+            SEPARATOR ', '
+          ) as enrolled_student_names
+        FROM course_offerings co
+        JOIN courses c ON co.course_id = c.course_id
+        INNER JOIN student_enrollments se ON co.offering_id = se.offering_id
+          AND se.enrollment_status = 'enrolled'
+        INNER JOIN students s ON se.student_id = s.student_id
+        INNER JOIN persons p ON s.person_id = p.person_id
+        WHERE c.is_active = TRUE
+        GROUP BY co.offering_id, co.batch_identifier, co.start_date, co.end_date,
+                 co.status, co.max_enrollees, co.current_enrollees, co.location,
+                 c.course_id, c.course_code, c.course_name
+        HAVING actual_enrolled_count > 0
+        ORDER BY c.course_name, co.start_date DESC
+      `);
+
+      console.log(`Found ${batches.length} batches with enrolled students`);
+      
+      res.json({
+        success: true,
+        message: "Batches with enrolled students retrieved successfully",
+        total_batches: batches.length,
+        batches: batches.map(batch => ({
+          offering_id: batch.offering_id,
+          batch_identifier: batch.batch_identifier,
+          start_date: batch.start_date,
+          end_date: batch.end_date,
+          status: batch.status,
+          max_enrollees: batch.max_enrollees,
+          current_enrollees: batch.current_enrollees,
+          actual_enrolled_count: batch.actual_enrolled_count,
+          location: batch.location,
+          course: {
+            course_id: batch.course_id,
+            course_code: batch.course_code,
+            course_name: batch.course_name,
+            display_name: `${batch.course_code} - ${batch.course_name}`
+          },
+          enrolled_students: batch.enrolled_student_names,
+          capacity_utilization: ((batch.actual_enrolled_count / batch.max_enrollees) * 100).toFixed(1)
+        }))
+      });
+    } catch (error) {
+      console.error("Batches with students fetch error:", error);
+      res.status(500).json({ 
+        success: false,
+        error: "Failed to fetch batches with enrolled students",
+        message: error.message 
+      });
+    }
+  }
+);
+
+// Alternative endpoint that accepts query parameters for filtering
+app.get(
+  "/api/batches-with-students/filtered",
+  authenticateToken,
+  authorize(["admin", "staff"]),
+  async (req, res) => {
+    try {
+      const { course_id, status, min_enrollees, batch_identifier } = req.query;
+      
+      let query = `
+        SELECT
+          co.offering_id,
+          co.batch_identifier,
+          co.start_date,
+          co.end_date,
+          co.status,
+          co.max_enrollees,
+          co.current_enrollees,
+          co.location,
+          c.course_id,
+          c.course_code,
+          c.course_name,
+          COUNT(se.student_id) as actual_enrolled_count,
+          GROUP_CONCAT(
+            CONCAT(p.first_name, ' ', p.last_name) 
+            ORDER BY p.first_name ASC 
+            SEPARATOR ', '
+          ) as enrolled_student_names
+        FROM course_offerings co
+        JOIN courses c ON co.course_id = c.course_id
+        INNER JOIN student_enrollments se ON co.offering_id = se.offering_id
+          AND se.enrollment_status = 'enrolled'
+        INNER JOIN students s ON se.student_id = s.student_id
+        INNER JOIN persons p ON s.person_id = p.person_id
+        WHERE c.is_active = TRUE
+      `;
+
+      const params = [];
+      const conditions = [];
+
+      if (course_id) {
+        conditions.push("c.course_id = ?");
+        params.push(course_id);
+      }
+
+      if (status) {
+        conditions.push("co.status = ?");
+        params.push(status);
+      }
+
+      if (batch_identifier) {
+        conditions.push("co.batch_identifier LIKE ?");
+        params.push(`%${batch_identifier}%`);
+      }
+
+      if (conditions.length > 0) {
+        query += " AND " + conditions.join(" AND ");
+      }
+
+      query += `
+        GROUP BY co.offering_id, co.batch_identifier, co.start_date, co.end_date,
+                 co.status, co.max_enrollees, co.current_enrollees, co.location,
+                 c.course_id, c.course_code, c.course_name
+        HAVING actual_enrolled_count > 0
+      `;
+
+      if (min_enrollees) {
+        query += ` AND actual_enrolled_count >= ${parseInt(min_enrollees)}`;
+      }
+
+      query += " ORDER BY c.course_name, co.start_date DESC";
+
+      console.log("Executing filtered batches query:", query);
+      console.log("With parameters:", params);
+
+      const [batches] = await pool.execute(query, params);
+
+      res.json({
+        success: true,
+        message: "Filtered batches with enrolled students retrieved successfully",
+        total_batches: batches.length,
+        filters_applied: {
+          course_id: course_id || null,
+          status: status || null,
+          min_enrollees: min_enrollees || null,
+          batch_identifier: batch_identifier || null
+        },
+        batches: batches.map(batch => ({
+          offering_id: batch.offering_id,
+          batch_identifier: batch.batch_identifier,
+          start_date: batch.start_date,
+          end_date: batch.end_date,
+          status: batch.status,
+          max_enrollees: batch.max_enrollees,
+          current_enrollees: batch.current_enrollees,
+          actual_enrolled_count: batch.actual_enrolled_count,
+          location: batch.location,
+          course: {
+            course_id: batch.course_id,
+            course_code: batch.course_code,
+            course_name: batch.course_name,
+            display_name: `${batch.course_code} - ${batch.course_name}`
+          },
+          enrolled_students: batch.enrolled_student_names,
+          capacity_utilization: ((batch.actual_enrolled_count / batch.max_enrollees) * 100).toFixed(1)
+        }))
+      });
+    } catch (error) {
+      console.error("Filtered batches with students fetch error:", error);
+      res.status(500).json({ 
+        success: false,
+        error: "Failed to fetch filtered batches with enrolled students",
+        message: error.message 
+      });
     }
   }
 );
@@ -9302,7 +9661,6 @@ app.post(
   [
     authenticateToken,
     authorize(["admin", "instructor", "staff"]),
-    // Required fields validation
     body("first_name")
       .trim()
       .notEmpty()
