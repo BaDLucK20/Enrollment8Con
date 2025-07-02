@@ -2004,52 +2004,161 @@ app.get(
         SELECT 
           s.student_id,
           p.first_name,
+          p.middle_name,
           p.last_name,
           p.email,
+          p.birth_date,
+          p.birth_place,
+          p.gender,
+          p.education,
+          
+          -- Course and enrollment information
           GROUP_CONCAT(DISTINCT CONCAT(c.course_code, ' - ', c.course_name) SEPARATOR ', ') as enrolled_courses,
           GROUP_CONCAT(DISTINCT co.batch_identifier SEPARATOR ', ') as batch_identifiers,
+          COUNT(DISTINCT se.enrollment_id) as total_enrollments,
+          
+          -- Student academic information
           s.graduation_status,
           s.academic_standing,
           s.gpa,
           s.registration_date,
-          p.birth_date,
-          p.birth_place,
-          p.gender,
+          s.graduation_date,
+          s.notes as student_notes,
+          
+          -- Account information
+          s.account_id,
+          acc.account_status,
+          acc.last_login,
+          acc.created_at as account_created_at,
+          acc.updated_at as account_updated_at,
+          
+          -- Trading level information
           tl.level_name as current_trading_level,
-          COUNT(DISTINCT se.enrollment_id) as total_enrollments,
+          tl.level_description as trading_level_description,
+          stl.assessment_score as trading_assessment_score,
+          stl.assessment_method as trading_assessment_method,
+          stl.assigned_date as trading_level_assigned_date,
+          
+          -- Financial information
           SUM(DISTINCT sa.total_due) as total_course_cost,
           SUM(DISTINCT sa.amount_paid) as total_amount_paid,
           SUM(DISTINCT sa.balance) as total_balance,
           
-          -- Sponsor information
+          -- Enhanced sponsor information
           sp.sponsor_id,
           sp.sponsor_name,
           sp.sponsor_code,
           sp.contact_person as sponsor_contact_person,
           sp.contact_email as sponsor_contact_email,
           sp.contact_phone as sponsor_contact_phone,
+          sp.industry as sponsor_industry,
+          sp.company_size as sponsor_company_size,
           spt.type_name as sponsor_type,
+          spt.type_description as sponsor_type_description,
+          
+          ss.scholarship_id,
+          ss.scholarship_type,
           ss.coverage_percentage,
+          ss.coverage_amount,
+          ss.max_coverage_amount,
           ss.scholarship_status,
           ss.approval_date as scholarship_approval_date,
+          ss.start_date as scholarship_start_date,
+          ss.end_date as scholarship_end_date,
+          ss.gpa_requirement,
+          ss.attendance_requirement,
+          ss.community_service_hours,
+          ss.terms_conditions,
+          ss.performance_review_date,
+          ss.renewal_eligible,
+          ss.termination_reason,
+          
+          -- Approved by information (for scholarships)
+          CONCAT(sp_approver.first_name, ' ', sp_approver.last_name) as scholarship_approved_by_name,
+          
+          -- Scholarship status indicators
           CASE 
-            WHEN sp.sponsor_id IS NOT NULL THEN 1 
+            WHEN ss.scholarship_id IS NOT NULL THEN 1 
             ELSE 0 
-          END as has_sponsor
+          END as has_sponsorship,
+          
+          CASE 
+            WHEN ss.scholarship_status = 'active' THEN 1 
+            ELSE 0 
+          END as has_active_scholarship,
+          
+          -- Contact information
+          GROUP_CONCAT(DISTINCT 
+            CASE 
+              WHEN ci.contact_type = 'phone' THEN ci.contact_value 
+            END
+          ) as phone_numbers,
+          
+          GROUP_CONCAT(DISTINCT 
+            CASE 
+              WHEN ci.contact_type = 'address' THEN ci.contact_value 
+            END
+          ) as addresses,
+          
+          -- Learning preferences
+          lp.learning_style,
+          lp.delivery_preference,
+          lp.device_type,
+          lp.internet_speed,
+          lp.preferred_schedule,
+          lp.study_hours_per_week,
+          lp.accessibility_needs,
+          
+          -- Background information
+          sb.education_level,
+          sb.highest_degree,
+          sb.institution,
+          sb.graduation_year,
+          sb.work_experience_years,
+          sb.current_occupation,
+          sb.industry as student_industry,
+          sb.annual_income_range,
+          sb.financial_experience,
+          sb.prior_trading_experience,
+          sb.investment_portfolio_value,
+          sb.relevant_skills,
+          sb.certifications
           
         FROM students s
         JOIN persons p ON s.person_id = p.person_id
+        LEFT JOIN accounts acc ON s.account_id = acc.account_id
+        
+        -- Trading levels
         LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
         LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
+        
+        -- Course enrollments
         LEFT JOIN student_enrollments se ON s.student_id = se.student_id
         LEFT JOIN course_offerings co ON se.offering_id = co.offering_id
         LEFT JOIN courses c ON co.course_id = c.course_id
+        
+        -- Financial accounts
         LEFT JOIN student_accounts sa ON se.student_id = sa.student_id AND se.offering_id = sa.offering_id
         
-        -- Left join with sponsor tables
-        LEFT JOIN student_scholarships ss ON s.student_id = ss.student_id AND ss.scholarship_status = 'approved'
+        -- Scholarships (removed status filter to get ALL scholarships)
+        LEFT JOIN student_scholarships ss ON s.student_id = ss.student_id
         LEFT JOIN sponsors sp ON ss.sponsor_id = sp.sponsor_id
         LEFT JOIN sponsor_types spt ON sp.sponsor_type_id = spt.sponsor_type_id
+        
+        -- Scholarship approver information
+        LEFT JOIN accounts sp_approver_acc ON ss.approved_by = sp_approver_acc.account_id
+        LEFT JOIN students sp_approver_student ON sp_approver_acc.account_id = sp_approver_student.account_id
+        LEFT JOIN staff sp_approver_staff ON sp_approver_acc.account_id = sp_approver_staff.account_id
+        LEFT JOIN persons sp_approver ON (sp_approver_student.person_id = sp_approver.person_id OR sp_approver_staff.person_id = sp_approver.person_id)
+        
+        -- Contact information
+        LEFT JOIN contact_info ci ON p.person_id = ci.person_id AND ci.is_primary = 1
+        
+        -- Learning preferences
+        LEFT JOIN learning_preferences lp ON s.student_id = lp.student_id
+        
+        -- Student background
+        LEFT JOIN student_backgrounds sb ON s.student_id = sb.student_id
       `;
 
       const params = [];
@@ -2067,10 +2176,10 @@ app.get(
 
       if (search) {
         conditions.push(
-          "(p.first_name LIKE ? OR p.last_name LIKE ? OR s.student_id LIKE ?)"
+          "(p.first_name LIKE ? OR p.last_name LIKE ? OR s.student_id LIKE ? OR p.email LIKE ?)"
         );
         const searchParam = `%${search}%`;
-        params.push(searchParam, searchParam, searchParam);
+        params.push(searchParam, searchParam, searchParam, searchParam);
       }
 
       if (conditions.length > 0) {
@@ -2080,27 +2189,79 @@ app.get(
       query += `
         GROUP BY 
           s.student_id,
+          p.person_id,
           p.first_name,
+          p.middle_name,
           p.last_name,
           p.email,
           p.birth_date,
           p.birth_place,
           p.gender,
+          p.education,
           s.graduation_status,
           s.academic_standing,
           s.gpa,
           s.registration_date,
+          s.graduation_date,
+          s.notes,
+          s.account_id,
+          acc.account_status,
+          acc.last_login,
+          acc.created_at,
+          acc.updated_at,
           tl.level_name,
+          tl.level_description,
+          stl.assessment_score,
+          stl.assessment_method,
+          stl.assigned_date,
           sp.sponsor_id,
           sp.sponsor_name,
           sp.sponsor_code,
           sp.contact_person,
           sp.contact_email,
           sp.contact_phone,
+          sp.industry,
+          sp.company_size,
           spt.type_name,
+          spt.type_description,
+          ss.scholarship_id,
+          ss.scholarship_type,
           ss.coverage_percentage,
+          ss.coverage_amount,
+          ss.max_coverage_amount,
           ss.scholarship_status,
-          ss.approval_date
+          ss.approval_date,
+          ss.start_date,
+          ss.end_date,
+          ss.gpa_requirement,
+          ss.attendance_requirement,
+          ss.community_service_hours,
+          ss.terms_conditions,
+          ss.performance_review_date,
+          ss.renewal_eligible,
+          ss.termination_reason,
+          sp_approver.first_name,
+          sp_approver.last_name,
+          lp.learning_style,
+          lp.delivery_preference,
+          lp.device_type,
+          lp.internet_speed,
+          lp.preferred_schedule,
+          lp.study_hours_per_week,
+          lp.accessibility_needs,
+          sb.education_level,
+          sb.highest_degree,
+          sb.institution,
+          sb.graduation_year,
+          sb.work_experience_years,
+          sb.current_occupation,
+          sb.industry,
+          sb.annual_income_range,
+          sb.financial_experience,
+          sb.prior_trading_experience,
+          sb.investment_portfolio_value,
+          sb.relevant_skills,
+          sb.certifications
       `;
 
       if (name_sort) {
@@ -2111,39 +2272,191 @@ app.get(
         query += " ORDER BY s.registration_date DESC";
       }
 
-      console.log("Executing query:", query);
+      console.log("Executing enhanced query:", query);
       console.log("With parameters:", params);
 
       const [students] = await pool.execute(query, params);
 
-      const processedStudents = students.map(student => ({
-        ...student,
-        total_course_cost: parseFloat(student.total_course_cost) || 0,
-        total_amount_paid: parseFloat(student.total_amount_paid) || 0,
-        total_balance: parseFloat(student.total_balance) || 0,
-        coverage_percentage: parseFloat(student.coverage_percentage) || 0,
-        has_sponsor: Boolean(student.has_sponsor),
-        sponsor_info: student.sponsor_id ? {
+      const processedStudents = students.map(student => {
+        // Process financial fields
+        const financialData = {
+          total_course_cost: parseFloat(student.total_course_cost) || 0,
+          total_amount_paid: parseFloat(student.total_amount_paid) || 0,
+          total_balance: parseFloat(student.total_balance) || 0,
+          coverage_percentage: parseFloat(student.coverage_percentage) || 0,
+          coverage_amount: parseFloat(student.coverage_amount) || 0,
+          max_coverage_amount: parseFloat(student.max_coverage_amount) || 0,
+          investment_portfolio_value: parseFloat(student.investment_portfolio_value) || 0
+        };
+
+        // Process boolean fields
+        const booleanData = {
+          has_sponsorship: Boolean(student.has_sponsorship),
+          has_active_scholarship: Boolean(student.has_active_scholarship),
+          renewal_eligible: Boolean(student.renewal_eligible)
+        };
+
+        // Process contact information
+        const contactData = {
+          phone_numbers: student.phone_numbers ? student.phone_numbers.split(',').map(p => p.trim()) : [],
+          addresses: student.addresses ? student.addresses.split(',').map(a => a.trim()) : []
+        };
+
+        // Enhanced sponsor information
+        const sponsorInfo = student.sponsor_id ? {
           sponsor_id: student.sponsor_id,
           sponsor_name: student.sponsor_name,
           sponsor_code: student.sponsor_code,
           sponsor_type: student.sponsor_type,
+          sponsor_type_description: student.sponsor_type_description,
+          sponsor_industry: student.sponsor_industry,
+          sponsor_company_size: student.sponsor_company_size,
           contact_person: student.sponsor_contact_person,
           contact_email: student.sponsor_contact_email,
-          contact_phone: student.sponsor_contact_phone,
+          contact_phone: student.sponsor_contact_phone
+        } : null;
+
+        // Enhanced scholarship information
+        const scholarshipInfo = student.scholarship_id ? {
+          scholarship_id: student.scholarship_id,
+          scholarship_type: student.scholarship_type,
           coverage_percentage: student.coverage_percentage,
+          coverage_amount: student.coverage_amount,
+          max_coverage_amount: student.max_coverage_amount,
           scholarship_status: student.scholarship_status,
-          approval_date: student.scholarship_approval_date
-        } : null
-      }));
+          approval_date: student.scholarship_approval_date,
+          start_date: student.scholarship_start_date,
+          end_date: student.scholarship_end_date,
+          gpa_requirement: student.gpa_requirement,
+          attendance_requirement: student.attendance_requirement,
+          community_service_hours: student.community_service_hours,
+          terms_conditions: student.terms_conditions,
+          performance_review_date: student.performance_review_date,
+          renewal_eligible: student.renewal_eligible,
+          termination_reason: student.termination_reason,
+          approved_by_name: student.scholarship_approved_by_name
+        } : null;
+
+        // Trading level information
+        const tradingLevelInfo = {
+          current_trading_level: student.current_trading_level,
+          trading_level_description: student.trading_level_description,
+          trading_assessment_score: student.trading_assessment_score,
+          trading_assessment_method: student.trading_assessment_method,
+          trading_level_assigned_date: student.trading_level_assigned_date
+        };
+
+        // Learning preferences
+        const learningPreferences = {
+          learning_style: student.learning_style,
+          delivery_preference: student.delivery_preference,
+          device_type: student.device_type,
+          internet_speed: student.internet_speed,
+          preferred_schedule: student.preferred_schedule,
+          study_hours_per_week: student.study_hours_per_week,
+          accessibility_needs: student.accessibility_needs
+        };
+
+        // Background information
+        const backgroundInfo = {
+          education_level: student.education_level,
+          highest_degree: student.highest_degree,
+          institution: student.institution,
+          graduation_year: student.graduation_year,
+          work_experience_years: student.work_experience_years,
+          current_occupation: student.current_occupation,
+          student_industry: student.student_industry,
+          annual_income_range: student.annual_income_range,
+          financial_experience: student.financial_experience,
+          prior_trading_experience: student.prior_trading_experience,
+          relevant_skills: student.relevant_skills,
+          certifications: student.certifications
+        };
+
+        return {
+          ...student,
+          ...financialData,
+          ...booleanData,
+          ...contactData,
+          ...tradingLevelInfo,
+          sponsor_info: sponsorInfo,
+          scholarship_info: scholarshipInfo,
+          learning_preferences: learningPreferences,
+          background_info: backgroundInfo
+        };
+      });
 
       console.log(`Found ${processedStudents.length} students`);
-      console.log(`Students with sponsors: ${processedStudents.filter(s => s.has_sponsor).length}`);
+      console.log(`Students with sponsors: ${processedStudents.filter(s => s.has_sponsorship).length}`);
+      console.log(`Students with active scholarships: ${processedStudents.filter(s => s.has_active_scholarship).length}`);
       
       res.json(processedStudents);
     } catch (error) {
       console.error("Students fetch error:", error);
-      res.status(500).json({ error: "Failed to fetch students" });
+      res.status(500).json({ 
+        error: "Failed to fetch students",
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  }
+);
+
+// Additional endpoint to get detailed scholarship information for a specific student
+app.get(
+  "/api/students/:studentId/scholarships",
+  authenticateToken,
+  authorize(["admin", "staff"]),
+  async (req, res) => {
+    try {
+      const { studentId } = req.params;
+
+      const query = `
+        SELECT 
+          ss.*,
+          sp.sponsor_name,
+          sp.sponsor_code,
+          sp.contact_person,
+          sp.contact_email,
+          sp.contact_phone,
+          sp.industry as sponsor_industry,
+          sp.company_size,
+          spt.type_name as sponsor_type,
+          spt.type_description as sponsor_type_description,
+          CONCAT(approver.first_name, ' ', approver.last_name) as approved_by_name,
+          CONCAT(student_person.first_name, ' ', student_person.last_name) as student_name
+        FROM student_scholarships ss
+        LEFT JOIN sponsors sp ON ss.sponsor_id = sp.sponsor_id
+        LEFT JOIN sponsor_types spt ON sp.sponsor_type_id = spt.sponsor_type_id
+        LEFT JOIN accounts approver_acc ON ss.approved_by = approver_acc.account_id
+        LEFT JOIN students approver_student ON approver_acc.account_id = approver_student.account_id
+        LEFT JOIN staff approver_staff ON approver_acc.account_id = approver_staff.account_id
+        LEFT JOIN persons approver ON (approver_student.person_id = approver.person_id OR approver_staff.person_id = approver.person_id)
+        LEFT JOIN students s ON ss.student_id = s.student_id
+        LEFT JOIN persons student_person ON s.person_id = student_person.person_id
+        WHERE ss.student_id = ?
+        ORDER BY ss.created_at DESC
+      `;
+
+      const [scholarships] = await pool.execute(query, [studentId]);
+
+      const processedScholarships = scholarships.map(scholarship => ({
+        ...scholarship,
+        coverage_percentage: parseFloat(scholarship.coverage_percentage) || 0,
+        coverage_amount: parseFloat(scholarship.coverage_amount) || 0,
+        max_coverage_amount: parseFloat(scholarship.max_coverage_amount) || 0,
+        gpa_requirement: parseFloat(scholarship.gpa_requirement) || 0,
+        attendance_requirement: parseFloat(scholarship.attendance_requirement) || 0,
+        community_service_hours: parseInt(scholarship.community_service_hours) || 0,
+        renewal_eligible: Boolean(scholarship.renewal_eligible)
+      }));
+
+      res.json(processedScholarships);
+    } catch (error) {
+      console.error("Scholarship fetch error:", error);
+      res.status(500).json({ 
+        error: "Failed to fetch scholarship information",
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
     }
   }
 );
@@ -3795,113 +4108,6 @@ const logPaymentStatusChange = async (paymentId, oldStatus, newStatus, processed
   }
 };
 
-// GET /api/payments/cancelled - Get cancelled/failed payments
-// app.get(
-//   "/api/payments/cancelled",
-//   authenticateToken,
-//   authorize(["admin", "staff"]),
-//   async (req, res) => {
-//     try {
-//       const { name_sort, student_search, date_range } = req.query;
-
-//       let query = `
-//         SELECT 
-//           p.payment_id, 
-//           p.payment_amount, 
-//           p.processing_fee, 
-//           p.payment_date, 
-//           p.payment_status,
-//           p.reference_number, 
-//           p.notes,
-//           p.created_at,
-//           p.updated_at,
-//           pm.method_name,
-//           sa.account_id,
-//           sa.total_due, 
-//           sa.balance,
-//           s.student_id, 
-//           per.first_name, 
-//           per.last_name,
-//           per.email,
-//           c.course_name, 
-//           co.batch_identifier,
-//           co.offering_id,
-//           pm.method_id,
-//           ci_phone.contact_value as phone,
-//           staff_per.first_name as processed_by_first_name,
-//           staff_per.last_name as processed_by_last_name
-//         FROM payments p
-//         JOIN payment_methods pm ON p.method_id = pm.method_id
-//         JOIN student_accounts sa ON p.account_id = sa.account_id
-//         JOIN students s ON sa.student_id = s.student_id
-//         JOIN persons per ON s.person_id = per.person_id
-//         JOIN course_offerings co ON sa.offering_id = co.offering_id
-//         JOIN courses c ON co.course_id = c.course_id
-//         LEFT JOIN contact_info ci_phone ON s.person_id = ci_phone.person_id 
-//           AND ci_phone.contact_type = 'phone' 
-//           AND ci_phone.is_primary = TRUE
-//         LEFT JOIN staff st ON p.processed_by = st.staff_id
-//         LEFT JOIN persons staff_per ON st.person_id = staff_per.person_id
-//         WHERE p.payment_status IN ('failed', 'cancelled')
-//       `;
-
-//       const params = [];
-
-//       // Filter by student name search
-//       if (student_search) {
-//         query +=
-//           " AND (per.first_name LIKE ? OR per.last_name LIKE ? OR s.student_id LIKE ?)";
-//         const searchParam = `%${student_search}%`;
-//         params.push(searchParam, searchParam, searchParam);
-//       }
-
-//       // Filter by date range
-//       if (date_range && date_range !== "all") {
-//         const now = new Date();
-//         let filterDate = new Date();
-
-//         switch (date_range) {
-//           case "week":
-//             filterDate.setDate(now.getDate() - 7);
-//             break;
-//           case "month":
-//             filterDate.setMonth(now.getMonth() - 1);
-//             break;
-//           case "quarter":
-//             filterDate.setMonth(now.getMonth() - 3);
-//             break;
-//           case "year":
-//             filterDate.setFullYear(now.getFullYear() - 1);
-//             break;
-//         }
-
-//         query += " AND p.updated_at >= ?";
-//         params.push(filterDate.toISOString().split("T")[0]);
-//       }
-
-//       // Sort by student name or payment date
-//       if (name_sort) {
-//         query += ` ORDER BY per.first_name ${
-//           name_sort === "ascending" ? "ASC" : "DESC"
-//         }, per.last_name ${name_sort === "ascending" ? "ASC" : "DESC"}`;
-//       } else {
-//         query += " ORDER BY p.updated_at DESC, p.created_at DESC";
-//       }
-
-//       console.log("Executing cancelled payments query:", query);
-//       console.log("With parameters:", params);
-
-//       const [payments] = await pool.execute(query, params);
-
-//       console.log(`Found ${payments.length} cancelled payments`);
-//       res.json(payments);
-//     } catch (error) {
-//       console.error("Cancelled payments fetch error:", error);
-//       res.status(500).json({ error: "Failed to fetch cancelled payments" });
-//     }
-//   }
-// );
-
 // GET /api/payments/statistics - Get payment statistics
 app.get(
   "/api/payments/statistics",
@@ -4573,130 +4779,6 @@ app.get(
   }
 );
 
-// ============================================================================
-// SCHOLARSHIP ROUTES (Fixed)
-// ============================================================================
-
-app.get(
-  "/api/scholarships",
-  authenticateToken,
-  authorize(["admin", "staff"]),
-  async (req, res) => {
-    try {
-      const [scholarships] = await pool.execute(`
-      SELECT sp.sponsor_id, sp.sponsor_name, sp.contact_person, sp.contact_email, 
-             sp.industry, sp.total_commitment, sp.current_commitment, sp.students_sponsored, sp.is_active,
-             st.type_name as sponsor_type
-      FROM sponsors sp
-      JOIN sponsor_types st ON sp.sponsor_type_id = st.sponsor_type_id
-      WHERE sp.is_active = TRUE
-      ORDER BY sp.sponsor_name
-    `);
-      res.json(scholarships);
-    } catch (error) {
-      console.error("Scholarships fetch error:", error);
-      res.status(500).json({ error: "Failed to fetch scholarships" });
-    }
-  }
-);
-
-app.post(
-  "/api/scholarships",
-  [
-    authenticateToken,
-    authorize(["admin", "staff"]),
-    body("sponsor_name").trim().isLength({ min: 1, max: 100 }),
-    body("sponsor_type_id").isInt(),
-    body("contact_person").trim().isLength({ min: 1, max: 100 }),
-    body("contact_email").isEmail(),
-    body("total_commitment").isFloat({ min: 0 }),
-  ],
-  validateInput,
-  async (req, res) => {
-    try {
-      const {
-        sponsor_name,
-        sponsor_type_id,
-        contact_person,
-        contact_email,
-        contact_phone,
-        address,
-        website,
-        industry,
-        total_commitment,
-        agreement_details,
-        agreement_start_date,
-        agreement_end_date,
-      } = req.body;
-
-      const sponsor_code = `SP${Date.now()}`;
-
-      await pool.execute(
-        `
-      INSERT INTO sponsors (
-        sponsor_type_id, sponsor_name, sponsor_code, contact_person, contact_email,
-        contact_phone, address, website, industry, total_commitment,
-        agreement_details, agreement_start_date, agreement_end_date
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `,
-        [
-          sponsor_type_id,
-          sponsor_name,
-          sponsor_code,
-          contact_person,
-          contact_email,
-          contact_phone || null,
-          address || null,
-          website || null,
-          industry || null,
-          total_commitment,
-          agreement_details || null,
-          agreement_start_date || null,
-          agreement_end_date || null,
-        ]
-      );
-
-      res.status(201).json({
-        message: "Scholarship sponsor created successfully",
-        sponsor_code,
-      });
-    } catch (error) {
-      console.error("Scholarship creation error:", error);
-      res.status(500).json({ error: "Failed to create scholarship sponsor" });
-    }
-  }
-);
-
-app.get(
-  "/api/students/:studentId/scholarships",
-  authenticateToken,
-  authorize(["admin", "staff", "student"]),
-  authorizeStudentAccess,
-  async (req, res) => {
-    try {
-      const { studentId } = req.params;
-
-      const [scholarships] = await pool.execute(
-        `
-      SELECT ss.scholarship_id, ss.scholarship_type, ss.coverage_percentage, ss.coverage_amount,
-             ss.scholarship_status, ss.start_date, ss.end_date, ss.gpa_requirement,
-             sp.sponsor_name, st.type_name as sponsor_type
-      FROM student_scholarships ss
-      JOIN sponsors sp ON ss.sponsor_id = sp.sponsor_id
-      JOIN sponsor_types st ON sp.sponsor_type_id = st.sponsor_type_id
-      WHERE ss.student_id = ?
-      ORDER BY ss.start_date DESC
-    `,
-        [studentId]
-      );
-
-      res.json(scholarships);
-    } catch (error) {
-      console.error("Student scholarships fetch error:", error);
-      res.status(500).json({ error: "Failed to fetch student scholarships" });
-    }
-  }
-);
 
 // ============================================================================
 // COURSE AND ENROLLMENT ROUTES (Fixed)
@@ -6990,37 +7072,6 @@ app.post(
     } catch (error) {
       console.error("Scholarship creation error:", error);
       res.status(500).json({ error: "Failed to create scholarship sponsor" });
-    }
-  }
-);
-
-app.get(
-  "/api/students/:studentId/scholarships",
-  authenticateToken,
-  authorize(["admin", "staff", "student"]),
-  authorizeStudentAccess,
-  async (req, res) => {
-    try {
-      const { studentId } = req.params;
-
-      const [scholarships] = await pool.execute(
-        `
-      SELECT ss.scholarship_id, ss.scholarship_type, ss.coverage_percentage, ss.coverage_amount,
-             ss.scholarship_status, ss.start_date, ss.end_date, ss.gpa_requirement,
-             sp.sponsor_name, st.type_name as sponsor_type
-      FROM student_scholarships ss
-      JOIN sponsors sp ON ss.sponsor_id = sp.sponsor_id
-      JOIN sponsor_types st ON sp.sponsor_type_id = st.sponsor_type_id
-      WHERE ss.student_id = ?
-      ORDER BY ss.start_date DESC
-    `,
-        [studentId]
-      );
-
-      res.json(scholarships);
-    } catch (error) {
-      console.error("Student scholarships fetch error:", error);
-      res.status(500).json({ error: "Failed to fetch student scholarships" });
     }
   }
 );
@@ -10456,34 +10507,45 @@ async function createSponsorAndScholarship(connection, sponsorInfo, studentId, s
       console.log('🆕 Created new sponsor:', sponsorCode, 'ID:', sponsorId);
     }
     
+    const [sponsorRow] = await connection.execute(`
+  SELECT sponsor_id FROM sponsors
+  WHERE sponsor_name = ? AND sponsor_code = ? AND contact_email = ?
+  ORDER BY created_at DESC
+  LIMIT 1
+`, [
+  sponsorInfo.sponsor_name,
+  sponsorCode,
+  sponsorInfo.contact_email
+]);
+
+const sponsorIds = sponsorRow[0]?.sponsor_id;
+
     // Step 3: Create scholarship record in the scholarships table
     const [scholarshipResult] = await connection.execute(`
-      INSERT INTO scholarships (
-        student_id, sponsor_type, sponsor_name, sponsor_contact, approved_by
-      ) VALUES (?, ?, ?, ?, ?)
-    `, [
-      studentId,
-      sponsorInfo.sponsor_type,
-      sponsorInfo.sponsor_name,
-      sponsorInfo.contact_number,
-      staffId
-    ]);
+    INSERT INTO scholarships (
+      sponsor_id, student_id
+    ) VALUES (?, ?)
+  `, [
+    sponsorIds,
+    studentId
+  ]);
+
     
     const scholarshipId = scholarshipResult.insertId;
     console.log('🎓 Created scholarship record ID:', scholarshipId);
     
     // Step 4: Create detailed scholarship record in student_scholarships table
-    await connection.execute(`
-      INSERT INTO student_scholarships (
-        student_id, sponsor_id, scholarship_type, coverage_percentage,
-        scholarship_status, approved_by, approval_date, created_at, updated_at
-      ) VALUES (?, ?, 'partial', ?, 'approved', ?, NOW(), NOW(), NOW())
-    `, [
-      studentId,
-      sponsorId,
-      defaultCoverage,
-      staffId
-    ]);
+    // await connection.execute(`
+    //   INSERT INTO student_scholarships (
+    //     student_id, sponsor_id, scholarship_type, coverage_percentage,
+    //     scholarship_status, approved_by, approval_date, created_at, updated_at
+    //   ) VALUES (?, ?, 'partial', ?, 'approved', ?, NOW(), NOW(), NOW())
+    // `, [
+    //   studentId,
+    //   sponsorId,
+    //   defaultCoverage,
+    //   staffId
+    // ]);
     
     console.log('📜 Created detailed student scholarship record');
     
@@ -10841,22 +10903,34 @@ app.post(
       console.log("🎓 Student created with ID:", student_id);
 
       // Step 8: Handle sponsor information if provided
-      let sponsorInfo = null;
-      if (sponsor_info && sponsor_info.sponsor_type) {
-        try {
-          console.log("🏢 Processing sponsor information...");
+      let sponsorInfo = req.body.sponsor_info;
+      
+     
+
+      if (req.body.sponsor_info && typeof req.body.sponsor_info === 'object') {
+        const {
+          sponsor_type,
+          sponsor_name,
+          contact_person,
+          contact_email,
+          contact_number
+        } = req.body.sponsor_info;
+
+        sponsorInfo = {
+          sponsor_type: sponsor_type?.trim() || null,
+          sponsor_name: sponsor_name?.trim() || null,
+          contact_person: contact_person?.trim() || null,
+          contact_email: contact_email?.trim() || null,
+          contact_number: contact_number?.trim() || null
+        };
+        console.log("🏢 Processing sponsor information...");
           sponsorInfo = await createSponsorAndScholarship(
             connection, 
-            sponsor_info, 
+            sponsorInfo, 
             student_id, 
             req.user.staffId || req.user.accountId || null
           );
           console.log("✅ Sponsor information processed successfully");
-        } catch (sponsorError) {
-          console.error("❌ Failed to create sponsor/scholarship:", sponsorError);
-          // Don't fail the entire registration, but log the error
-          console.warn("⚠️ Student registration will continue without sponsor assignment");
-        }
       }
 
       // Step 9: Update trading level if provided

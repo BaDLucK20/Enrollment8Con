@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Filter, ChevronDown, ChevronUp, User, Users, RefreshCw, Plus, BookOpen, Edit3, Trash2, Save, X } from 'lucide-react';
+import { Filter, ChevronDown, ChevronUp, User, Users, RefreshCw, Plus, BookOpen, Edit3, Trash2, Save, X, Award } from 'lucide-react';
 
 const DisplayAccount = () => {
   const [students, setStudents] = useState([]);
@@ -11,6 +11,11 @@ const DisplayAccount = () => {
   const [activeTab, setActiveTab] = useState('students');
   const [modalData, setModalData] = useState(null);
   const [modalType, setModalType] = useState(null);
+  
+  // Scholarship states
+  const [scholarshipData, setScholarshipData] = useState([]);
+  const [scholarshipLoading, setScholarshipLoading] = useState(false);
+  const [scholarshipError, setScholarshipError] = useState('');
   
   // Course application states
   const [showCourseApplication, setShowCourseApplication] = useState(false);
@@ -45,6 +50,8 @@ const DisplayAccount = () => {
     cream: '#f5f2e8',
     olive: '#6b7c5c',
     black: '#2c2c2c',
+    scholarshipGreen: '#e8f5e8', // Light green for scholarship students
+    scholarshipBorder: '#4caf50', // Green border for scholarship students
   };
 
   useEffect(() => { 
@@ -144,6 +151,196 @@ const DisplayAccount = () => {
     }
 
     return response.json();
+  };
+
+  // Helper function to identify status fields
+  const isStatusField = (fieldName) => {
+    const statusFields = [
+      'graduation_status', 'academic_standing', 'account_status', 'enrollment_status',
+      'employment_status', 'payment_status', 'verification_status', 'role_name',
+      'status', 'scholarship_status', 'overall_status'
+    ];
+    return statusFields.some(field => 
+      fieldName.toLowerCase().includes(field.toLowerCase()) || 
+      fieldName.toLowerCase().includes('status') ||
+      fieldName.toLowerCase().includes('role')
+    );
+  };
+
+  // Enhanced getStatusBadge function with more status types
+  const getStatusBadge = (status) => {
+    const badgeColors = {
+      // Account statuses
+      active: '#28a745',
+      inactive: '#6c757d',
+      suspended: '#dc3545',
+      
+      // Academic statuses
+      enrolled: '#007bff',
+      graduated: '#28a745',
+      dropped: '#dc3545',
+      transferred: '#17a2b8',
+      
+      // Academic standing
+      good: '#28a745',
+      probation: '#ffc107',
+      suspension: '#dc3545',
+      
+      // Employment statuses
+      permanent: '#28a745',
+      temporary: '#ffc107',
+      contract: '#17a2b8',
+      terminated: '#dc3545',
+      'on_leave': '#6c757d',
+      
+      // Payment statuses
+      paid: '#28a745',
+      pending: '#ffc107',
+      overdue: '#dc3545',
+      cancelled: '#6c757d',
+      confirmed: '#28a745',
+      failed: '#dc3545',
+      refunded: '#17a2b8',
+      
+      // Verification statuses
+      verified: '#28a745',
+      rejected: '#dc3545',
+      'requires_update': '#ffc107',
+      expired: '#dc3545',
+      
+      // Role types
+      staff: '#17a2b8',
+      admin: '#6f42c1',
+      teacher: '#fd7e14',
+      instructor: '#fd7e14',
+      moderator: '#20c997',
+      student: '#007bff',
+      
+      // Scholarship statuses
+      approved: '#28a745',
+      completed: '#28a745',
+      
+      // Default
+      unknown: '#6c757d'
+    };
+
+    const cleanStatus = status?.toString().toLowerCase().replace(/\s+/g, '_');
+    
+    return {
+      backgroundColor: badgeColors[cleanStatus] || '#6c757d',
+      color: 'white',
+      padding: '4px 8px',
+      borderRadius: '4px',
+      fontSize: '12px',
+      fontWeight: 'bold',
+      display: 'inline-block',
+      textAlign: 'center',
+      minWidth: '60px'
+    };
+  };
+
+  // Enhanced value formatter for modal display
+  const formatModalValue = (key, value) => {
+    // Handle null/undefined values
+    if (value === null || value === undefined || value === '') {
+      return <span style={{ color: '#6c757d', fontStyle: 'italic' }}>Not available</span>;
+    }
+
+    // Handle objects
+    if (typeof value === 'object' && value !== null) {
+      return <pre style={{ fontSize: '12px', margin: 0 }}>{JSON.stringify(value, null, 2)}</pre>;
+    }
+
+    // Handle dates
+    if (key.toLowerCase().includes('date')) {
+      return formatDate(value);
+    }
+
+    // Handle status fields with badge styling
+    if (isStatusField(key)) {
+      return (
+        <span style={getStatusBadge(value)}>
+          {String(value).replace(/_/g, ' ').toUpperCase()}
+        </span>
+      );
+    }
+
+    // Handle boolean values
+    if (typeof value === 'boolean') {
+      return (
+        <span style={{
+          ...getStatusBadge(value ? 'active' : 'inactive'),
+          backgroundColor: value ? '#28a745' : '#6c757d'
+        }}>
+          {value ? 'YES' : 'NO'}
+        </span>
+      );
+    }
+
+    // Handle numeric values with special formatting
+    if (typeof value === 'number') {
+      // Handle GPA
+      if (key.toLowerCase().includes('gpa') && value <= 5) {
+        return `${value.toFixed(2)} / 4.0`;
+      }
+      
+      // Handle percentages
+      if (key.toLowerCase().includes('percentage') || key.toLowerCase().includes('percent')) {
+        return `${value}%`;
+      }
+      
+      // Handle currency amounts
+      if (key.toLowerCase().includes('amount') || key.toLowerCase().includes('cost') || 
+          key.toLowerCase().includes('paid') || key.toLowerCase().includes('balance') ||
+          key.toLowerCase().includes('fee') || key.toLowerCase().includes('salary')) {
+        return `₱${parseFloat(value).toLocaleString()}`;
+      }
+      
+      // Handle regular numbers
+      if (value > 1000) {
+        return value.toLocaleString();
+      }
+    }
+
+    // Handle email addresses
+    if (key.toLowerCase().includes('email') && String(value).includes('@')) {
+      return <a href={`mailto:${value}`} style={{ color: '#007bff' }}>{value}</a>;
+    }
+
+    // Handle phone numbers
+    if (key.toLowerCase().includes('phone') && value) {
+      return <a href={`tel:${value}`} style={{ color: '#007bff' }}>{value}</a>;
+    }
+
+    // Handle URLs
+    if (key.toLowerCase().includes('website') || key.toLowerCase().includes('url')) {
+      return <a href={value} target="_blank" rel="noopener noreferrer" style={{ color: '#007bff' }}>{value}</a>;
+    }
+
+    // Default string handling
+    return String(value);
+  };
+
+  // Fetch scholarship data for a specific student
+  const fetchStudentScholarships = async (studentId) => {
+    try {
+      setScholarshipLoading(true);
+      setScholarshipError('');
+      
+      const response = await makeAuthenticatedRequest(
+        `http://localhost:3000/api/students/${studentId}/scholarships`
+      );
+      
+      console.log('Scholarship data:', response);
+      setScholarshipData(response);
+      return response;
+    } catch (error) {
+      console.error('Failed to fetch scholarships:', error);
+      setScholarshipError('Failed to fetch scholarship information: ' + error.message);
+      return [];
+    } finally {
+      setScholarshipLoading(false);
+    }
   };
 
   // Fetch courses
@@ -771,38 +968,303 @@ const DisplayAccount = () => {
     }
   };
 
-  const getStatusBadge = (status) => {
-    const badgeColors = {
-      active: '#28a745',
-      inactive: '#6c757d',
-      suspended: '#dc3545',
-      enrolled: '#007bff',
-      graduated: '#28a745',
-      dropped: '#dc3545',
-      staff: '#17a2b8',
-      admin: '#6f42c1',
-      teacher: '#fd7e14',
-      unknown: '#6c757d'
-    };
-
-    return {
-      backgroundColor: badgeColors[status?.toLowerCase()] || '#6c757d',
-      color: 'white',
-      padding: '4px 8px',
-      borderRadius: '4px',
-      fontSize: '12px',
-      fontWeight: 'bold'
-    };
+  // Helper function to get student card style based on scholarship status
+  const getStudentCardStyle = (student) => {
+    const baseStyle = styles.accountCard;
+    
+    if (student.has_sponsorship) {
+      return {
+        ...baseStyle,
+        backgroundColor: colors.scholarshipGreen,
+        border: `2px solid ${colors.scholarshipBorder}`,
+        boxShadow: '0 2px 8px rgba(76, 175, 80, 0.2)',
+      };
+    }
+    
+    return baseStyle;
   };
 
-  const openModal = (data, type) => {
+  // Enhanced modal content renderer
+  const renderModalContent = () => {
+    if (!modalData || !modalType) return null;
+
+    const allFields = Object.entries(modalData).filter(([key, value]) => 
+      value !== null && value !== undefined && value !== '' && 
+      key !== 'originalData' && key !== 'user_identifier'
+    );
+
+    // Group fields by category for better organization
+    const fieldCategories = {
+      'Personal Information': ['first_name', 'last_name', 'middle_name', 'email', 'birth_date', 'birth_place', 'gender', 'phone_no', 'education'],
+      'Academic Information': ['student_id', 'graduation_status', 'academic_standing', 'gpa', 'current_trading_level', 'registration_date', 'graduation_date'],
+      'Account Information': ['account_id', 'account_status', 'role_name', 'last_login', 'created_at', 'updated_at', 'overall_status'],
+      'Employment Information': ['employee_id', 'hire_date', 'termination_date', 'employment_status', 'position', 'department', 'position_titles', 'departments'],
+      'Financial Information': ['total_due', 'amount_paid', 'balance', 'total_course_cost', 'total_amount_paid', 'total_balance', 'salaries'],
+      'Course Information': ['enrolled_courses', 'batch_identifiers', 'total_enrollments'],
+      'Contact Information': ['phone_numbers', 'addresses', 'primary_email', 'emergency_contact'],
+      'Other Information': []
+    };
+
+    const categorizedFields = {};
+    const uncategorizedFields = [];
+
+    // Categorize fields
+    allFields.forEach(([key, value]) => {
+      let categorized = false;
+      for (const [category, categoryFields] of Object.entries(fieldCategories)) {
+        if (categoryFields.includes(key)) {
+          if (!categorizedFields[category]) categorizedFields[category] = [];
+          categorizedFields[category].push([key, value]);
+          categorized = true;
+          break;
+        }
+      }
+      if (!categorized) {
+        uncategorizedFields.push([key, value]);
+      }
+    });
+
+    // Add uncategorized fields to "Other Information"
+    if (uncategorizedFields.length > 0) {
+      categorizedFields['Other Information'] = uncategorizedFields;
+    }
+
+    return (
+      <div style={styles.modalContent}>
+        <div style={styles.modalHeader}>
+          <h3 style={styles.modalTitle}>
+            Complete {modalType === 'student' ? 'Student' : 'Staff'} Information
+          </h3>
+          <button style={styles.closeButton} onClick={closeModal}>
+            ×
+          </button>
+        </div>
+        
+        <div style={styles.modalBody}>
+          {Object.entries(categorizedFields).map(([category, fields]) => (
+            fields.length > 0 && (
+              <div key={category} style={styles.fieldCategory}>
+                <h4 style={styles.categoryTitle}>{category}</h4>
+                <div style={styles.expandedGrid}>
+                  {fields.map(([key, value]) => (
+                    <div key={key} style={styles.expandedRow}>
+                      <span style={styles.expandedLabel}>
+                        {key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:
+                      </span>
+                      <span style={styles.expandedValue}>
+                        {formatModalValue(key, value)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          ))}
+          
+          {/* Enhanced Scholarship Section */}
+          {modalType === 'student' && modalData.has_sponsorship && (
+            <div style={styles.scholarshipSection}>
+              <div style={styles.scholarshipHeader}>
+                <h4 style={styles.scholarshipTitle}>
+                  <Award size={20} style={{ marginRight: '8px' }} />
+                  Sponsorship Information
+                </h4>
+                {scholarshipLoading && (
+                  <div style={styles.loadingSpinner}>Loading sponsorship details...</div>
+                )}
+              </div>
+              
+              {scholarshipError && (
+                <div style={styles.errorMessage}>
+                  {scholarshipError}
+                </div>
+              )}
+              
+              {!scholarshipLoading && scholarshipData.length > 0 && (
+                <div style={styles.sponsorshipContainer}>
+                  {/* Display unique sponsors */}
+                  {(() => {
+                    // Get unique sponsors from scholarship data
+                    const uniqueSponsors = scholarshipData.reduce((acc, scholarship) => {
+                      const sponsorKey = scholarship.sponsor_id || scholarship.sponsor_name;
+                      if (sponsorKey && !acc.find(s => s.sponsor_id === scholarship.sponsor_id)) {
+                        acc.push({
+                          sponsor_id: scholarship.sponsor_id,
+                          sponsor_name: scholarship.sponsor_name,
+                          contact_person: scholarship.contact_person,
+                          contact_email: scholarship.contact_email,
+                          contact_phone: scholarship.contact_phone,
+                          sponsor_type: scholarship.sponsor_type,
+                          sponsor_industry: scholarship.sponsor_industry,
+                          company_size: scholarship.company_size
+                        });
+                      }
+                      return acc;
+                    }, []);
+
+                    return (
+                      <div style={styles.sponsorsGrid}>
+                        {uniqueSponsors.map((sponsor, index) => (
+                          <div key={sponsor.sponsor_id || index} style={styles.sponsorCard}>
+                            <div style={styles.sponsorCardHeader}>
+                              <div style={styles.sponsorName}>
+                                {sponsor.sponsor_name || 'Unknown Sponsor'}
+                              </div>
+                              {sponsor.sponsor_type && (
+                                <div style={styles.sponsorTypeBadge}>
+                                  {sponsor.sponsor_type}
+                                </div>
+                              )}
+                            </div>
+                            
+                            <div style={styles.sponsorContactInfo}>
+                              <h5 style={styles.contactSectionTitle}>Contact Information</h5>
+                              
+                              <div style={styles.contactRow}>
+                                <span style={styles.contactLabel}>Contact Person:</span>
+                                <span style={styles.contactValue}>
+                                  {sponsor.contact_person || 'Not specified'}
+                                </span>
+                              </div>
+                              
+                              <div style={styles.contactRow}>
+                                <span style={styles.contactLabel}>Email:</span>
+                                <span style={styles.contactValue}>
+                                  {sponsor.contact_email ? (
+                                    <a 
+                                      href={`mailto:${sponsor.contact_email}`} 
+                                      style={styles.contactLink}
+                                    >
+                                      {sponsor.contact_email}
+                                    </a>
+                                  ) : (
+                                    'Not specified'
+                                  )}
+                                </span>
+                              </div>
+                              
+                              <div style={styles.contactRow}>
+                                <span style={styles.contactLabel}>Phone:</span>
+                                <span style={styles.contactValue}>
+                                  {sponsor.contact_phone ? (
+                                    <a 
+                                      href={`tel:${sponsor.contact_phone}`} 
+                                      style={styles.contactLink}
+                                    >
+                                      {sponsor.contact_phone}
+                                    </a>
+                                  ) : (
+                                    'Not specified'
+                                  )}
+                                </span>
+                              </div>
+                              
+                              {sponsor.sponsor_industry && (
+                                <div style={styles.contactRow}>
+                                  <span style={styles.contactLabel}>Industry:</span>
+                                  <span style={styles.contactValue}>{sponsor.sponsor_industry}</span>
+                                </div>
+                              )}
+                              
+                              {sponsor.company_size && (
+                                <div style={styles.contactRow}>
+                                  <span style={styles.contactLabel}>Company Size:</span>
+                                  <span style={styles.contactValue}>{sponsor.company_size}</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                  
+                  {/* Scholarship Details */}
+                  <div style={styles.scholarshipDetailsSection}>
+                    <h5 style={styles.detailsSectionTitle}>Scholarship Details</h5>
+                    <div style={styles.scholarshipGrid}>
+                      {scholarshipData.map((scholarship, index) => (
+                        <div key={scholarship.scholarship_id || index} style={styles.scholarshipCard}>
+                          <div style={styles.scholarshipCardHeader}>
+                            <div style={styles.scholarshipType}>
+                              {scholarship.scholarship_type || 'General Scholarship'}
+                            </div>
+                            <div style={getStatusBadge(scholarship.scholarship_status)}>
+                              {scholarship.scholarship_status}
+                            </div>
+                          </div>
+                          
+                          <div style={styles.scholarshipDetails}>
+                            {scholarship.coverage_percentage && (
+                              <div style={styles.scholarshipRow}>
+                                <span style={styles.scholarshipLabel}>Coverage:</span>
+                                <span style={styles.scholarshipValue}>{scholarship.coverage_percentage}%</span>
+                              </div>
+                            )}
+                            
+                            {scholarship.coverage_amount && (
+                              <div style={styles.scholarshipRow}>
+                                <span style={styles.scholarshipLabel}>Amount:</span>
+                                <span style={styles.scholarshipValue}>₱{parseFloat(scholarship.coverage_amount).toLocaleString()}</span>
+                              </div>
+                            )}
+                            
+                            {scholarship.start_date && (
+                              <div style={styles.scholarshipRow}>
+                                <span style={styles.scholarshipLabel}>Start Date:</span>
+                                <span style={styles.scholarshipValue}>{formatDate(scholarship.start_date)}</span>
+                              </div>
+                            )}
+                            
+                            {scholarship.end_date && (
+                              <div style={styles.scholarshipRow}>
+                                <span style={styles.scholarshipLabel}>End Date:</span>
+                                <span style={styles.scholarshipValue}>{formatDate(scholarship.end_date)}</span>
+                              </div>
+                            )}
+                            
+                            {scholarship.gpa_requirement && (
+                              <div style={styles.scholarshipRow}>
+                                <span style={styles.scholarshipLabel}>GPA Requirement:</span>
+                                <span style={styles.scholarshipValue}>{scholarship.gpa_requirement}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+              
+              {!scholarshipLoading && scholarshipData.length === 0 && !scholarshipError && (
+                <div style={styles.noScholarships}>
+                  No sponsorship details available for this student.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // Enhanced openModal function to handle scholarship data
+  const openModal = async (data, type) => {
     setModalData(data);
     setModalType(type);
+    
+    // If it's a student with sponsors, fetch scholarship data
+    if (type === 'student' && data.has_sponsorship) {
+      await fetchStudentScholarships(data.student_id);
+    }
   };
 
   const closeModal = () => {
     setModalData(null);
     setModalType(null);
+    setScholarshipData([]);
+    setScholarshipError('');
   };
 
   // Function to close course application modal
@@ -819,57 +1281,6 @@ const DisplayAccount = () => {
     setSelectedStudent(null);
     setCurrentEnrollments([]);
     setManagementError('');
-  };
-
-  const renderModalContent = () => {
-    if (!modalData || !modalType) return null;
-
-    const allFields = Object.entries(modalData).filter(([key, value]) => 
-      value !== null && value !== undefined && value !== '' && 
-      key !== 'originalData' && key !== 'user_identifier'
-    );
-
-    return (
-      <div style={styles.modalContent}>
-        <div style={styles.modalHeader}>
-          <h3 style={styles.modalTitle}>
-            Complete {modalType === 'student' ? 'Student' : 'Staff'} Information
-          </h3>
-          <button style={styles.closeButton} onClick={closeModal}>
-            ×
-          </button>
-        </div>
-        
-        <div style={styles.modalBody}>
-          <div style={styles.expandedGrid}>
-            {allFields.map(([key, value]) => (
-              <div key={key} style={styles.expandedRow}>
-                <span style={styles.expandedLabel}>
-                  {key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}:
-                </span>
-                <span style={styles.expandedValue}>
-                  {typeof value === 'object' && value !== null 
-                    ? JSON.stringify(value, null, 2)
-                    : key.includes('date') 
-                      ? formatDate(value)
-                      : String(value)
-                  }
-                </span>
-              </div>
-            ))}
-          </div>
-          
-          {modalType === 'staff' && modalData.originalData && (
-            <div style={styles.rawDataSection}>
-              <h4 style={styles.rawDataTitle}>Raw API Data</h4>
-              <pre style={styles.rawDataPre}>
-                {JSON.stringify(modalData.originalData, null, 2)}
-              </pre>
-            </div>
-          )}
-        </div>
-      </div>
-    );
   };
 
   // Render course application modal (for adding new courses)
@@ -1051,8 +1462,8 @@ const DisplayAccount = () => {
                             {enrollment.course_code} - {enrollment.course_name}
                           </div>
                           <div style={styles.enrollmentDetails}>
-                            <span style={styles.enrollmentBadge}>
-                              Status: {enrollment.enrollment_status}
+                            <span style={getStatusBadge(enrollment.enrollment_status)}>
+                              {enrollment.enrollment_status}
                             </span>
                             {enrollment.batch_identifier && (
                               <span style={styles.enrollmentBadge}>
@@ -1508,19 +1919,35 @@ const DisplayAccount = () => {
       maxHeight: 'calc(90vh - 100px)',
       overflowY: 'auto',
     },
+    fieldCategory: {
+      marginBottom: '24px',
+      border: '1px solid #e9ecef',
+      borderRadius: '8px',
+      overflow: 'hidden'
+    },
+    categoryTitle: {
+      backgroundColor: colors.lightGreen,
+      color: 'white',
+      margin: 0,
+      padding: '12px 16px',
+      fontSize: '16px',
+      fontWeight: 'bold'
+    },
     expandedGrid: {
       display: 'grid',
       gridTemplateColumns: '1fr',
       gap: '8px',
+      padding: '16px'
     },
     expandedRow: {
       display: 'grid',
       gridTemplateColumns: '1fr 2fr',
-      gap: '10px',
+      gap: '12px',
       padding: '12px',
       backgroundColor: '#f8f9fa',
       borderRadius: '6px',
       border: '1px solid #e9ecef',
+      alignItems: 'center'
     },
     expandedLabel: {
       fontWeight: 'bold',
@@ -1743,6 +2170,183 @@ const DisplayAccount = () => {
       textAlign: 'center',
       color: colors.olive,
     },
+    
+    // Scholarship-specific styles
+    scholarshipSection: {
+      marginTop: '24px',
+      padding: '20px',
+      backgroundColor: colors.scholarshipGreen,
+      borderRadius: '8px',
+      border: `2px solid ${colors.scholarshipBorder}`,
+    },
+    scholarshipHeader: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: '16px',
+    },
+    scholarshipTitle: {
+      color: colors.darkGreen,
+      marginBottom: '0',
+      fontSize: '18px',
+      fontWeight: 'bold',
+      display: 'flex',
+      alignItems: 'center',
+    },
+    loadingSpinner: {
+      fontSize: '14px',
+      color: colors.olive,
+    },
+    
+    // New sponsorship styles
+    sponsorshipContainer: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '20px',
+    },
+    sponsorsGrid: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))',
+      gap: '16px',
+      marginBottom: '20px',
+    },
+    sponsorCard: {
+      backgroundColor: 'white',
+      border: `2px solid ${colors.scholarshipBorder}`,
+      borderRadius: '8px',
+      padding: '16px',
+      boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)',
+    },
+    sponsorCardHeader: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: '12px',
+      paddingBottom: '8px',
+      borderBottom: '1px solid #e9ecef',
+    },
+    sponsorName: {
+      fontWeight: 'bold',
+      color: colors.darkGreen,
+      fontSize: '18px',
+    },
+    sponsorTypeBadge: {
+      backgroundColor: colors.lightGreen,
+      color: 'white',
+      padding: '4px 8px',
+      borderRadius: '12px',
+      fontSize: '12px',
+      fontWeight: 'bold',
+    },
+    sponsorContactInfo: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '8px',
+    },
+    contactSectionTitle: {
+      color: colors.darkGreen,
+      fontSize: '14px',
+      fontWeight: 'bold',
+      margin: '8px 0 8px 0',
+      textTransform: 'uppercase',
+      letterSpacing: '0.5px',
+    },
+    contactRow: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      padding: '6px 0',
+      borderBottom: '1px solid #f8f9fa',
+    },
+    contactLabel: {
+      fontWeight: '600',
+      color: colors.black,
+      fontSize: '14px',
+      minWidth: '120px',
+    },
+    contactValue: {
+      color: colors.olive,
+      fontSize: '14px',
+      textAlign: 'right',
+      flex: 1,
+      marginLeft: '8px',
+    },
+    contactLink: {
+      color: '#007bff',
+      textDecoration: 'none',
+    },
+    scholarshipDetailsSection: {
+      borderTop: '1px solid #e9ecef',
+      paddingTop: '16px',
+    },
+    detailsSectionTitle: {
+      color: colors.darkGreen,
+      fontSize: '16px',
+      fontWeight: 'bold',
+      marginBottom: '12px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+    },
+    
+    scholarshipGrid: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+      gap: '16px',
+    },
+    scholarshipCard: {
+      backgroundColor: 'white',
+      border: '1px solid #e9ecef',
+      borderRadius: '8px',
+      padding: '16px',
+    },
+    scholarshipCardHeader: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: '12px',
+    },
+    scholarshipType: {
+      fontWeight: 'bold',
+      color: colors.darkGreen,
+      fontSize: '16px',
+      textTransform: 'capitalize',
+    },
+    scholarshipStatus: {
+      fontSize: '12px',
+      padding: '4px 8px',
+      borderRadius: '12px',
+      backgroundColor: colors.lightGreen,
+      color: 'white',
+      fontWeight: 'bold',
+    },
+    scholarshipDetails: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '8px',
+    },
+    scholarshipRow: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      padding: '4px 0',
+    },
+    scholarshipLabel: {
+      fontWeight: '500',
+      color: colors.black,
+      fontSize: '14px',
+    },
+    scholarshipValue: {
+      color: colors.olive,
+      fontSize: '14px',
+      textAlign: 'right',
+    },
+    noScholarships: {
+      textAlign: 'center',
+      color: colors.olive,
+      fontStyle: 'italic',
+      padding: '20px',
+    },
   };
 
   if (loading) {
@@ -1947,18 +2551,31 @@ const DisplayAccount = () => {
                 return (
                   <div
                     key={cardId}
-                    style={styles.accountCard}
+                    style={getStudentCardStyle(student)}
                     onMouseEnter={(e) => {
                       Object.assign(e.currentTarget.style, styles.accountCardHover);
                     }}
                     onMouseLeave={(e) => {
+                      const baseStyle = getStudentCardStyle(student);
                       e.currentTarget.style.transform = 'translateY(0)';
-                      e.currentTarget.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.1)';
+                      e.currentTarget.style.boxShadow = baseStyle.boxShadow || '0 1px 3px rgba(0, 0, 0, 0.1)';
                     }}
                   >
                     <div style={styles.accountHeader}>
                       <h3 style={styles.accountName}>
                         {student.first_name || 'Unknown'} {student.last_name || 'Student'}
+                        {student.has_sponsorship && (
+                          <Award 
+                            size={16} 
+                            style={{ 
+                              marginLeft: '8px', 
+                              color: colors.scholarshipBorder,
+                              backgroundColor: 'white',
+                              borderRadius: '50%',
+                              padding: '2px'
+                            }} 
+                          />
+                        )}
                       </h3>
                       <div style={styles.accountId}>
                         ID: {student.student_id || 'N/A'}
@@ -1982,7 +2599,7 @@ const DisplayAccount = () => {
                       
                       <div style={styles.infoRow}>
                         <span style={styles.infoLabel}>Academic Standing:</span>
-                        <span style={styles.infoValue}>
+                        <span style={getStatusBadge(student.academic_standing)}>
                           {student.academic_standing || 'N/A'}
                         </span>
                       </div>
@@ -2000,6 +2617,19 @@ const DisplayAccount = () => {
                           {student.batch_identifiers || student.batch_identifier || student.batch_year || 'N/A'}
                         </span>
                       </div>
+                      
+                      {student.has_sponsorship && (
+                        <div style={styles.infoRow}>
+                          <span style={styles.infoLabel}>Sponsor:</span>
+                          <span style={{
+                            ...styles.infoValue,
+                            color: colors.scholarshipBorder,
+                            fontWeight: 'bold'
+                          }}>
+                            {student.sponsor_info?.sponsor_name || 'Yes'}
+                          </span>
+                        </div>
+                      )}
                       
                       <div style={styles.infoRow}>
                         <span style={styles.infoLabel}>Registered:</span>
