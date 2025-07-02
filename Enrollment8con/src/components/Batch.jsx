@@ -13,13 +13,16 @@ import {
   Save,
   X,
   UserCheck,
-  Calendar
+  Calendar,
+  Award // Added for competencies
 } from 'lucide-react';
 
 const Batch = () => {
   const [students, setStudents] = useState([]);
   const [courses, setCourses] = useState([]);
   const [courseOfferings, setCourseOfferings] = useState([]);
+  const [competencies, setCompetencies] = useState([]); // Added for competencies
+  const [batchCompetencies, setBatchCompetencies] = useState({}); // Added for batch-specific competencies
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [activeView, setActiveView] = useState('byBatch'); // 'byBatch', 'byCourse', 'allStudents'
@@ -75,7 +78,8 @@ const Batch = () => {
       await Promise.all([
         fetchStudents(),
         fetchCourses(),
-        fetchCourseOfferings()
+        fetchCourseOfferings(),
+        fetchCompetencies() // Added competencies fetch
       ]);
     } catch (error) {
       console.error('Error initializing data:', error);
@@ -166,6 +170,53 @@ const Batch = () => {
       console.log('Fetched course offerings:', offeringsData);
     } catch (err) {
       console.error('Failed to fetch course offerings:', err.message);
+    }
+  };
+
+  // New function to fetch competencies
+  const fetchCompetencies = async () => {
+    try {
+      const competenciesData = await makeAuthenticatedRequest('http://localhost:3000/api/competencies');
+      setCompetencies(competenciesData || []);
+      console.log('Fetched competencies:', competenciesData);
+      
+      // After fetching competencies, get batch-specific competencies
+      await fetchBatchCompetencies();
+    } catch (err) {
+      console.error('Failed to fetch competencies:', err.message);
+    }
+  };
+
+  // New function to fetch batch-specific competencies
+  const fetchBatchCompetencies = async () => {
+    try {
+      // Get all batches with their competencies
+      const batchesData = await makeAuthenticatedRequest('http://localhost:3000/api/batches-with-students');
+      
+      if (batchesData && batchesData.batches) {
+        const batchCompetencyMap = {};
+        
+        // For each batch, get its associated competencies through course
+        for (const batch of batchesData.batches) {
+          try {
+            // Fetch competencies for this batch's course
+            const courseCompetencies = await makeAuthenticatedRequest(
+              `http://localhost:3000/api/courses/${batch.course.course_id}/competencies`
+            );
+            batchCompetencyMap[batch.batch_identifier] = courseCompetencies || [];
+          } catch (err) {
+            console.warn(`Failed to fetch competencies for batch ${batch.batch_identifier}:`, err.message);
+            batchCompetencyMap[batch.batch_identifier] = [];
+          }
+        }
+        
+        setBatchCompetencies(batchCompetencyMap);
+        console.log('Fetched batch competencies:', batchCompetencyMap);
+      }
+    } catch (err) {
+      console.error('Failed to fetch batch competencies:', err.message);
+      // If the endpoint doesn't exist, we'll show a fallback
+      setBatchCompetencies({});
     }
   };
 
@@ -373,6 +424,56 @@ const Batch = () => {
     
     return grouped;
   }, [filteredStudents, courses]);
+
+  // New function to get competencies for a batch
+  const getBatchCompetencies = (batchName) => {
+    const batchCompetencyList = batchCompetencies[batchName] || [];
+    
+    if (batchCompetencyList.length === 0) {
+      // Fallback: try to get competencies based on batch naming pattern
+      // If batch name contains a course code, try to find competencies for that course
+      const courseCode = batchName.split('-')[0]; // e.g., "BA001" from "BA001-2025-01"
+      const matchingCourse = courses.find(c => c.course_code === courseCode);
+      
+      if (matchingCourse) {
+        // Return competencies that match the course pattern or type
+        return competencies.filter(comp => 
+          comp.competency_type?.toLowerCase().includes('basic') ||
+          comp.competency_name?.toLowerCase().includes('basic') ||
+          comp.competency_code?.toLowerCase().includes(courseCode.toLowerCase())
+        );
+      }
+    }
+    
+    return batchCompetencyList;
+  };
+
+  // New function to format competencies display
+  const formatCompetenciesDisplay = (competenciesList) => {
+    if (!competenciesList || competenciesList.length === 0) {
+      return 'No competencies assigned';
+    }
+    
+    if (competenciesList.length === 1) {
+      return competenciesList[0].competency_name || competenciesList[0].competency_type || 'Unknown';
+    }
+    
+    // Group by type if available
+    const groupedByType = competenciesList.reduce((acc, comp) => {
+      const type = comp.competency_type || 'General';
+      if (!acc[type]) acc[type] = [];
+      acc[type].push(comp);
+      return acc;
+    }, {});
+    
+    // Format display
+    const typeNames = Object.keys(groupedByType);
+    if (typeNames.length === 1) {
+      return typeNames[0];
+    }
+    
+    return typeNames.join(', ');
+  };
 
   // Handle filter changes
   const handleFilterChange = (field, value) => {
@@ -911,6 +1012,25 @@ const Batch = () => {
       fontSize: '12px',
       fontWeight: '500'
     },
+    // New style for competencies display
+    competenciesInfo: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      marginTop: '8px',
+      fontSize: '14px',
+      color: colors.olive,
+      fontStyle: 'italic'
+    },
+    competencyBadge: {
+      backgroundColor: '#e8f4f8',
+      color: '#2c5aa0',
+      padding: '2px 8px',
+      borderRadius: '12px',
+      fontSize: '11px',
+      fontWeight: '500',
+      border: '1px solid #d1e7dd'
+    },
     studentsGrid: {
       display: 'grid',
       gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))',
@@ -1258,6 +1378,19 @@ const Batch = () => {
           disabled={selectedStudents.size === 0}
         >
           <Edit3 size={16} />
+          Update Competencies ({selectedStudents.size})
+        </button>
+
+        <button
+          style={styles.bulkActionButton}
+          onClick={() => {
+            setShowBatchReassignment(true);
+            setNewBatchId(''); // Clear previous selection when opening modal
+            setReassignmentError(''); // Clear any previous errors
+          }}
+          disabled={selectedStudents.size === 0}
+        >
+          <Edit3 size={16} />
           Reassign Batch ({selectedStudents.size})
         </button>
       </div>
@@ -1274,6 +1407,8 @@ const Batch = () => {
               .sort(([a], [b]) => a.localeCompare(b))
               .map(([batchName, batchStudents]) => {
                 const isExpanded = expandedSections.has(`batch-${batchName}`);
+                const batchCompetenciesList = getBatchCompetencies(batchName);
+                const competenciesDisplay = formatCompetenciesDisplay(batchCompetenciesList);
                 
                 return (
                   <div key={batchName} style={styles.contentSection}>
@@ -1281,12 +1416,22 @@ const Batch = () => {
                       style={styles.sectionHeader}
                       onClick={() => toggleSection(`batch-${batchName}`)}
                     >
-                      <div style={styles.sectionTitle}>
-                        <Calendar size={20} />
-                        Batch: {batchName}
-                        <span style={styles.sectionCount}>
-                          {batchStudents.length} students
-                        </span>
+                      <div>
+                        <div style={styles.sectionTitle}>
+                          <Calendar size={20} />
+                          <strong>Batch: {batchName}</strong>
+                          <span style={styles.sectionCount}>
+                            {batchStudents.length} students
+                          </span>
+                        </div>
+                        {/* Competencies Display */}
+                        <div style={styles.competenciesInfo}>
+                          <Award size={16} />
+                          <span>Competencies: </span>
+                          <span style={styles.competencyBadge}>
+                            {competenciesDisplay}
+                          </span>
+                        </div>
                       </div>
                       {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
                     </div>

@@ -213,19 +213,14 @@ function UniversalDashboard() {
       color: colors.blue,
       roles: ["admin", "staff"],
     },
-    // {
-    //   id: "competency-assessment",
-    //   label: "Competency & Assessment",
-    //   icon: Award,
-    //   color: colors.red,
-    //   roles: ["admin", "staff"],
-    //   hasChildren: true,
-    //   children: [
-    //     { id: "skill-assessment", label: "Skill Assessment" },
-    //     { id: "performance-review", label: "Performance Review" },
-    //     { id: "certification-tracking", label: "Certification Tracking" },
-    //   ],
-    // },
+    {
+      id: "competency-assessment",
+      label: "Competency & Assessment",
+      icon: Award,
+      color: colors.red,
+      roles: ["admin", "staff"],
+      hasChildren: true
+    },
     {
       id: "referral-tracking",
       label: "Referral",
