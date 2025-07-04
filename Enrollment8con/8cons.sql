@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Jul 04, 2025 at 04:49 AM
+-- Generation Time: Jul 04, 2025 at 11:49 AM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -632,7 +632,7 @@ CREATE TABLE `accounts` (
 --
 
 INSERT INTO `accounts` (`account_id`, `password_hash`, `token`, `account_status`, `last_login`, `failed_login_attempts`, `locked_until`, `created_at`, `updated_at`, `reset_token`, `reset_token_expiry`) VALUES
-(40, 'dmin<$2a$10$J9bCwQS275Aroa0McptniOQc0Yf2yRp/zULh2ddn.ngAXzRPCtnv2\0\'\',', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjQwLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTE1OTczMjUsImV4cCI6MTc1MTYyNjEyNX0.PjupShxuaTIaKQAFnOWVkhjJJ9_FGaFTP9DcsrN260Q', 'active', '2025-07-04 02:48:45', 0, NULL, '2025-06-18 09:52:24', '2025-07-04 02:48:45', NULL, NULL),
+(40, 'dmin<$2a$10$J9bCwQS275Aroa0McptniOQc0Yf2yRp/zULh2ddn.ngAXzRPCtnv2\0\'\',', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50SWQiOjQwLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NTE1OTczMjUsImV4cCI6MTc1MTYyNjEyNX0.PjupShxuaTIaKQAFnOWVkhjJJ9_FGaFTP9DcsrN260Q', 'active', '2025-07-04 07:30:45', 0, NULL, '2025-06-18 09:52:24', '2025-07-04 07:30:45', NULL, NULL),
 (278, '$2a$12$mMWYCnY8AEAot9swf0Deh.0kwRSL4uCSXZ9Y480i5HuXQHexUuo.S', '', 'active', NULL, 0, NULL, '2025-07-03 07:05:50', '2025-07-03 07:05:50', NULL, NULL),
 (279, '$2a$10$JSRzCoFh7lcQTeEDwuuLaOXu7CVCMexR/db.lbgXeL.oNQZe.XBUu', '', 'active', NULL, 0, NULL, '2025-07-03 07:07:32', '2025-07-03 07:07:32', NULL, NULL),
 (280, '$2a$10$0FZW2zo1Ytu01YqJNTWsXOHODXOD9uFZSk4p2OJeKKUAHG0PZ.Up.', '', 'active', NULL, 0, NULL, '2025-07-03 07:08:20', '2025-07-03 07:08:20', NULL, NULL),
@@ -647,7 +647,10 @@ INSERT INTO `accounts` (`account_id`, `password_hash`, `token`, `account_status`
 (289, '$2a$10$0UaE7/Xj/SDJDFRUUcJhC.paNBJk0ecvRGDyH.DSTFA7YNMvPah8q', '', 'active', NULL, 0, NULL, '2025-07-03 07:59:12', '2025-07-03 07:59:12', NULL, NULL),
 (290, '$2a$10$L5aU9z2j77DRzP9Rms/4vOpYDzWwJo9efUtOLipAe9Dn02DJVy.HG', '', 'active', NULL, 0, NULL, '2025-07-03 08:18:33', '2025-07-03 08:18:33', NULL, NULL),
 (291, '$2a$10$11XjKOhWdxLwMW4rnDzs6..ufDTnSCxaPi29mVNsV8vo1TyKND3sC', '', 'active', NULL, 0, NULL, '2025-07-03 08:31:37', '2025-07-03 08:31:37', NULL, NULL),
-(292, '$2a$10$JO2YLRcrLVD45XlsVD2HcuJAHIhP4oHeMbRpWAroFn0bqqIoJiWaG', '', 'active', NULL, 0, NULL, '2025-07-03 08:44:57', '2025-07-03 08:44:57', NULL, NULL);
+(292, '$2a$10$JO2YLRcrLVD45XlsVD2HcuJAHIhP4oHeMbRpWAroFn0bqqIoJiWaG', '', 'active', NULL, 0, NULL, '2025-07-03 08:44:57', '2025-07-03 08:44:57', NULL, NULL),
+(293, '$2a$10$QC5P8LJLKYl5iZoAVaTtGu7DG51MFNJuxAkmhG7IDv7xZRAPe5oEq', '', 'active', NULL, 0, NULL, '2025-07-04 06:22:38', '2025-07-04 06:22:38', NULL, NULL),
+(294, '$2a$10$cEiMSsAsDDJsTUyTl5EXBugq70koexCH..QrRK.YBzUYel9c9grT.', '', 'active', NULL, 0, NULL, '2025-07-04 08:43:40', '2025-07-04 08:43:40', NULL, NULL),
+(295, '$2a$10$RacDI3MSoz4XeDiaULh52egHUiEiPHE.wByRvbK6yIx3g/tVK4.ry', '', 'active', NULL, 0, NULL, '2025-07-04 08:44:14', '2025-07-04 08:44:14', NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -684,7 +687,10 @@ INSERT INTO `account_roles` (`account_id`, `role_id`, `assigned_date`, `assigned
 (289, 3, '2025-07-03 07:59:12', NULL, 1, NULL),
 (290, 3, '2025-07-03 08:18:33', NULL, 1, NULL),
 (291, 3, '2025-07-03 08:31:37', NULL, 1, NULL),
-(292, 3, '2025-07-03 08:44:57', NULL, 1, NULL);
+(292, 3, '2025-07-03 08:44:57', NULL, 1, NULL),
+(293, 3, '2025-07-04 06:22:38', NULL, 1, NULL),
+(294, 3, '2025-07-04 08:43:40', NULL, 1, NULL),
+(295, 3, '2025-07-04 08:44:14', NULL, 1, NULL);
 
 -- --------------------------------------------------------
 
@@ -914,7 +920,16 @@ INSERT INTO `audit_log` (`log_id`, `table_name`, `operation_type`, `primary_key_
 (172, 'students', 'INSERT', '8Con-2025-000013', NULL, '{\"student_id\": \"8Con-2025-000013\", \"person_id\": 290, \"account_id\": 290, \"graduation_status\": \"enrolled\"}', 290, NULL, NULL, NULL, '2025-07-03 08:18:33'),
 (173, 'students', 'INSERT', '8Con-2025-000014', NULL, '{\"student_id\": \"8Con-2025-000014\", \"person_id\": 291, \"account_id\": 291, \"graduation_status\": \"enrolled\"}', 291, NULL, NULL, NULL, '2025-07-03 08:31:37'),
 (174, 'students', 'INSERT', '8Con-2025-000015', NULL, '{\"student_id\": \"8Con-2025-000015\", \"person_id\": 292, \"account_id\": 292, \"graduation_status\": \"enrolled\"}', 292, NULL, NULL, NULL, '2025-07-03 08:44:57'),
-(175, 'scholarships', 'INSERT', '7', NULL, '{\"scholarship_id\": 7, \"sponsor_id\": 9, \"student_id\": \"8Con-2025-000015\", \"coverage_percentage\": 100.00, \"scholarship_amount\": null}', NULL, NULL, NULL, NULL, '2025-07-03 08:44:57');
+(175, 'scholarships', 'INSERT', '7', NULL, '{\"scholarship_id\": 7, \"sponsor_id\": 9, \"student_id\": \"8Con-2025-000015\", \"coverage_percentage\": 100.00, \"scholarship_amount\": null}', NULL, NULL, NULL, NULL, '2025-07-03 08:44:57'),
+(176, 'payments', 'INSERT', '27', NULL, '{\"payment_id\": 27, \"account_id\": 90, \"payment_amount\": 10000.00, \"payment_status\": \"pending\"}', NULL, NULL, NULL, NULL, '2025-07-04 06:02:37'),
+(177, 'students', 'INSERT', '8Con-2025-000016', NULL, '{\"student_id\": \"8Con-2025-000016\", \"person_id\": 293, \"account_id\": 293, \"graduation_status\": \"enrolled\"}', 293, NULL, NULL, NULL, '2025-07-04 06:22:38'),
+(178, 'scholarships', 'INSERT', '8', NULL, '{\"scholarship_id\": 8, \"sponsor_id\": 10, \"student_id\": \"8Con-2025-000016\", \"coverage_percentage\": 100.00, \"scholarship_amount\": null}', NULL, NULL, NULL, NULL, '2025-07-04 06:22:38'),
+(179, 'payments', 'INSERT', '28', NULL, '{\"payment_id\": 28, \"account_id\": 101, \"payment_amount\": 10000.00, \"payment_status\": \"pending\"}', NULL, NULL, NULL, NULL, '2025-07-04 06:34:36'),
+(180, 'payments', 'INSERT', '29', NULL, '{\"payment_id\": 29, \"account_id\": 90, \"payment_amount\": 10000.00, \"payment_status\": \"pending\"}', NULL, NULL, NULL, NULL, '2025-07-04 06:36:30'),
+(181, 'payments', 'INSERT', '30', NULL, '{\"payment_id\": 30, \"account_id\": 91, \"payment_amount\": 1500.00, \"payment_status\": \"pending\"}', NULL, NULL, NULL, NULL, '2025-07-04 06:39:57'),
+(182, 'students', 'INSERT', '8Con-2025-000001', NULL, '{\"student_id\": \"8Con-2025-000001\", \"person_id\": 294, \"account_id\": 294, \"graduation_status\": \"enrolled\"}', 294, NULL, NULL, NULL, '2025-07-04 08:43:40'),
+(183, 'scholarships', 'INSERT', '9', NULL, '{\"scholarship_id\": 9, \"sponsor_id\": 11, \"student_id\": \"8Con-2025-000001\", \"coverage_percentage\": 100.00, \"scholarship_amount\": null}', NULL, NULL, NULL, NULL, '2025-07-04 08:43:40'),
+(184, 'students', 'INSERT', '8Con-2025-000002', NULL, '{\"student_id\": \"8Con-2025-000002\", \"person_id\": 295, \"account_id\": 295, \"graduation_status\": \"enrolled\"}', 295, NULL, NULL, NULL, '2025-07-04 08:44:14');
 
 -- --------------------------------------------------------
 
@@ -973,9 +988,8 @@ CREATE TABLE `competency_progress` (
 --
 
 INSERT INTO `competency_progress` (`progress_id`, `student_id`, `competency_id`, `score`, `passed`, `exam_status`, `exam_date`, `attempts`, `created_at`, `updated_at`) VALUES
-(76, '8Con-2025-000013', 18, 0.00, 0, 'Not taken', NULL, 0, '2025-07-03 08:18:33', '2025-07-03 08:18:33'),
-(79, '8Con-2025-000014', 18, 0.00, 0, 'Not taken', NULL, 0, '2025-07-03 08:31:37', '2025-07-03 08:31:37'),
-(82, '8Con-2025-000015', 18, 0.00, 0, 'Not taken', NULL, 0, '2025-07-03 08:44:57', '2025-07-03 08:44:57');
+(128, '8Con-2025-000001', 18, 0.00, 0, 'Not taken', NULL, 0, '2025-07-04 08:43:40', '2025-07-04 08:43:40'),
+(129, '8Con-2025-000002', 18, 0.00, 0, 'Not taken', NULL, 0, '2025-07-04 08:44:14', '2025-07-04 08:44:14');
 
 -- --------------------------------------------------------
 
@@ -1069,7 +1083,16 @@ INSERT INTO `contact_info` (`contact_id`, `person_id`, `student_id`, `contact_ty
 (396, 291, '8Con-2025-000014', 'email', 'navalesmarkrennier8con@gmail.com', 1, 0, '2025-07-03 08:31:37', '2025-07-03 08:31:37'),
 (397, 292, '8Con-2025-000015', 'phone', '09704918693', 1, 0, '2025-07-03 08:44:57', '2025-07-03 08:44:57'),
 (398, 292, '8Con-2025-000015', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-07-03 08:44:57', '2025-07-03 08:44:57'),
-(399, 292, '8Con-2025-000015', 'email', 'manzanojoshn@gmail.com', 1, 0, '2025-07-03 08:44:57', '2025-07-03 08:44:57');
+(399, 292, '8Con-2025-000015', 'email', 'manzanojoshn@gmail.com', 1, 0, '2025-07-03 08:44:57', '2025-07-03 08:44:57'),
+(400, 293, '8Con-2025-000016', 'phone', '0970671784', 1, 0, '2025-07-04 06:22:38', '2025-07-04 06:22:38'),
+(401, 293, '8Con-2025-000016', 'address', 'Marilao', 1, 0, '2025-07-04 06:22:38', '2025-07-04 06:22:38'),
+(402, 293, '8Con-2025-000016', 'email', 'gonzagaalbapdm@gmail.com', 1, 0, '2025-07-04 06:22:38', '2025-07-04 06:22:38'),
+(403, 294, '8Con-2025-000001', 'phone', '09704918693', 1, 0, '2025-07-04 08:43:40', '2025-07-04 08:43:40'),
+(404, 294, '8Con-2025-000001', 'address', 'blk 1 lot 1 T. Mendoza St., Saog, Marilao', 1, 0, '2025-07-04 08:43:40', '2025-07-04 08:43:40'),
+(405, 294, '8Con-2025-000001', 'email', 'gonzagaalbertb1pdm@gmail.com', 1, 0, '2025-07-04 08:43:40', '2025-07-04 08:43:40'),
+(406, 295, '8Con-2025-000002', 'phone', '0970671784', 1, 0, '2025-07-04 08:44:14', '2025-07-04 08:44:14'),
+(407, 295, '8Con-2025-000002', 'address', '173 Zinya St., Sta. Rosa 2, Marilao, Bulacan', 1, 0, '2025-07-04 08:44:14', '2025-07-04 08:44:14'),
+(408, 295, '8Con-2025-000002', 'email', 'navalesmarkrennier18con@gmail.com', 1, 0, '2025-07-04 08:44:14', '2025-07-04 08:44:14');
 
 -- --------------------------------------------------------
 
@@ -1094,7 +1117,8 @@ CREATE TABLE `courses` (
 --
 
 INSERT INTO `courses` (`course_id`, `course_code`, `course_name`, `course_description`, `duration_weeks`, `credits`, `is_active`, `created_at`, `updated_at`) VALUES
-(4, 'FTD01', 'Forex Trading Derivates', 'Trading is the key', 12, 3.0, 1, '2025-06-23 06:38:35', '2025-06-25 08:24:17');
+(4, 'FTD01', 'Forex Trading Derivates', 'Trading is the key', 12, 3.0, 1, '2025-06-23 06:38:35', '2025-06-25 08:24:17'),
+(10, 'BL-C', 'Business Literature', 'Business', 12, 3.0, 1, '2025-07-04 06:26:53', '2025-07-04 06:26:53');
 
 -- --------------------------------------------------------
 
@@ -1117,7 +1141,10 @@ CREATE TABLE `course_competencies` (
 INSERT INTO `course_competencies` (`course_id`, `competency_id`, `is_required`, `order_sequence`, `estimated_hours`) VALUES
 (4, 18, 1, 1, 0.00),
 (4, 19, 1, 2, 0.00),
-(4, 20, 1, 3, 0.00);
+(4, 20, 1, 3, 0.00),
+(10, 18, 1, 1, 0.00),
+(10, 19, 1, 2, 0.00),
+(10, 20, 1, 3, 0.00);
 
 -- --------------------------------------------------------
 
@@ -1161,7 +1188,8 @@ CREATE TABLE `course_offerings` (
 --
 
 INSERT INTO `course_offerings` (`offering_id`, `course_id`, `batch_identifier`, `start_date`, `end_date`, `max_enrollees`, `current_enrollees`, `status`, `instructor_id`, `location`, `created_at`, `updated_at`) VALUES
-(3, 4, 'FTD01-2025-01', '2025-07-03 08:44:57', '2025-09-15 06:38:35', 25, 12, 'active', NULL, 'Online', '2025-06-23 06:38:35', '2025-07-03 08:44:57');
+(3, 4, 'FTD01-2025-01', '2025-07-04 08:44:14', '2025-09-15 06:38:35', 25, 15, 'active', NULL, 'Online', '2025-06-23 06:38:35', '2025-07-04 08:44:14'),
+(18, 10, 'BL-C-2025-01', '2025-07-04 06:26:53', '2025-09-26 06:26:53', 30, 0, 'planned', NULL, 'Online', '2025-07-04 06:26:53', '2025-07-04 06:26:53');
 
 -- --------------------------------------------------------
 
@@ -1186,7 +1214,8 @@ CREATE TABLE `course_pricing` (
 --
 
 INSERT INTO `course_pricing` (`pricing_id`, `offering_id`, `pricing_type`, `amount`, `currency`, `effective_date`, `expiry_date`, `minimum_quantity`, `is_active`) VALUES
-(24, 3, '', 65000.00, 'PHP', '2025-06-23 06:38:53', '2025-06-23 06:38:53', 1, 1);
+(24, 3, '', 65000.00, 'PHP', '2025-06-23 06:38:53', '2025-06-23 06:38:53', 1, 1),
+(34, 18, 'regular', 80000.00, 'PHP', '2025-07-04 06:26:53', '2025-07-04 06:26:53', 1, 1);
 
 -- --------------------------------------------------------
 
@@ -1366,15 +1395,8 @@ CREATE TABLE `learning_preferences` (
 --
 
 INSERT INTO `learning_preferences` (`preference_id`, `student_id`, `learning_style`, `delivery_preference`, `device_type`, `internet_speed`, `preferred_schedule`, `study_hours_per_week`, `accessibility_needs`, `created_at`, `updated_at`) VALUES
-(120, '8Con-2025-000002', '', 'hybrid', 'Mobile Phone,Laptop', NULL, 'flexible', NULL, NULL, '2025-07-03 07:07:32', '2025-07-03 07:07:32'),
-(121, '8Con-2025-000003', '', 'hybrid', 'Laptop,Mobile Phone', NULL, 'flexible', NULL, NULL, '2025-07-03 07:08:20', '2025-07-03 07:08:20'),
-(126, '8Con-2025-000008', '', 'hybrid', 'Mobile Phone,Desktop', NULL, 'flexible', NULL, NULL, '2025-07-03 07:23:13', '2025-07-03 07:23:13'),
-(127, '8Con-2025-000009', '', 'hybrid', 'Laptop', NULL, 'flexible', NULL, NULL, '2025-07-03 07:28:31', '2025-07-03 07:28:31'),
-(129, '8Con-2025-000011', '', 'hybrid', 'Laptop', NULL, 'flexible', NULL, NULL, '2025-07-03 07:44:56', '2025-07-03 07:44:56'),
-(130, '8Con-2025-000012', '', 'hybrid', 'Laptop', NULL, 'flexible', NULL, NULL, '2025-07-03 07:59:12', '2025-07-03 07:59:12'),
-(131, '8Con-2025-000013', '', 'hybrid', 'Mobile Phone,Desktop', NULL, 'flexible', NULL, NULL, '2025-07-03 08:18:33', '2025-07-03 08:18:33'),
-(132, '8Con-2025-000014', '', 'hybrid', 'Laptop', NULL, 'flexible', NULL, NULL, '2025-07-03 08:31:37', '2025-07-03 08:31:37'),
-(133, '8Con-2025-000015', '', 'hybrid', 'Laptop', NULL, 'flexible', NULL, NULL, '2025-07-03 08:44:57', '2025-07-03 08:44:57');
+(135, '8Con-2025-000001', '', 'hybrid', 'Mobile Phone', NULL, 'flexible', NULL, NULL, '2025-07-04 08:43:40', '2025-07-04 08:43:40'),
+(136, '8Con-2025-000002', '', 'hybrid', 'Mobile Phone', NULL, 'flexible', NULL, NULL, '2025-07-04 08:44:14', '2025-07-04 08:44:14');
 
 -- --------------------------------------------------------
 
@@ -1559,7 +1581,10 @@ INSERT INTO `persons` (`person_id`, `first_name`, `middle_name`, `last_name`, `b
 (289, 'Joshua', 'Pinal', 'Manzano', '2002-02-10', 'Meycauayan, Bulacan', 'Male', 'manzanojoshuaphilip8con@gmail.com', 'College', '2025-07-03 07:59:12', '2025-07-03 07:59:12'),
 (290, 'Jhames Andrew', 'Reynoso', 'Macabata', '2000-04-03', 'marilao', 'Female', 'macabatajhamesandrew8con@gmail.com', 'College', '2025-07-03 08:18:33', '2025-07-03 08:18:33'),
 (291, 'Mark Rennier', 'Sucandito', 'Navales', '2004-04-23', 'Marilao', 'Female', 'navalesmarkrennier8con@gmail.com', 'College', '2025-07-03 08:31:37', '2025-07-03 08:31:37'),
-(292, 'Paolo', 'Borromeo', 'Brown', '2007-04-23', 'Caloocan', 'Male', 'manzanojoshn@gmail.com', 'College', '2025-07-03 08:44:57', '2025-07-03 08:44:57');
+(292, 'Paolo', 'Borromeo', 'Brown', '2007-04-23', 'Caloocan', 'Male', 'manzanojoshn@gmail.com', 'College', '2025-07-03 08:44:57', '2025-07-03 08:44:57'),
+(293, 'Alberta', 'Leo', 'Gonza', '2000-01-01', 'Masbate', 'Female', 'gonzagaalbapdm@gmail.com', 'College', '2025-07-04 06:22:38', '2025-07-04 06:22:38'),
+(294, 'Albert', 'Borromeo', 'Gonzaga', '2004-08-20', 'Masbate', 'Male', 'gonzagaalbertb1pdm@gmail.com', 'College', '2025-07-04 08:43:40', '2025-07-04 08:43:40'),
+(295, 'Mark Rennier', 'Sucandito', 'Navales', '2003-03-02', 'Meycauayan, Bulacan', 'Female', 'navalesmarkrennier18con@gmail.com', 'College', '2025-07-04 08:44:14', '2025-07-04 08:44:14');
 
 --
 -- Triggers `persons`
@@ -1756,9 +1781,7 @@ CREATE TABLE `scholarships` (
 --
 
 INSERT INTO `scholarships` (`scholarship_id`, `sponsor_id`, `student_id`, `coverage_percentage`, `scholarship_amount`, `approved_by`, `notes`, `created_at`, `updated_at`) VALUES
-(5, 7, '8Con-2025-000002', 100.00, NULL, NULL, NULL, '2025-07-03 07:07:32', '2025-07-03 07:07:32'),
-(6, 8, '8Con-2025-000008', 100.00, NULL, NULL, NULL, '2025-07-03 07:23:13', '2025-07-03 07:23:13'),
-(7, 9, '8Con-2025-000015', 100.00, NULL, NULL, NULL, '2025-07-03 08:44:57', '2025-07-03 08:44:57');
+(9, 11, '8Con-2025-000001', 100.00, NULL, NULL, NULL, '2025-07-04 08:43:40', '2025-07-04 08:43:40');
 
 --
 -- Triggers `scholarships`
@@ -1839,7 +1862,9 @@ INSERT INTO `sponsors` (`sponsor_id`, `sponsor_type_id`, `sponsor_name`, `sponso
 (6, 8, 'Our Ladys Scholarships program', 'COO-OURLAD-559', 'Albert', 'craje@gmail.com', '+639704918693', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.00, 8, 1, '2025-07-02 06:55:56', '2025-07-02 07:17:43'),
 (7, 9, '8Con', 'OJT-8CO-609', 'Ryan Lazona', 'Ryan@gmail.com', '+639704928693', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.00, 1, 1, '2025-07-03 07:07:32', '2025-07-03 07:07:32'),
 (8, 6, 'Our Ladys Scholarships program', 'IND-OURLAD-511', 'Albert', 'albertgonzaga689@gmail.com', '+639704918693', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.00, 1, 1, '2025-07-03 07:23:13', '2025-07-03 07:23:13'),
-(9, 8, 'Our Ladys Scholarships program', 'COO-OURLAD-806', 'Albert Borromeo Gonzaga', 'gonzagaalbertb.pdm@gmail.com', '+639704918693', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.00, 1, 1, '2025-07-03 08:44:57', '2025-07-03 08:44:57');
+(9, 8, 'Our Ladys Scholarships program', 'COO-OURLAD-806', 'Albert Borromeo Gonzaga', 'gonzagaalbertb.pdm@gmail.com', '+639704918693', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.00, 1, 1, '2025-07-03 08:44:57', '2025-07-03 08:44:57'),
+(10, 9, '*Con ojt program', 'OJT-*COOJT-158', 'Albert Gonzaga', 'albertbgonzaga.8con@gmail.com', '+639704928693', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.00, 1, 1, '2025-07-04 06:22:38', '2025-07-04 06:22:38'),
+(11, 9, '8Con', 'OJT-8CO-018', 'CJ Pinalba Napoles', 'crajeextremeyt@gmail.com', '+639427184388', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0.00, 1, 1, '2025-07-04 08:43:40', '2025-07-04 08:43:40');
 
 -- --------------------------------------------------------
 
@@ -1941,15 +1966,8 @@ CREATE TABLE `students` (
 --
 
 INSERT INTO `students` (`student_id`, `person_id`, `account_id`, `registration_date`, `graduation_status`, `graduation_date`, `gpa`, `academic_standing`, `notes`) VALUES
-('8Con-2025-000002', 279, 279, '2025-07-03', 'enrolled', NULL, NULL, 'good', NULL),
-('8Con-2025-000003', 280, 280, '2025-07-03', 'enrolled', NULL, NULL, 'good', NULL),
-('8Con-2025-000008', 285, 285, '2025-07-03', 'enrolled', NULL, NULL, 'good', NULL),
-('8Con-2025-000009', 286, 286, '2025-07-03', 'enrolled', NULL, NULL, 'good', NULL),
-('8Con-2025-000011', 288, 288, '2025-07-03', 'enrolled', NULL, NULL, 'good', NULL),
-('8Con-2025-000012', 289, 289, '2025-07-03', 'enrolled', NULL, NULL, 'good', NULL),
-('8Con-2025-000013', 290, 290, '2025-07-03', 'enrolled', NULL, NULL, 'good', NULL),
-('8Con-2025-000014', 291, 291, '2025-07-03', 'enrolled', NULL, NULL, 'good', NULL),
-('8Con-2025-000015', 292, 292, '2025-07-03', 'enrolled', NULL, NULL, 'good', NULL);
+('8Con-2025-000001', 294, 294, '2025-07-04', 'enrolled', NULL, NULL, 'good', NULL),
+('8Con-2025-000002', 295, 295, '2025-07-04', 'enrolled', NULL, NULL, 'good', NULL);
 
 --
 -- Triggers `students`
@@ -2013,15 +2031,8 @@ CREATE TABLE `student_accounts` (
 --
 
 INSERT INTO `student_accounts` (`account_id`, `student_id`, `offering_id`, `total_due`, `amount_paid`, `scheme_id`, `account_status`, `due_date`, `last_payment_date`, `payment_reminder_count`, `notes`, `created_at`, `updated_at`) VALUES
-(90, '8Con-2025-000002', 3, 65000.00, 0.00, NULL, '', '2025-08-02', NULL, 0, NULL, '2025-07-03 07:07:32', '2025-07-03 07:07:32'),
-(91, '8Con-2025-000003', 3, 65000.00, 0.00, NULL, '', '2025-08-02', NULL, 0, NULL, '2025-07-03 07:08:20', '2025-07-03 07:08:20'),
-(94, '8Con-2025-000008', 3, 65000.00, 0.00, NULL, '', '2025-08-02', NULL, 0, NULL, '2025-07-03 07:23:13', '2025-07-03 07:23:13'),
-(95, '8Con-2025-000009', 3, 65000.00, 0.00, NULL, '', '2025-08-02', NULL, 0, NULL, '2025-07-03 07:28:31', '2025-07-03 07:28:31'),
-(96, '8Con-2025-000011', 3, 65000.00, 0.00, NULL, '', '2025-08-02', NULL, 0, NULL, '2025-07-03 07:44:56', '2025-07-03 07:44:56'),
-(97, '8Con-2025-000012', 3, 65000.00, 0.00, NULL, '', '2025-08-02', NULL, 0, NULL, '2025-07-03 07:59:12', '2025-07-03 07:59:12'),
-(98, '8Con-2025-000013', 3, 65000.00, 0.00, NULL, '', '2025-08-02', NULL, 0, NULL, '2025-07-03 08:18:33', '2025-07-03 08:18:33'),
-(99, '8Con-2025-000014', 3, 65000.00, 0.00, NULL, '', '2025-08-02', NULL, 0, NULL, '2025-07-03 08:31:37', '2025-07-03 08:31:37'),
-(100, '8Con-2025-000015', 3, 65000.00, 0.00, NULL, '', '2025-08-02', NULL, 0, NULL, '2025-07-03 08:44:57', '2025-07-03 08:44:57');
+(102, '8Con-2025-000001', 3, 65000.00, 0.00, NULL, '', '2025-08-03', NULL, 0, NULL, '2025-07-04 08:43:40', '2025-07-04 08:43:40'),
+(103, '8Con-2025-000002', 3, 65000.00, 0.00, NULL, '', '2025-08-03', NULL, 0, NULL, '2025-07-04 08:44:14', '2025-07-04 08:44:14');
 
 -- --------------------------------------------------------
 
@@ -2116,7 +2127,7 @@ CREATE TABLE `student_enrollments` (
   `student_id` varchar(20) NOT NULL,
   `offering_id` int(11) NOT NULL,
   `enrollment_date` timestamp NOT NULL DEFAULT current_timestamp(),
-  `enrollment_status` enum('enrolled','completed','dropped','transferred','suspended') DEFAULT 'enrolled',
+  `enrollment_status` enum('enrolled','graduated','dropped','transferred','suspended') DEFAULT 'enrolled',
   `completion_date` timestamp NULL DEFAULT NULL,
   `final_grade` decimal(5,2) DEFAULT NULL,
   `completion_percentage` decimal(5,2) DEFAULT 0.00,
@@ -2128,15 +2139,8 @@ CREATE TABLE `student_enrollments` (
 --
 
 INSERT INTO `student_enrollments` (`enrollment_id`, `student_id`, `offering_id`, `enrollment_date`, `enrollment_status`, `completion_date`, `final_grade`, `completion_percentage`, `attendance_percentage`) VALUES
-(98, '8Con-2025-000002', 3, '2025-07-03 07:07:32', 'enrolled', '2025-09-25 06:16:52', NULL, 0.00, NULL),
-(99, '8Con-2025-000003', 3, '2025-07-03 07:08:20', 'enrolled', '2025-09-25 07:07:32', NULL, 0.00, NULL),
-(102, '8Con-2025-000008', 3, '2025-07-03 07:23:13', 'enrolled', '2025-09-25 07:18:14', NULL, 0.00, NULL),
-(103, '8Con-2025-000009', 3, '2025-07-03 07:28:31', 'enrolled', '2025-09-25 07:23:13', NULL, 0.00, NULL),
-(104, '8Con-2025-000011', 3, '2025-07-03 07:44:56', 'enrolled', '2025-09-25 07:28:31', NULL, 0.00, NULL),
-(105, '8Con-2025-000012', 3, '2025-07-03 07:59:12', 'enrolled', '2025-09-25 07:44:56', NULL, 0.00, NULL),
-(106, '8Con-2025-000013', 3, '2025-07-03 08:18:33', 'enrolled', '2025-09-25 07:59:12', NULL, 0.00, NULL),
-(107, '8Con-2025-000014', 3, '2025-07-03 08:31:37', 'enrolled', '2025-09-25 08:18:33', NULL, 0.00, NULL),
-(108, '8Con-2025-000015', 3, '2025-07-03 08:44:57', 'enrolled', '2025-09-25 08:31:37', NULL, 0.00, NULL);
+(110, '8Con-2025-000001', 3, '2025-07-04 08:43:40', 'enrolled', '2025-09-26 06:22:38', NULL, 0.00, NULL),
+(111, '8Con-2025-000002', 3, '2025-07-04 08:44:14', 'enrolled', '2025-09-26 08:43:40', NULL, 0.00, NULL);
 
 -- --------------------------------------------------------
 
@@ -2279,17 +2283,9 @@ CREATE TABLE `student_trading_levels` (
 --
 
 INSERT INTO `student_trading_levels` (`student_id`, `level_id`, `assigned_date`, `assigned_by`, `assessment_score`, `assessment_method`, `is_current`, `notes`) VALUES
-('8Con-2025-000002', 1, '2025-07-03 07:07:32', NULL, NULL, 'exam', 1, NULL),
-('8Con-2025-000003', 1, '2025-07-03 07:08:20', NULL, NULL, 'exam', 0, NULL),
-('8Con-2025-000003', 2, '2025-07-03 07:08:20', NULL, NULL, 'exam', 1, NULL),
-('8Con-2025-000008', 1, '2025-07-03 07:23:13', NULL, NULL, 'exam', 1, NULL),
-('8Con-2025-000009', 1, '2025-07-03 07:28:31', NULL, NULL, 'exam', 0, NULL),
-('8Con-2025-000009', 3, '2025-07-03 07:28:31', NULL, NULL, 'exam', 1, NULL),
-('8Con-2025-000011', 1, '2025-07-03 07:44:56', NULL, NULL, 'exam', 1, NULL),
-('8Con-2025-000012', 1, '2025-07-03 07:59:12', NULL, NULL, 'exam', 1, NULL),
-('8Con-2025-000013', 1, '2025-07-03 08:18:33', NULL, NULL, 'exam', 1, NULL),
-('8Con-2025-000014', 1, '2025-07-03 08:31:37', NULL, NULL, 'exam', 1, NULL),
-('8Con-2025-000015', 1, '2025-07-03 08:44:57', NULL, NULL, 'exam', 1, NULL);
+('8Con-2025-000001', 1, '2025-07-04 08:43:40', NULL, NULL, 'exam', 0, NULL),
+('8Con-2025-000001', 2, '2025-07-04 08:43:40', NULL, NULL, 'exam', 1, NULL),
+('8Con-2025-000002', 1, '2025-07-04 08:44:14', NULL, NULL, 'exam', 1, NULL);
 
 -- --------------------------------------------------------
 
@@ -2716,6 +2712,7 @@ ALTER TABLE `competencies`
 --
 ALTER TABLE `competency_progress`
   ADD PRIMARY KEY (`progress_id`),
+  ADD UNIQUE KEY `uniq_student_competency` (`student_id`,`competency_id`),
   ADD KEY `idx_student_id` (`student_id`),
   ADD KEY `idx_competency_id` (`competency_id`) USING BTREE;
 
@@ -3177,7 +3174,7 @@ ALTER TABLE `trading_levels`
 -- AUTO_INCREMENT for table `accounts`
 --
 ALTER TABLE `accounts`
-  MODIFY `account_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=293;
+  MODIFY `account_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=296;
 
 --
 -- AUTO_INCREMENT for table `activity_logs`
@@ -3189,7 +3186,7 @@ ALTER TABLE `activity_logs`
 -- AUTO_INCREMENT for table `audit_log`
 --
 ALTER TABLE `audit_log`
-  MODIFY `log_id` bigint(20) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=176;
+  MODIFY `log_id` bigint(20) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=185;
 
 --
 -- AUTO_INCREMENT for table `competencies`
@@ -3201,7 +3198,7 @@ ALTER TABLE `competencies`
 -- AUTO_INCREMENT for table `competency_progress`
 --
 ALTER TABLE `competency_progress`
-  MODIFY `progress_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=83;
+  MODIFY `progress_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=130;
 
 --
 -- AUTO_INCREMENT for table `competency_types`
@@ -3213,25 +3210,25 @@ ALTER TABLE `competency_types`
 -- AUTO_INCREMENT for table `contact_info`
 --
 ALTER TABLE `contact_info`
-  MODIFY `contact_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=400;
+  MODIFY `contact_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=409;
 
 --
 -- AUTO_INCREMENT for table `courses`
 --
 ALTER TABLE `courses`
-  MODIFY `course_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
+  MODIFY `course_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=11;
 
 --
 -- AUTO_INCREMENT for table `course_offerings`
 --
 ALTER TABLE `course_offerings`
-  MODIFY `offering_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=18;
+  MODIFY `offering_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=19;
 
 --
 -- AUTO_INCREMENT for table `course_pricing`
 --
 ALTER TABLE `course_pricing`
-  MODIFY `pricing_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=34;
+  MODIFY `pricing_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=35;
 
 --
 -- AUTO_INCREMENT for table `document_types`
@@ -3255,7 +3252,7 @@ ALTER TABLE `fee_types`
 -- AUTO_INCREMENT for table `learning_preferences`
 --
 ALTER TABLE `learning_preferences`
-  MODIFY `preference_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=134;
+  MODIFY `preference_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=137;
 
 --
 -- AUTO_INCREMENT for table `password_reset_tokens`
@@ -3267,7 +3264,7 @@ ALTER TABLE `password_reset_tokens`
 -- AUTO_INCREMENT for table `payments`
 --
 ALTER TABLE `payments`
-  MODIFY `payment_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=27;
+  MODIFY `payment_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=31;
 
 --
 -- AUTO_INCREMENT for table `payment_methods`
@@ -3285,7 +3282,7 @@ ALTER TABLE `payment_schemes`
 -- AUTO_INCREMENT for table `persons`
 --
 ALTER TABLE `persons`
-  MODIFY `person_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=293;
+  MODIFY `person_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=296;
 
 --
 -- AUTO_INCREMENT for table `positions`
@@ -3309,13 +3306,13 @@ ALTER TABLE `roles`
 -- AUTO_INCREMENT for table `scholarships`
 --
 ALTER TABLE `scholarships`
-  MODIFY `scholarship_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=8;
+  MODIFY `scholarship_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
 
 --
 -- AUTO_INCREMENT for table `sponsors`
 --
 ALTER TABLE `sponsors`
-  MODIFY `sponsor_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
+  MODIFY `sponsor_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=12;
 
 --
 -- AUTO_INCREMENT for table `sponsor_types`
@@ -3333,7 +3330,7 @@ ALTER TABLE `staff`
 -- AUTO_INCREMENT for table `student_accounts`
 --
 ALTER TABLE `student_accounts`
-  MODIFY `account_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=101;
+  MODIFY `account_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=104;
 
 --
 -- AUTO_INCREMENT for table `student_backgrounds`
@@ -3357,7 +3354,7 @@ ALTER TABLE `student_eligibility_assessments`
 -- AUTO_INCREMENT for table `student_enrollments`
 --
 ALTER TABLE `student_enrollments`
-  MODIFY `enrollment_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=109;
+  MODIFY `enrollment_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=112;
 
 --
 -- AUTO_INCREMENT for table `student_fees`
@@ -3375,7 +3372,7 @@ ALTER TABLE `student_goals`
 -- AUTO_INCREMENT for table `student_progress`
 --
 ALTER TABLE `student_progress`
-  MODIFY `progress_id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `progress_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
 
 --
 -- AUTO_INCREMENT for table `student_referrals`
