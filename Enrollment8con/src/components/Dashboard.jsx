@@ -214,20 +214,6 @@ function UniversalDashboard() {
       roles: ["admin", "staff"],
     },
     {
-      id: "competency-assessment",
-      label: "Competency & Assessment",
-      icon: Award,
-      color: colors.red,
-      roles: ["admin", "staff"],
-      hasChildren: true
-    },
-    {
-      id: "referral-tracking",
-      label: "Referral",
-      icon: Users,
-      color: colors.olive,
-    },
-    {
       id: "account-management",
       label: "Account Management",
       icon: UserCheck,

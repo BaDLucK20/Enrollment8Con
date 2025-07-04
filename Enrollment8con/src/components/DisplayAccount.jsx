@@ -2658,7 +2658,7 @@ const filteredStudents = useMemo(() => {
                           </span>
                         </div>
                         
-                        {student.has_sponsorship && (
+                        {/* {student.has_sponsorship && (
                           <div style={styles.infoRow}>
                             <span style={styles.infoLabel}>Sponsor:</span>
                             <span style={{
@@ -2669,7 +2669,7 @@ const filteredStudents = useMemo(() => {
                               {student.sponsor_info?.sponsor_name || 'Yes'}
                             </span>
                           </div>
-                        )}
+                        )} */}
                         
                         <div style={styles.infoRow}>
                           <span style={styles.infoLabel}>Registered:</span>

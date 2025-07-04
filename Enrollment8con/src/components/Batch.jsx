@@ -14,7 +14,10 @@ import {
   X,
   UserCheck,
   Calendar,
-  Award // Added for competencies
+  Award,
+  ArrowRight,
+  AlertCircle,
+  CheckCircle
 } from 'lucide-react';
 
 const Batch = () => {
@@ -22,7 +25,7 @@ const Batch = () => {
   const [courses, setCourses] = useState([]);
   const [courseOfferings, setCourseOfferings] = useState([]);
   const [competencies, setCompetencies] = useState([]);
-  const [studentCompetencies, setStudentCompetencies] = useState({}); // Changed to store student-specific competencies
+  const [studentCompetencies, setStudentCompetencies] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [activeView, setActiveView] = useState('byBatch');
@@ -37,12 +40,24 @@ const Batch = () => {
   const [reassignmentLoading, setReassignmentLoading] = useState(false);
   const [reassignmentError, setReassignmentError] = useState('');
   
+  // Competency reassignment states
+  const [showCompetencyReassignment, setShowCompetencyReassignment] = useState(false);
+  const [competencyReassignmentData, setCompetencyReassignmentData] = useState({
+    fromCompetency: '',
+    toCompetency: '',
+    transferProgress: false,
+    resetProgress: false
+  });
+  const [competencyReassignmentLoading, setCompetencyReassignmentLoading] = useState(false);
+  const [competencyReassignmentError, setCompetencyReassignmentError] = useState('');
+  
   // Filter states
   const [filters, setFilters] = useState({
     name: '',
     course: '',
     batch: '',
-    status: ''
+    status: '',
+    competency: ''
   });
   const [showFilters, setShowFilters] = useState(false);
   
@@ -58,19 +73,32 @@ const Batch = () => {
     cream: '#f5f2e8',
     olive: '#6b7c5c',
     black: '#2c2c2c',
+    blue: '#3b82f6',
+    purple: '#8b5cf6'
   };
 
   useEffect(() => {
     initializeData();
   }, []);
 
-  // Clear batch selection when selected students change
   useEffect(() => {
     if (showBatchReassignment) {
       setNewBatchId('');
       setReassignmentError('');
     }
   }, [selectedStudents, showBatchReassignment]);
+
+  useEffect(() => {
+    if (showCompetencyReassignment) {
+      setCompetencyReassignmentData({
+        fromCompetency: '',
+        toCompetency: '',
+        transferProgress: false,
+        resetProgress: false
+      });
+      setCompetencyReassignmentError('');
+    }
+  }, [selectedStudents, showCompetencyReassignment]);
 
   const initializeData = async () => {
     try {
@@ -89,7 +117,6 @@ const Batch = () => {
     }
   };
 
-  // Helper function to get auth token
   const getAuthToken = () => {
     try {
       return localStorage.getItem('token') || localStorage.getItem('authToken');
@@ -99,7 +126,6 @@ const Batch = () => {
     }
   };
 
-  // Helper function to make authenticated API calls
   const makeAuthenticatedRequest = async (url, options = {}) => {
     const token = getAuthToken();
     
@@ -148,7 +174,6 @@ const Batch = () => {
       setStudents(studentsData || []);
       console.log('Fetched students:', studentsData);
       
-      // After fetching students, get their individual competencies
       if (studentsData && studentsData.length > 0) {
         await fetchStudentCompetencies(studentsData);
       }
@@ -188,105 +213,82 @@ const Batch = () => {
     }
   };
 
-  // Function to fetch student-specific competencies using available endpoints
   const fetchStudentCompetencies = async (studentsData = students) => {
     try {
       const studentCompetencyMap = {};
       
-      // Fetch competencies for each student individually
       for (const student of studentsData) {
         try {
+          // First try to get competency progress directly
           let studentComps = [];
           
-          // Get competencies from student enrollments (main approach)
+          try {
+            const competencyProgress = await makeAuthenticatedRequest(
+              `http://localhost:3000/api/students/${student.student_id}/competency-progress`
+            );
+            
+            if (competencyProgress && competencyProgress.competency_progress) {
+              studentComps = competencyProgress.competency_progress.map(progress => ({
+                ...progress,
+                competency_id: progress.competency_id,
+                competency_name: progress.type_name || progress.competency_name,
+                is_enrolled: true,
+                has_progress: true,
+                progress_data: progress
+              }));
+            }
+          } catch (err) {
+            console.warn(`Failed to fetch competency progress for student ${student.student_id}:`, err.message);
+          }
+          
+          // Fallback: Get competencies from enrollments
+          if (studentComps.length === 0) {
           try {
             const enrollments = await makeAuthenticatedRequest(
               `http://localhost:3000/api/students/${student.student_id}/enrollments`
             );
             
-            // Get unique course IDs from enrollments
             const uniqueCourseIds = new Set();
-            
-            // Extract course IDs from enrollments
+
             for (const enrollment of enrollments || []) {
               if (enrollment.course_code) {
-                // Find course by course_code to get course_id
                 const course = courses.find(c => c.course_code === enrollment.course_code);
                 if (course) {
                   uniqueCourseIds.add(course.course_id);
                 }
               }
             }
-            
-            // Get competencies for each unique course
+
+            let fallbackComps = [];
+
             for (const courseId of uniqueCourseIds) {
               try {
                 const courseComps = await makeAuthenticatedRequest(
                   `http://localhost:3000/api/courses/${courseId}/competencies`
                 );
-                
-                // Add enrollment info to competencies
+
                 const enrichedComps = (courseComps || []).map(comp => ({
                   ...comp,
                   source: 'enrollment',
                   course_id: courseId,
-                  is_current: true // Mark as current since from active enrollment
+                  is_current: true,
+                  is_enrolled: true,
+                  has_progress: false
                 }));
-                
-                studentComps = [...studentComps, ...enrichedComps];
+
+                fallbackComps = [...fallbackComps, ...enrichedComps];
               } catch (err) {
                 console.warn(`Failed to fetch competencies for course ${courseId}:`, err.message);
               }
             }
-            
+
+            // Replace progress-based competencies with fallback ones
+            studentComps = fallbackComps;
+
+      console.log('fallbacks:',fallbackComps);
           } catch (err) {
             console.warn(`Enrollment-based competency fetch failed for student ${student.student_id}:`, err.message);
           }
-          
-          // Fallback: Get competencies from student's primary course if no enrollments found
-          if (studentComps.length === 0) {
-            let courseIdToTry = null;
-            
-            // Try to get course_id from student data
-            if (student.course_id) {
-              courseIdToTry = parseInt(student.course_id);
-            } else if (student.course_code) {
-              const course = courses.find(c => c.course_code === student.course_code);
-              if (course) {
-                courseIdToTry = course.course_id;
-              }
-            } else if (student.enrolled_courses) {
-              // Parse enrolled_courses string to find course
-              const enrolledCoursesList = student.enrolled_courses.split(',').map(c => c.trim());
-              for (const courseStr of enrolledCoursesList) {
-                const courseCode = courseStr.split(' - ')[0].trim();
-                const course = courses.find(c => c.course_code === courseCode);
-                if (course) {
-                  courseIdToTry = course.course_id;
-                  break; // Use first found course
-                }
-              }
-            }
-            
-            if (courseIdToTry) {
-              try {
-                const courseComps = await makeAuthenticatedRequest(
-                  `http://localhost:3000/api/courses/${courseIdToTry}/competencies`
-                );
-                
-                // Mark as fallback competencies
-                const fallbackComps = (courseComps || []).map(comp => ({
-                  ...comp,
-                  source: 'course_fallback',
-                  course_id: courseIdToTry,
-                  is_current: true
-                }));
-                
-                studentComps = [...studentComps, ...fallbackComps];
-              } catch (err) {
-                console.warn(`Course fallback competency fetch failed for student ${student.student_id}:`, err.message);
-              }
-            }
           }
           
           // Remove duplicates based on competency_id
@@ -294,22 +296,17 @@ const Batch = () => {
           const seenIds = new Set();
           
           for (const comp of studentComps) {
-            const compId = comp.competency_id || comp.competency_code || comp.competency_name;
+            const compId = comp.competency_id;
             if (compId && !seenIds.has(compId)) {
               seenIds.add(compId);
-              uniqueCompetencies.push(comp);
+              uniqueCompetencies.push({
+                ...comp,
+                competency_id: compId
+              });
             }
           }
           
-          // Filter to only active competencies
-          const activeComps = uniqueCompetencies.filter(comp => 
-            comp.is_active === true || 
-            comp.is_active === 1 ||
-            comp.is_current === true ||
-            !comp.hasOwnProperty('is_active') // Include if no is_active field
-          );
-          
-          studentCompetencyMap[student.student_id] = activeComps;
+          studentCompetencyMap[student.student_id] = uniqueCompetencies;
           
         } catch (err) {
           console.warn(`Failed to fetch competencies for student ${student.student_id}:`, err.message);
@@ -319,14 +316,54 @@ const Batch = () => {
       
       setStudentCompetencies(studentCompetencyMap);
       console.log('Fetched student competencies:', studentCompetencyMap);
-      
     } catch (err) {
       console.error('Failed to fetch student competencies:', err.message);
       setStudentCompetencies({});
     }
   };
 
-  // Get unique batches from students and course offerings
+  // Get unique competencies that selected students are enrolled in
+  const getEnrolledCompetenciesForSelectedStudents = useMemo(() => {
+    if (selectedStudents.size === 0) return [];
+    
+    const competencyMap = new Map();
+    
+    Array.from(selectedStudents).forEach(studentId => {
+      const studentComps = studentCompetencies[studentId] || [];
+      studentComps.forEach(comp => {
+        if (comp.is_enrolled) {
+          const key = comp.competency_id;
+          const name = comp.competency_name || comp.type_name || `Competency ${key}`;
+          
+          if (!competencyMap.has(key)) {
+            competencyMap.set(key, {
+              competency_id: key,
+              competency_name: name,
+              competency_type: comp.competency_type || comp.type_name || 'General',
+              student_count: 0,
+              students: []
+            });
+          }
+          
+          const existing = competencyMap.get(key);
+          existing.student_count++;
+          existing.students.push(studentId);
+        }
+      });
+    });
+    
+    return Array.from(competencyMap.values()).sort((a, b) => a.competency_name.localeCompare(b.competency_name));
+  }, [selectedStudents, studentCompetencies]);
+
+  // Get available competencies for reassignment (all competencies except the selected from competency)
+  const getAvailableTargetCompetencies = useMemo(() => {
+    const fromCompetencyId = competencyReassignmentData.fromCompetency;
+    
+    return competencies
+      .filter(comp => comp.competency_id !== parseInt(fromCompetencyId))
+      .sort((a, b) => a.competency_name.localeCompare(b.competency_name));
+  }, [competencies, competencyReassignmentData.fromCompetency]);
+
   const uniqueBatches = useMemo(() => {
     const studentBatchIdentifiers = students
       .map(student => student.batch_identifiers)
@@ -347,7 +384,6 @@ const Batch = () => {
     return [...new Set(allBatches)].sort();
   }, [students, courseOfferings]);
 
-  // Get courses for selected students
   const getCoursesForSelectedStudents = useMemo(() => {
     const selectedStudentData = students.filter(student => 
       selectedStudents.has(student.student_id)
@@ -390,7 +426,6 @@ const Batch = () => {
     return { courseIds, courseCodes };
   }, [students, selectedStudents, courses]);
 
-  // Get filtered batches based on selected students' courses
   const availableBatchesForSelectedStudents = useMemo(() => {
     if (selectedStudents.size === 0) {
       return [];
@@ -416,7 +451,6 @@ const Batch = () => {
     return [...new Set(batchIdentifiers)].sort();
   }, [selectedStudents, courseOfferings, courses, getCoursesForSelectedStudents]);
 
-  // Get unique courses
   const uniqueCourses = useMemo(() => {
     return courses.map(course => ({
       id: course.course_id,
@@ -426,7 +460,21 @@ const Batch = () => {
     })).sort((a, b) => a.display.localeCompare(b.display));
   }, [courses]);
 
-  // Filter students based on current filters
+  // Get unique competencies for filtering
+  const uniqueCompetenciesForFilter = useMemo(() => {
+    const competencySet = new Set();
+    
+    Object.values(studentCompetencies).forEach(studentComps => {
+      studentComps.forEach(comp => {
+        if (comp.competency_name) {
+          competencySet.add(comp.competency_name);
+        }
+      });
+    });
+    
+    return Array.from(competencySet).sort();
+  }, [studentCompetencies]);
+
   const filteredStudents = useMemo(() => {
     return students.filter(student => {
       const fullName = `${student.first_name || ''} ${student.last_name || ''}`.toLowerCase();
@@ -462,11 +510,17 @@ const Batch = () => {
       const matchesStatus = !filters.status || 
         (student.graduation_status && student.graduation_status.toLowerCase() === filters.status.toLowerCase());
 
-      return matchesName && matchesCourse && matchesBatch && matchesStatus;
-    });
-  }, [students, filters]);
+      const matchesCompetency = !filters.competency || (() => {
+        const studentComps = studentCompetencies[student.student_id] || [];
+        return studentComps.some(comp => 
+          comp.competency_name && comp.competency_name.toLowerCase().includes(filters.competency.toLowerCase())
+        );
+      })();
 
-  // Group students by batch
+      return matchesName && matchesCourse && matchesBatch && matchesStatus && matchesCompetency;
+    });
+  }, [students, filters, studentCompetencies]);
+
   const studentsByBatch = useMemo(() => {
     const grouped = {};
     
@@ -494,38 +548,10 @@ const Batch = () => {
     return grouped;
   }, [filteredStudents]);
 
-  // Group students by course
-  const studentsByCourse = useMemo(() => {
-    const grouped = {};
-    
-    filteredStudents.forEach(student => {
-      let courseName = 'Unassigned';
-      
-      if (student.enrolled_courses) {
-        courseName = student.enrolled_courses;
-      } else if (student.course_code) {
-        const course = courses.find(c => c.course_code === student.course_code);
-        courseName = course ? `${course.course_code} - ${course.course_name}` : student.course_code;
-      } else if (student.course_id) {
-        const course = courses.find(c => c.course_id === parseInt(student.course_id));
-        courseName = course ? `${course.course_code} - ${course.course_name}` : `Course ID: ${student.course_id}`;
-      }
-      
-      if (!grouped[courseName]) {
-        grouped[courseName] = [];
-      }
-      grouped[courseName].push(student);
-    });
-    
-    return grouped;
-  }, [filteredStudents, courses]);
-
-  // Function to get competencies for a specific student
   const getStudentCompetencies = (studentId) => {
     return studentCompetencies[studentId] || [];
   };
 
-  // Function to format student competencies display
   const formatStudentCompetenciesDisplay = (studentId) => {
     const studentComps = getStudentCompetencies(studentId);
     
@@ -538,7 +564,6 @@ const Batch = () => {
       return comp.competency_name || 'Active Competency';
     }
     
-    // Group by competency type if available
     const byType = studentComps.reduce((acc, comp) => {
       const type = comp.competency_type || comp.type_name || 'General';
       if (!acc[type]) acc[type] = [];
@@ -548,7 +573,6 @@ const Batch = () => {
     
     const typeNames = Object.keys(byType);
     if (typeNames.length === 1 && byType[typeNames[0]].length <= 3) {
-      // Show individual competency names if few enough
       return byType[typeNames[0]]
         .map(comp => comp.competency_name || comp.competency_code)
         .filter(Boolean)
@@ -562,7 +586,6 @@ const Batch = () => {
     return `${studentComps.length} competencies (${typeNames.slice(0, 2).join(', ')}${typeNames.length > 2 ? '...' : ''})`;
   };
 
-  // Function to get detailed competencies for a batch (aggregated from students)
   const getBatchCompetenciesSummary = (batchStudents) => {
     const competencyStats = {};
     const totalStudents = batchStudents.length;
@@ -592,7 +615,6 @@ const Batch = () => {
     return { competencyStats, totalStudents };
   };
 
-  // Function to format batch competencies summary
   const formatBatchCompetenciesDisplay = (batchStudents) => {
     const { competencyStats, totalStudents } = getBatchCompetenciesSummary(batchStudents);
     const competencyKeys = Object.keys(competencyStats);
@@ -606,7 +628,6 @@ const Batch = () => {
       return `${comp.name} (${comp.studentCount}/${totalStudents} students)`;
     }
     
-    // Group by type and show summary
     const typeGroups = {};
     competencyKeys.forEach(key => {
       const comp = competencyStats[key];
@@ -626,7 +647,6 @@ const Batch = () => {
     return `${competencyKeys.length} competencies across ${typeNames.length} types`;
   };
 
-  // Handle filter changes
   const handleFilterChange = (field, value) => {
     setFilters(prev => ({
       ...prev,
@@ -639,11 +659,11 @@ const Batch = () => {
       name: '',
       course: '',
       batch: '',
-      status: ''
+      status: '',
+      competency: ''
     });
   };
 
-  // Handle student selection
   const handleStudentSelect = (studentId) => {
     setSelectedStudents(prev => {
       const newSelected = new Set(prev);
@@ -656,7 +676,6 @@ const Batch = () => {
     });
   };
 
-  // Handle select all
   const handleSelectAll = () => {
     if (selectAll) {
       setSelectedStudents(new Set());
@@ -667,7 +686,6 @@ const Batch = () => {
     setSelectAll(!selectAll);
   };
 
-  // Handle section expansion
   const toggleSection = (sectionName) => {
     setExpandedSections(prev => {
       const newExpanded = new Set(prev);
@@ -680,7 +698,6 @@ const Batch = () => {
     });
   };
 
-  // Handle batch reassignment
   const handleBatchReassignment = async () => {
     if (selectedStudents.size === 0) {
       setReassignmentError('Please select at least one student.');
@@ -731,7 +748,128 @@ const Batch = () => {
     }
   };
 
-  // Format date helper
+  // Handle competency reassignment
+  const handleCompetencyReassignment = async () => {
+    if (selectedStudents.size === 0) {
+      setCompetencyReassignmentError('Please select at least one student.');
+      return;
+    }
+
+    if (!competencyReassignmentData.fromCompetency || !competencyReassignmentData.toCompetency) {
+      setCompetencyReassignmentError('Please select both source and target competencies.');
+      return;
+    }
+
+    setCompetencyReassignmentLoading(true);
+    setCompetencyReassignmentError('');
+
+    try {
+      const studentIds = Array.from(selectedStudents);
+      const fromCompetencyId = parseInt(competencyReassignmentData.fromCompetency);
+      const toCompetencyId = parseInt(competencyReassignmentData.toCompetency);
+      
+      // Process each student individually
+      const results = [];
+      const errors = [];
+      
+      for (const studentId of studentIds) {
+        try {
+          // First, get current competency progress for the from competency
+          let currentProgress = null;
+          try {
+            const progressResponse = await makeAuthenticatedRequest(
+              `http://localhost:3000/api/students/${studentId}/competency-progress`
+            );
+            
+            if (progressResponse && progressResponse.competency_progress) {
+              currentProgress = progressResponse.competency_progress.find(
+                p => ( p.competency_id) === fromCompetencyId
+              );
+            }
+          } catch (err) {
+            console.warn(`Failed to fetch current progress for student ${studentId}:`, err.message);
+          }
+          
+          // Update or create progress for the target competency
+          const updateData = {
+            score: competencyReassignmentData.transferProgress && currentProgress ? 
+              (currentProgress.score || 0) : 0,
+            exam_status: competencyReassignmentData.transferProgress && currentProgress ? 
+              (currentProgress.exam_status || 'Not taken') : 'Not taken',
+            passed: competencyReassignmentData.transferProgress && currentProgress ? 
+              (currentProgress.passed || false) : false
+          };
+          
+          if (competencyReassignmentData.resetProgress) {
+            updateData.score = 0;
+            updateData.exam_status = 'Not taken';
+            updateData.passed = false;
+          }
+          
+          // Update target competency progress
+          await makeAuthenticatedRequest(
+            `http://localhost:3000/api/students/${studentId}/competency-progress/${toCompetencyId}`,
+            {
+              method: 'PUT',
+              body: JSON.stringify(updateData)
+            }
+          );
+          
+          // // Remove or reset progress for the from competency if needed
+          // if (currentProgress) {
+          //   await makeAuthenticatedRequest(
+          //     `http://localhost:3000/api/students/${studentId}/competency-progress/${fromCompetencyId}`,
+          //     {
+          //       method: 'PUT',
+          //       body: JSON.stringify({
+          //         score: 0,
+          //         exam_status: 'Not taken',
+          //         passed: false
+          //       })
+          //     }
+          //   );
+          // }
+          
+          results.push({ studentId, status: 'success' });
+          
+        } catch (error) {
+          console.error(`Failed to reassign competency for student ${studentId}:`, error);
+          errors.push({ studentId, error: error.message });
+        }
+      }
+      
+      // Refresh student competency data
+      await fetchStudentCompetencies();
+      
+      // Show results
+      if (errors.length === 0) {
+        alert(`Successfully reassigned competencies for ${results.length} student(s).`);
+      } else if (results.length === 0) {
+        setCompetencyReassignmentError(`Failed to reassign competencies for all students. Errors: ${errors.map(e => e.error).join(', ')}`);
+        return;
+      } else {
+        alert(`Partially successful: ${results.length} students updated, ${errors.length} failed.`);
+      }
+      
+      // Reset form and close modal
+      setSelectedStudents(new Set());
+      setSelectAll(false);
+      setShowCompetencyReassignment(false);
+      setCompetencyReassignmentData({
+        fromCompetency: '',
+        toCompetency: '',
+        transferProgress: false,
+        resetProgress: false
+      });
+      
+    } catch (error) {
+      console.error('Failed to reassign competencies:', error);
+      setCompetencyReassignmentError('Failed to reassign competencies: ' + error.message);
+    } finally {
+      setCompetencyReassignmentLoading(false);
+    }
+  };
+
   const formatDate = (dateString) => {
     if (!dateString) return 'N/A';
     try {
@@ -741,7 +879,6 @@ const Batch = () => {
     }
   };
 
-  // Get status badge helper
   const getStatusBadge = (status) => {
     const badgeColors = {
       active: '#28a745',
@@ -763,7 +900,6 @@ const Batch = () => {
     };
   };
 
-  // Get student courses display
   const getStudentCoursesDisplay = (student) => {
     if (student.enrolled_courses && typeof student.enrolled_courses === 'string') {
       const courseStrings = student.enrolled_courses.split(',').map(c => c.trim());
@@ -782,7 +918,6 @@ const Batch = () => {
     return 'No active enrollments';
   };
 
-  // Render student card with individual competencies
   const renderStudentCard = (student) => {
     const isSelected = selectedStudents.has(student.student_id);
     const studentComps = getStudentCompetencies(student.student_id);
@@ -832,7 +967,6 @@ const Batch = () => {
             </span>
           </div>
           
-          {/* Student-specific competencies display */}
           <div style={styles.detailRow}>
             <span style={styles.detailLabel}>Current Competencies:</span>
             <span style={styles.detailValue}>
@@ -840,12 +974,16 @@ const Batch = () => {
             </span>
           </div>
           
-          {/* Show detailed competencies if available */}
           {studentComps.length > 0 && (
             <div style={styles.competencyDetails}>
               {studentComps.slice(0, 3).map((comp, index) => (
                 <span key={index} style={styles.competencyBadge}>
                   {comp.competency_name || comp.competency_code || `Competency ${index + 1}`}
+                  {comp.has_progress && comp.progress_data && (
+                    <span style={styles.progressIndicator}>
+                      {comp.progress_data.passed ? ' ✓' : ` ${comp.progress_data.score || 0}%`}
+                    </span>
+                  )}
                 </span>
               ))}
               {studentComps.length > 3 && (
@@ -874,7 +1012,6 @@ const Batch = () => {
     );
   };
 
-  // Render batch reassignment modal
   const renderBatchReassignmentModal = () => {
     if (!showBatchReassignment) return null;
 
@@ -953,6 +1090,210 @@ const Batch = () => {
                   disabled={!newBatchId || reassignmentLoading || availableBatchesForSelectedStudents.length === 0}
                 >
                   {reassignmentLoading ? 'Processing...' : 'Reassign Batch'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Render competency reassignment modal
+  const renderCompetencyReassignmentModal = () => {
+    if (!showCompetencyReassignment) return null;
+
+    const enrolledCompetencies = getEnrolledCompetenciesForSelectedStudents;
+    const targetCompetencies = getAvailableTargetCompetencies;
+
+    return (
+      <div style={styles.modalOverlay} onClick={() => setShowCompetencyReassignment(false)}>
+        <div onClick={(e) => e.stopPropagation()} style={styles.modalContent}>
+          <div style={styles.modalHeader}>
+            <h3 style={styles.modalTitle}>
+              <Award size={20} style={{ marginRight: '8px' }} />
+              Competency Reassignment
+            </h3>
+            <button style={styles.closeButton} onClick={() => setShowCompetencyReassignment(false)}>
+              ×
+            </button>
+          </div>
+          
+          <div style={styles.modalBody}>
+            <div style={styles.reassignmentContainer}>
+              <div style={styles.selectionInfo}>
+                <p><strong>Selected Students:</strong> {selectedStudents.size}</p>
+                <p style={{ fontSize: '14px', color: colors.olive, marginTop: '8px' }}>
+                  Move students from one competency to another. Only competencies that selected students are currently enrolled in will be shown.
+                </p>
+                {enrolledCompetencies.length === 0 && (
+                  <div style={styles.warningMessage}>
+                    <AlertCircle size={16} />
+                    <span>No enrolled competencies found for the selected students.</span>
+                  </div>
+                )}
+              </div>
+
+              {enrolledCompetencies.length > 0 && (
+                <>
+                  <div style={styles.competencyTransferSection}>
+                    <div style={styles.competencySelectGroup}>
+                      <label style={styles.formLabel}>From Competency:</label>
+                      <select
+                        value={competencyReassignmentData.fromCompetency}
+                        onChange={(e) => setCompetencyReassignmentData(prev => ({
+                          ...prev,
+                          fromCompetency: e.target.value,
+                          toCompetency: ''
+                        }))}
+                        style={styles.formSelect}
+                      >
+                        <option value="">Select source competency...</option>
+                        {enrolledCompetencies.map(comp => (
+                          <option key={comp.competency_id} value={comp.competency_id}>
+                            {comp.competency_name} ({comp.student_count}/{selectedStudents.size} students)
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div style={styles.arrowContainer}>
+                      <ArrowRight size={24} color={colors.lightGreen} />
+                    </div>
+
+                    <div style={styles.competencySelectGroup}>
+                      <label style={styles.formLabel}>To Competency:</label>
+                      <select
+                        value={competencyReassignmentData.toCompetency}
+                        onChange={(e) => setCompetencyReassignmentData(prev => ({
+                          ...prev,
+                          toCompetency: e.target.value
+                        }))}
+                        style={styles.formSelect}
+                        disabled={!competencyReassignmentData.fromCompetency}
+                      >
+                        <option value="">
+                          {!competencyReassignmentData.fromCompetency 
+                            ? 'Select source competency first...'
+                            : 'Select target competency...'
+                          }
+                        </option>
+                        {targetCompetencies.map(comp => (
+                          <option key={comp.competency_id} value={comp.competency_id}>
+                            {comp.competency_name} ({comp.competency_type || 'General'})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* <div style={styles.progressOptionsSection}>
+                    <h4 style={styles.progressOptionsTitle}>Progress Options:</h4>
+                    
+                    <div style={styles.checkboxGroup}>
+                      <label style={styles.checkboxLabel}>
+                        <input
+                          type="checkbox"
+                          checked={competencyReassignmentData.transferProgress}
+                          onChange={(e) => setCompetencyReassignmentData(prev => ({
+                            ...prev,
+                            transferProgress: e.target.checked,
+                            resetProgress: e.target.checked ? false : prev.resetProgress
+                          }))}
+                          style={styles.checkbox}
+                        />
+                        <span>Transfer existing progress to new competency</span>
+                      </label>
+                      <p style={styles.optionDescription}>
+                        Copy scores, exam status, and completion status from the source competency.
+                      </p>
+                    </div>
+
+                    <div style={styles.checkboxGroup}>
+                      <label style={styles.checkboxLabel}>
+                        <input
+                          type="checkbox"
+                          checked={competencyReassignmentData.resetProgress}
+                          onChange={(e) => setCompetencyReassignmentData(prev => ({
+                            ...prev,
+                            resetProgress: e.target.checked,
+                            transferProgress: e.target.checked ? false : prev.transferProgress
+                          }))}
+                          style={styles.checkbox}
+                        />
+                        <span>Reset all progress (fresh start)</span>
+                      </label>
+                      <p style={styles.optionDescription}>
+                        Start with clean progress in the new competency (score: 0, status: "Not taken").
+                      </p>
+                    </div>
+
+                    {!competencyReassignmentData.transferProgress && !competencyReassignmentData.resetProgress && (
+                      <div style={styles.infoMessage}>
+                        <AlertCircle size={16} />
+                        <span>Students will be enrolled in the new competency with default initial progress.</span>
+                      </div>
+                    )}
+                  </div> */}
+
+                  {competencyReassignmentData.fromCompetency && competencyReassignmentData.toCompetency && (
+                    <div style={styles.summarySection}>
+                      <h4 style={styles.summaryTitle}>
+                        <CheckCircle size={16} />
+                        Summary
+                      </h4>
+                      <div style={styles.summaryContent}>
+                        <p>
+                          <strong>{selectedStudents.size}</strong> student(s) will be moved from{' '}
+                          <strong>
+                            {enrolledCompetencies.find(c => c.competency_id == competencyReassignmentData.fromCompetency)?.competency_name}
+                          </strong>{' '}
+                          to{' '}
+                          <strong>
+                            {targetCompetencies.find(c => c.competency_id == competencyReassignmentData.toCompetency)?.competency_name}
+                          </strong>
+                        </p>
+                        <p style={{ fontSize: '14px', color: colors.olive, marginTop: '8px' }}>
+                          {competencyReassignmentData.transferProgress && 'Existing progress will be transferred.'}
+                          {competencyReassignmentData.resetProgress && 'All progress will be reset.'}
+                          {!competencyReassignmentData.transferProgress && !competencyReassignmentData.resetProgress && 
+                            'Students will start with default progress in the new competency.'}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {competencyReassignmentError && (
+                <div style={styles.errorMessage}>
+                  {competencyReassignmentError}
+                </div>
+              )}
+
+              <div style={styles.modalActions}>
+                <button
+                  style={styles.cancelButton}
+                  onClick={() => setShowCompetencyReassignment(false)}
+                  disabled={competencyReassignmentLoading}
+                >
+                  Cancel
+                </button>
+                <button
+                  style={{
+                    ...styles.submitButton,
+                    opacity: (!competencyReassignmentData.fromCompetency || 
+                             !competencyReassignmentData.toCompetency || 
+                             competencyReassignmentLoading ||
+                             enrolledCompetencies.length === 0) ? 0.6 : 1
+                  }}
+                  onClick={handleCompetencyReassignment}
+                  disabled={!competencyReassignmentData.fromCompetency || 
+                           !competencyReassignmentData.toCompetency || 
+                           competencyReassignmentLoading ||
+                           enrolledCompetencies.length === 0}
+                >
+                  {competencyReassignmentLoading ? 'Processing...' : 'Reassign Competencies'}
                 </button>
               </div>
             </div>
@@ -1150,6 +1491,19 @@ const Batch = () => {
       gap: '6px',
       opacity: selectedStudents.size === 0 ? 0.6 : 1
     },
+    competencyActionButton: {
+      padding: '8px 16px',
+      backgroundColor: colors.purple,
+      color: 'white',
+      border: 'none',
+      borderRadius: '6px',
+      cursor: 'pointer',
+      fontSize: '14px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '6px',
+      opacity: selectedStudents.size === 0 ? 0.6 : 1
+    },
     contentSection: {
       backgroundColor: '#ffffff',
       borderRadius: '12px',
@@ -1203,7 +1557,12 @@ const Batch = () => {
       fontWeight: '500',
       border: '1px solid #d1e7dd',
       marginRight: '4px',
-      display: 'inline-block'
+      display: 'inline-block',
+      position: 'relative'
+    },
+    progressIndicator: {
+      color: '#28a745',
+      fontWeight: 'bold'
     },
     competencyDetails: {
       display: 'flex',
@@ -1317,7 +1676,7 @@ const Batch = () => {
     modalContent: {
       backgroundColor: 'white',
       borderRadius: '12px',
-      maxWidth: '600px',
+      maxWidth: '700px',
       width: '100%',
       maxHeight: '90vh',
       overflow: 'hidden',
@@ -1368,6 +1727,91 @@ const Batch = () => {
       display: 'flex',
       flexDirection: 'column',
       gap: '8px',
+    },
+    competencyTransferSection: {
+      display: 'grid',
+      gridTemplateColumns: '1fr auto 1fr',
+      gap: '16px',
+      alignItems: 'end',
+      marginBottom: '20px'
+    },
+    competencySelectGroup: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '8px',
+    },
+    arrowContainer: {
+      display: 'flex',
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: '0 8px'
+    },
+    progressOptionsSection: {
+      backgroundColor: '#f8f9fa',
+      padding: '16px',
+      borderRadius: '8px',
+      border: '1px solid #e9ecef'
+    },
+    progressOptionsTitle: {
+      margin: '0 0 12px 0',
+      fontSize: '16px',
+      fontWeight: 'bold',
+      color: colors.darkGreen
+    },
+    checkboxGroup: {
+      marginBottom: '12px'
+    },
+    checkboxLabel: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      cursor: 'pointer',
+      fontWeight: '500'
+    },
+    optionDescription: {
+      fontSize: '12px',
+      color: colors.olive,
+      margin: '4px 0 0 24px',
+      fontStyle: 'italic'
+    },
+    summarySection: {
+      backgroundColor: '#e8f5e8',
+      padding: '16px',
+      borderRadius: '8px',
+      border: '1px solid #d4edda'
+    },
+    summaryTitle: {
+      margin: '0 0 8px 0',
+      fontSize: '16px',
+      fontWeight: 'bold',
+      color: colors.darkGreen,
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px'
+    },
+    summaryContent: {
+      fontSize: '14px',
+      color: colors.black
+    },
+    warningMessage: {
+      backgroundColor: '#fff3cd',
+      color: '#856404',
+      padding: '12px',
+      borderRadius: '6px',
+      border: '1px solid #ffeaa7',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px'
+    },
+    infoMessage: {
+      backgroundColor: '#d1ecf1',
+      color: '#0c5460',
+      padding: '12px',
+      borderRadius: '6px',
+      border: '1px solid #bee5eb',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px'
     },
     formLabel: {
       fontSize: '14px',
@@ -1459,7 +1903,7 @@ const Batch = () => {
       {/* Header */}
       <div style={styles.header}>
         <h1 style={styles.title}>Batch Management</h1>
-        <p style={styles.subtitle}>Organize and manage students by batches and courses</p>
+        <p style={styles.subtitle}>Organize and manage students by batches and courses with competency tracking</p>
       </div>
       
       {/* Filter Section */}
@@ -1494,6 +1938,38 @@ const Batch = () => {
                   {course.display}
                 </option>
               ))}
+            </select>
+          </div>
+
+          <div style={styles.filterGroup}>
+            <label style={styles.filterLabel}>Competency</label>
+            <select
+              value={filters.competency}
+              onChange={(e) => handleFilterChange('competency', e.target.value)}
+              style={styles.filterSelect}
+            >
+              <option value="">All Competencies</option>
+              {uniqueCompetenciesForFilter.map(competency => (
+                <option key={competency} value={competency}>
+                  {competency}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div style={styles.filterGroup}>
+            <label style={styles.filterLabel}>Status</label>
+            <select
+              value={filters.status}
+              onChange={(e) => handleFilterChange('status', e.target.value)}
+              style={styles.filterSelect}
+            >
+              <option value="">All Statuses</option>
+              <option value="enrolled">Enrolled</option>
+              <option value="active">Active</option>
+              <option value="graduated">Graduated</option>
+              <option value="dropped">Dropped</option>
+              <option value="suspended">Suspended</option>
             </select>
           </div>
         </div>
@@ -1552,31 +2028,38 @@ const Batch = () => {
           </span>
         </div>
         
-        <button
-          style={styles.bulkActionButton}
-          onClick={() => {
-            setShowBatchReassignment(true);
-            setNewBatchId('');
-            setReassignmentError('');
-          }}
-          disabled={selectedStudents.size === 0}
-        >
-          <Edit3 size={16} />
-          Update Competencies ({selectedStudents.size})
-        </button>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button
+            style={styles.competencyActionButton}
+            onClick={() => {
+              setShowCompetencyReassignment(true);
+              setCompetencyReassignmentData({
+                fromCompetency: '',
+                toCompetency: '',
+                transferProgress: false,
+                resetProgress: false
+              });
+              setCompetencyReassignmentError('');
+            }}
+            disabled={selectedStudents.size === 0}
+          >
+            <Award size={16} />
+            Reassign Competencies ({selectedStudents.size})
+          </button>
 
-        <button
-          style={styles.bulkActionButton}
-          onClick={() => {
-            setShowBatchReassignment(true);
-            setNewBatchId('');
-            setReassignmentError('');
-          }}
-          disabled={selectedStudents.size === 0}
-        >
-          <Edit3 size={16} />
-          Reassign Batch ({selectedStudents.size})
-        </button>
+          <button
+            style={styles.bulkActionButton}
+            onClick={() => {
+              setShowBatchReassignment(true);
+              setNewBatchId('');
+              setReassignmentError('');
+            }}
+            disabled={selectedStudents.size === 0}
+          >
+            <Edit3 size={16} />
+            Reassign Batch ({selectedStudents.size})
+          </button>
+        </div>
       </div>
 
       {/* Content based on active view */}
@@ -1607,7 +2090,6 @@ const Batch = () => {
                             {batchStudents.length} students
                           </span>
                         </div>
-                        {/* Updated Competencies Display */}
                         <div style={styles.competenciesInfo}>
                           <Award size={16} />
                           <span>Competencies: </span>
@@ -1655,6 +2137,9 @@ const Batch = () => {
 
       {/* Batch Reassignment Modal */}
       {renderBatchReassignmentModal()}
+
+      {/* Competency Reassignment Modal */}
+      {renderCompetencyReassignmentModal()}
     </div>
   );
 };

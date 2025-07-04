@@ -1802,7 +1802,7 @@ const Courses = () => {
                         backgroundColor: colors.primaryLight + '20',
                         color: colors.primaryLight,
                       }}>
-                        {competency.competency_type}
+                        {competency.competency_types}
                       </span>
                       <span style={{ fontSize: '12px', color: colors.gray[500] }}>
                         Passing: {competency.passing_score || 70}%
