@@ -748,7 +748,7 @@ const Batch = () => {
     }
   };
 
-  // Handle competency reassignment
+  // Update the handleCompetencyReassignment function
   const handleCompetencyReassignment = async () => {
     if (selectedStudents.size === 0) {
       setCompetencyReassignmentError('Please select at least one student.');
@@ -768,6 +768,12 @@ const Batch = () => {
       const fromCompetencyId = parseInt(competencyReassignmentData.fromCompetency);
       const toCompetencyId = parseInt(competencyReassignmentData.toCompetency);
       
+      console.log('Reassigning competencies:', {
+        fromCompetencyId,
+        toCompetencyId,
+        studentIds
+      });
+      
       // Process each student individually
       const results = [];
       const errors = [];
@@ -783,7 +789,7 @@ const Batch = () => {
             
             if (progressResponse && progressResponse.competency_progress) {
               currentProgress = progressResponse.competency_progress.find(
-                p => ( p.competency_id) === fromCompetencyId
+                p => parseInt(p.competency_id) === fromCompetencyId
               );
             }
           } catch (err) {
@@ -797,38 +803,31 @@ const Batch = () => {
             exam_status: competencyReassignmentData.transferProgress && currentProgress ? 
               (currentProgress.exam_status || 'Not taken') : 'Not taken',
             passed: competencyReassignmentData.transferProgress && currentProgress ? 
-              (currentProgress.passed || false) : false
+              (currentProgress.passed || false) : false,
+            competencyIdy:toCompetencyId
+            
           };
           
           if (competencyReassignmentData.resetProgress) {
             updateData.score = 0;
             updateData.exam_status = 'Not taken';
             updateData.passed = false;
+            updateData.competencyIdy = toCompetencyId;
           }
+          console.log("Data",updateData)
+          console.log(`Updating competency progress for student ${studentId}:`, {
+            toCompetencyId,
+            updateData
+          });
           
           // Update target competency progress
           await makeAuthenticatedRequest(
-            `http://localhost:3000/api/students/${studentId}/competency-progress/${toCompetencyId}`,
+            `http://localhost:3000/api/students/${studentId}/competency-progress/${fromCompetencyId}`,
             {
               method: 'PUT',
               body: JSON.stringify(updateData)
             }
           );
-          
-          // // Remove or reset progress for the from competency if needed
-          // if (currentProgress) {
-          //   await makeAuthenticatedRequest(
-          //     `http://localhost:3000/api/students/${studentId}/competency-progress/${fromCompetencyId}`,
-          //     {
-          //       method: 'PUT',
-          //       body: JSON.stringify({
-          //         score: 0,
-          //         exam_status: 'Not taken',
-          //         passed: false
-          //       })
-          //     }
-          //   );
-          // }
           
           results.push({ studentId, status: 'success' });
           
@@ -1165,10 +1164,13 @@ const Batch = () => {
                       <label style={styles.formLabel}>To Competency:</label>
                       <select
                         value={competencyReassignmentData.toCompetency}
-                        onChange={(e) => setCompetencyReassignmentData(prev => ({
-                          ...prev,
-                          toCompetency: e.target.value
-                        }))}
+                        onChange={(e) => {
+                          console.log('Selected to competency:', e.target.value);
+                          setCompetencyReassignmentData(prev => ({
+                            ...prev,
+                            toCompetency: e.target.value
+                          }));
+                        }}
                         style={styles.formSelect}
                         disabled={!competencyReassignmentData.fromCompetency}
                       >

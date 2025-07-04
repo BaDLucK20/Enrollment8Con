@@ -2853,7 +2853,7 @@ app.get("/api/students/:studentId/competency-progress", authenticateToken, async
   }
 });
 
-// PUT /api/students/:studentId/competency-progress/:competencyId - Update competency progress
+// PUT /api/students/:studentId/competency-progress/:competencyId
 app.put(
   "/api/students/:studentId/competency-progress/:competencyId",
   [
@@ -2862,6 +2862,7 @@ app.put(
     body("score").optional().isFloat({ min: 0, max: 100 }),
     body("exam_status").optional().isIn(['Not taken', 'Pass', 'Retake', 'In Progress']),
     body("passed").optional().isBoolean(),
+    body("competencyIdy").optional().isInt()
   ],
   validateInput,
   async (req, res) => {
@@ -2869,42 +2870,23 @@ app.put(
 
     try {
       const { studentId, competencyId } = req.params;
-      const { score, exam_status, passed } = req.body;
+      const { score, exam_status, passed, competencyIdy } = req.body;
+
+      const newCompetencyId = competencyIdy || competencyId;
 
       await connection.beginTransaction();
 
-      // Check if the competency progress record exists
+      // Check if the record exists
       const [existingProgress] = await connection.execute(
-        "SELECT progress_id FROM competency_progress WHERE student_id = ? AND competency_id = ?",
+        `SELECT * FROM competency_progress WHERE student_id = ? AND competency_id = ?`,
         [studentId, competencyId]
       );
 
       if (existingProgress.length === 0) {
-        // Create new progress record if it doesn't exist
-        const [result] = await connection.execute(
-            `UPDATE competency_progress
-            SET score = ?, passed = ?, exam_status = ?, updated_at = NOW()
-            WHERE student_id = ? AND competency_id = ?`,
-            [
-              score || 0,
-              passed !== undefined ? (passed ? 1 : 0) : 0,
-              exam_status || 'Not taken',
-              studentId,
-              competencyId
-            ]
-          );
-        
-        await connection.rollback();
-        
-        return res.json({
-          message: "Competency progress created successfully",
-          progress_id: result.insertId,
-          student_id: studentId,
-          competency_id: competencyId
-        });
+        return res.status(404).json({ message: "Competency progress not found." });
       }
 
-      // Get the passing score for this competency if not provided
+      // Compute `finalPassed` using score and DB rule if needed
       let finalPassed = passed;
       if (finalPassed === undefined && score !== undefined) {
         const [competencyInfo] = await connection.execute(
@@ -2919,9 +2901,15 @@ app.put(
         finalPassed = score >= passingScore;
       }
 
-      // Build update query dynamically
+      // Build dynamic update
       const updateFields = [];
       const updateValues = [];
+
+      // Always update competency_id if it's different
+      if (parseInt(newCompetencyId) !== parseInt(competencyId)) {
+        updateFields.push("competency_id = ?");
+        updateValues.push(newCompetencyId);
+      }
 
       if (score !== undefined) {
         updateFields.push("score = ?");
@@ -2938,21 +2926,20 @@ app.put(
         updateValues.push(exam_status);
       }
 
-      if (updateFields.length > 0) {
-        updateFields.push("updated_at = NOW()");
-        updateValues.push(studentId, competencyId);
+      updateFields.push("updated_at = NOW()");
+      updateValues.push(studentId, competencyId); // for WHERE clause
 
-        await connection.execute(
-          `UPDATE competency_progress 
-           SET ${updateFields.join(", ")}
-           WHERE student_id = ? AND competency_id = ?`,
-          updateValues
-        );
-      }
+      await connection.execute(
+        `UPDATE competency_progress 
+         SET ${updateFields.join(", ")}
+         WHERE student_id = ? AND competency_id = ?`,
+        updateValues
+      );
 
+      // Commit changes
       await connection.commit();
 
-      // Fetch the updated progress with competency info
+      // Fetch updated using newCompetencyId
       const [updatedProgress] = await connection.execute(
         `SELECT 
           cp.*,
@@ -2964,7 +2951,7 @@ app.put(
         JOIN competencies c ON cp.competency_id = c.competency_id
         LEFT JOIN competency_types ct ON c.competency_type_id = ct.competency_type_id
         WHERE cp.student_id = ? AND cp.competency_id = ?`,
-        [studentId, competencyId]
+        [studentId, newCompetencyId]
       );
 
       res.json({
@@ -7588,13 +7575,13 @@ app.get("/api/document-types", authenticateToken, async (req, res) => {
 app.get("/api/competencies", authenticateToken, async (req, res) => {
   try {
     const [competencies] = await pool.execute(`
-      SELECT c.competency_id, c.competency_code, c.competency_name, c.competency_description,
-             ct.type_name as competency_type, ct.passing_score
+      SELECT c.*, ct.type_name as competency_type
       FROM competencies c
       JOIN competency_types ct ON c.competency_type_id = ct.competency_type_id
       WHERE c.is_active = TRUE
-      ORDER BY ct.type_name, c.competency_name
+      ORDER BY c.competency_name
     `);
+    
     res.json(competencies);
   } catch (error) {
     console.error("Competencies fetch error:", error);
