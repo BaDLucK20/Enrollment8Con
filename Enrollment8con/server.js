@@ -44,20 +44,10 @@ app.use(helmet({
   },
 }));
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  message: 'Too many requests from this IP, please try again later.',
-});
 
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  message: 'Too many login attempts, please try again later.',
-});
 
-app.use(limiter);
+
+
 
 // Core middleware
 app.use(express.json({ limit: '10mb' }));
@@ -2421,6 +2411,7 @@ app.post(
 
       const account_id = output.account_id;
 
+      // Get the student_id from the students table
       const [studentData] = await connection.execute(
         "SELECT student_id FROM students WHERE account_id = ?",
         [account_id]
@@ -2432,54 +2423,78 @@ app.post(
         throw new Error("Student record not found after creation");
       }
 
-      // 🆕 Initialize competency progress with score = 1.00 for all competency types
-      console.log("Initializing competency progress for student:", student_id);
+      console.log(`Student created successfully with student_id: ${student_id}`);
+
+      // 🎯 COMPETENCY PROGRESS INITIALIZATION
+      console.log("Starting competency progress initialization for student:", student_id);
       
       try {
-        await connection.execute(
-          `
-          INSERT INTO competency_progress (student_id, competency_type, score, passed, exam_status)
-          VALUES 
-          (?, 'Basic', 1.00, 0, 'Not taken'),
-          (?, 'Common', 1.00, 0, 'Not taken'),
-          (?, 'Core', 1.00, 0, 'Not taken')
-        `,
-          [student_id, student_id, student_id]
+        // Fetch all active competency types
+        const [competencyTypes] = await connection.execute(
+          `SELECT competency_id 
+          FROM competencies 
+          WHERE is_active = 1 
+          ORDER BY  competency_id`
         );
+
+        console.log(`Found ${competencyTypes.length} active competency types:`, competencyTypes);
+
+        if (competencyTypes.length > 0) {
+        // Check if competency progress already exists (safety check)
+        const [existingProgress] = await connection.execute(
+          "SELECT competency_id FROM competency_progress WHERE student_id = ?",
+          [student_id]
+        );
+
+        if (existingProgress.length > 0) {
+          console.log(`Competency progress already exists for student ${student_id}, skipping initialization`);
+        } else {
+          // Initialize competency progress for each competency type
+          const insertPromises = competencyTypes.map(async (type) => {
+            return connection.execute(
+              `INSERT INTO competency_progress 
+              (student_id, competency_id, score, passed, exam_status, created_at, updated_at)
+              VALUES (?, ?, 0.00, 0, 'Not taken', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+              [student_id, type.competency_id]
+            );
+          });
+
+          // Execute all insertions
+          await Promise.all(insertPromises);
+                
+            console.log(`✅ Competency progress initialized successfully for student: ${student_id}`);
+            console.log(`   - Initialized ${competencyTypes.length} competency records`);
+            console.log(`   - Competency types: ${competencyTypes.map(t => t.type_name).join(', ')}`);
+          }
+        } else {
+          console.warn("⚠️  No active competency types found in database");
+        }
         
-        console.log("Competency progress initialized successfully for student:", student_id);
       } catch (competencyError) {
-        console.error("Error initializing competency progress:", competencyError);
+        console.error("❌ Error initializing competency progress:", competencyError);
         // Don't rollback the entire transaction for competency initialization failure
         // Log the error but continue with the student creation
+        console.log("Continuing with student creation despite competency initialization error");
       }
 
+      // Handle trading level assignment
       if (trading_level_id && trading_level_id !== 1) {
         await connection.execute(
-          `
-        UPDATE student_trading_levels 
-        SET is_current = FALSE 
-        WHERE student_id = ? AND is_current = TRUE
-      `,
+          `UPDATE student_trading_levels 
+           SET is_current = FALSE 
+           WHERE student_id = ? AND is_current = TRUE`,
           [student_id]
         );
 
         await connection.execute(
-          `
-        INSERT INTO student_trading_levels (student_id, level_id, is_current, assigned_by)
-        VALUES (?, ?, TRUE, ?)
-      `,
+          `INSERT INTO student_trading_levels (student_id, level_id, is_current, assigned_by)
+           VALUES (?, ?, TRUE, ?)`,
           [student_id, trading_level_id, req.user.staffId || null]
         );
       }
 
       // Update learning preferences if provided
-      if (
-        learning_style ||
-        delivery_preference ||
-        device_type ||
-        preferred_schedule
-      ) {
+      if (learning_style || delivery_preference || device_type || preferred_schedule) {
         const updateFields = [];
         const updateValues = [];
 
@@ -2503,11 +2518,9 @@ app.post(
         if (updateFields.length > 0) {
           updateValues.push(student_id);
           await connection.execute(
-            `
-          UPDATE learning_preferences 
-          SET ${updateFields.join(", ")}
-          WHERE student_id = ?
-        `,
+            `UPDATE learning_preferences 
+             SET ${updateFields.join(", ")}
+             WHERE student_id = ?`,
             updateValues
           );
         }
@@ -2517,12 +2530,10 @@ app.post(
       if (goals && Array.isArray(goals)) {
         for (const goal of goals) {
           await connection.execute(
-            `
-          INSERT INTO student_goals (
-            student_id, goal_type, goal_title, goal_description, 
-            target_date, priority_level, status
-          ) VALUES (?, ?, ?, ?, ?, ?, 'active')
-        `,
+            `INSERT INTO student_goals (
+              student_id, goal_type, goal_title, goal_description, 
+              target_date, priority_level, status
+            ) VALUES (?, ?, ?, ?, ?, ?, 'active')`,
             [
               student_id,
               goal.type || "personal",
@@ -2546,15 +2557,13 @@ app.post(
         } = background_info;
 
         await connection.execute(
-          `
-        UPDATE student_backgrounds 
-        SET work_experience_years = ?,
-            current_occupation = ?,
-            industry = ?,
-            financial_experience = ?,
-            prior_trading_experience = ?
-        WHERE student_id = ?
-      `,
+          `UPDATE student_backgrounds 
+           SET work_experience_years = ?,
+               current_occupation = ?,
+               industry = ?,
+               financial_experience = ?,
+               prior_trading_experience = ?
+           WHERE student_id = ?`,
           [
             work_experience_years || 0,
             current_occupation || null,
@@ -2567,7 +2576,7 @@ app.post(
       }
 
       await connection.commit();
-      console.log("Transaction committed successfully");
+      console.log("✅ Transaction committed successfully");
 
       // Send welcome email
       let emailSent = false;
@@ -2588,57 +2597,67 @@ app.post(
 
       // Fetch complete student data including competency progress
       const [completeStudentData] = await connection.execute(
-        `
-      SELECT 
-        s.student_id,
-        s.registration_date,
-        p.first_name,
-        p.last_name,
-        p.email,
-        tl.level_name as trading_level,
-        lp.delivery_preference,
-        lp.learning_style
-      FROM students s
-      JOIN persons p ON s.person_id = p.person_id
-      LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
-      LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
-      LEFT JOIN learning_preferences lp ON s.student_id = lp.student_id
-      WHERE s.student_id = ?
-    `,
+        `SELECT 
+          s.student_id,
+          s.registration_date,
+          p.first_name,
+          p.last_name,
+          p.email,
+          tl.level_name as trading_level,
+          lp.delivery_preference,
+          lp.learning_style
+        FROM students s
+        JOIN persons p ON s.person_id = p.person_id
+        LEFT JOIN student_trading_levels stl ON s.student_id = stl.student_id AND stl.is_current = TRUE
+        LEFT JOIN trading_levels tl ON stl.level_id = tl.level_id
+        LEFT JOIN learning_preferences lp ON s.student_id = lp.student_id
+        WHERE s.student_id = ?`,
         [student_id]
       );
 
-      // 🆕 Fetch initial competency progress to confirm creation
+      // Fetch competency progress with type information to verify initialization
       const [competencyData] = await connection.execute(
-        `
-        SELECT competency_type, score, passed, exam_status
-        FROM competency_progress
-        WHERE student_id = ?
-        ORDER BY competency_type
-      `,
+        `SELECT 
+          cp.progress_id,
+          cp.competency_id,
+          cp.passed,
+          cp.exam_status,
+          cp.created_at,
+          cp.updated_at
+        FROM competency_progress cp
+        JOIN competencies c ON cp.competency_id = c.competency_id
+        WHERE cp.student_id = ?
+        ORDER BY c.competency_id`,
         [student_id]
       );
+
+      console.log(`✅ Student creation completed. Competency records created: ${competencyData.length}`);
 
       res.status(201).json({
         message: emailSent
           ? "Student created successfully! Login credentials have been sent to their email."
           : "Student created successfully!",
         student: completeStudentData[0],
-        competency_progress: competencyData, // 🆕 Include competency progress in response
+        competency_progress: competencyData,
+        competency_summary: {
+          total_competencies: competencyData.length,
+          passed: competencyData.filter(p => p.passed === 1).length,
+          in_progress: competencyData.filter(p => p.passed === 0 && p.exam_status !== 'Not taken').length,
+          not_started: competencyData.filter(p => p.exam_status === 'Not taken').length
+        },
         email_sent: emailSent,
         credentials: !emailSent ? { email, password } : undefined,
       });
     } catch (error) {
       await connection.rollback();
-      console.error("Student creation error:", error);
+      console.error("❌ Student creation error:", error);
 
       if (error.code === "ER_DUP_ENTRY") {
         res.status(409).json({ error: "Email already exists" });
       } else {
         res.status(500).json({
           error: "Failed to create student",
-          details:
-            process.env.NODE_ENV === "development" ? error.message : undefined,
+          details: process.env.NODE_ENV === "development" ? error.message : undefined,
         });
       }
     } finally {
@@ -2646,6 +2665,71 @@ app.post(
     }
   }
 );
+
+// Alternative helper function for manual competency initialization
+// (can be called separately if needed)
+const initializeCompetencyProgressForStudent = async (connection, student_id) => {
+  try {
+    console.log(`🔄 Initializing competency progress for student: ${student_id}`);
+    
+    // Get all active competency types
+    const [competencyTypes] = await connection.execute(
+    `SELECT competency_id 
+     FROM competencies 
+     WHERE is_active = 1 
+     ORDER BY competency_id`
+  );
+
+    if (competencyTypes.length === 0) {
+      console.warn(`⚠️  No active competency types found for initialization`);
+      return { success: false, message: "No active competency types found" };
+    }
+
+    // Check for existing progress
+    const [existingProgress] = await connection.execute(
+      "SELECT competency_id FROM competency_progress WHERE student_id = ?",
+      [student_id]
+    );
+
+    const existingCompetencyIds = existingProgress.map(p => p.competency_id);
+    const missingTypes = competencyTypes.filter(
+      type => !existingCompetencyIds.includes(type.competency_id)
+    );
+
+    if (missingTypes.length === 0) {
+      console.log(`✅ All competency progress records already exist for student: ${student_id}`);
+      return { 
+        success: true, 
+        message: "All competency progress records already exist",
+        existing_count: existingCompetencyIds.length
+      };
+    }
+
+    // Insert missing competency progress records
+    for (const type of missingTypes) {
+      await connection.execute(
+        `INSERT INTO competency_progress 
+         (student_id, competency_id, score, passed, exam_status, created_at, updated_at)
+         VALUES (?, ?, 0.00, 0, 'Not taken', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [student_id, type.competency_id]
+      );
+    }
+
+    console.log(`✅ Competency progress initialized: ${missingTypes.length} new records for student: ${student_id}`);
+    
+    return {
+      success: true,
+      message: "Competency progress initialized successfully",
+      initialized_count: missingTypes.length,
+      initialized_types: missingTypes.map(t => t.type_name),
+      existing_count: existingCompetencyIds.length
+    };
+
+  } catch (error) {
+    console.error(`❌ Error initializing competency progress for student ${student_id}:`, error);
+    throw error;
+  }
+};
 
 app.get(
   "/api/students/:studentId/financial-summary",
@@ -2722,241 +2806,137 @@ app.get(
 );
 
 // Get competency progress for a specific student
-app.get(
-  "/api/students/:studentId/competency-progress",
-  authenticateToken,
-  authorize(["admin", "staff", "student"]),
-  async (req, res) => {
-    try {
-      const { studentId } = req.params;
-      
-      // If user is a student, ensure they can only access their own data
-      if (req.user.role === 'student' && req.user.studentId !== studentId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
+app.get("/api/students/:studentId/competency-progress", authenticateToken, async (req, res) => {
+  try {
+    const { studentId } = req.params;
 
-      const [competencyData] = await pool.execute(
-        `
-        SELECT 
-          cp.progress_id,
-          cp.student_id,
-          cp.competency_type,
-          cp.score,
-          cp.passed,
-          cp.exam_status,
-          CONCAT(p.first_name, ' ', p.last_name) as student_name
-        FROM competency_progress cp
-        JOIN students s ON cp.student_id = s.student_id
-        JOIN persons p ON s.person_id = p.person_id
-        WHERE cp.student_id = ?
-        ORDER BY cp.competency_type
-      `,
-        [studentId]
-      );
+    const [progressData] = await pool.execute(`
+      SELECT 
+        cp.progress_id,
+        cp.student_id,
+        cp.competency_type_id,
+        ct.type_name,
+        ct.type_description,
+        ct.passing_score as required_passing_score,
+        cp.score,
+        cp.passed,
+        cp.exam_status,
+        cp.created_at,
+        cp.updated_at,
+        CASE 
+          WHEN cp.score >= ct.passing_score THEN 'Passed'
+          WHEN cp.score < ct.passing_score AND cp.exam_status = 'Not taken' THEN 'Not Started'
+          ELSE 'In Progress'
+        END as status
+      FROM competency_progress cp
+      JOIN competency_types ct ON cp.competency_type_id = ct.competency_type_id
+      WHERE cp.student_id = ?
+      ORDER BY ct.competency_type_id
+    `, [studentId]);
 
-      if (competencyData.length === 0) {
-        return res.status(404).json({ 
-          error: "No competency progress found for this student" 
-        });
-      }
-
-      res.json({
-        student_id: studentId,
-        student_name: competencyData[0].student_name,
-        competency_progress: competencyData
-      });
-    } catch (error) {
-      console.error("Error fetching competency progress:", error);
-      res.status(500).json({ 
-        error: "Failed to fetch competency progress",
-        details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    if (progressData.length === 0) {
+      return res.status(404).json({ 
+        error: "No competency progress found for this student",
+        student_id: studentId 
       });
     }
-  }
-);
 
-// Get competency progress summary for all students
-app.get(
-  "/api/competency-progress/summary",
-  authenticateToken,
-  authorize(["admin", "staff"]),
-  async (req, res) => {
-    try {
-      const { status, competency_type } = req.query;
-      
-      let query = `
-        SELECT * FROM v_student_competency_summary
-      `;
-      const params = [];
-      const conditions = [];
-
-      if (status) {
-        conditions.push("overall_status = ?");
-        params.push(status);
+    res.json({
+      student_id: studentId,
+      competency_progress: progressData,
+      summary: {
+        total_competencies: progressData.length,
+        passed: progressData.filter(p => p.passed === 1).length,
+        in_progress: progressData.filter(p => p.passed === 0 && p.exam_status !== 'Not taken').length,
+        not_started: progressData.filter(p => p.exam_status === 'Not taken').length
       }
-
-      if (conditions.length > 0) {
-        query += " WHERE " + conditions.join(" AND ");
-      }
-
-      query += " ORDER BY student_name";
-
-      const [summaryData] = await pool.execute(query, params);
-
-      res.json({
-        total_students: summaryData.length,
-        summary: summaryData
-      });
-    } catch (error) {
-      console.error("Error fetching competency summary:", error);
-      res.status(500).json({ 
-        error: "Failed to fetch competency summary",
-        details: process.env.NODE_ENV === 'development' ? error.message : undefined
-      });
-    }
+    });
+  } catch (error) {
+    console.error("Competency progress fetch error:", error);
+    res.status(500).json({ error: "Failed to fetch competency progress" });
   }
-);
+});
 
-// Update competency progress for a student
+// PUT /api/students/:studentId/competency-progress/:competencyTypeId - Update competency progress
 app.put(
-  "/api/students/:studentId/competency-progress/:competencyType",
-  authenticateToken,
-  authorize(["admin", "staff"]),
+  "/api/students/:studentId/competency-progress/:competencyTypeId",
   [
-    body("score").isFloat({ min: 0, max: 100 }).withMessage("Score must be between 0 and 100"),
-    body("passed").isBoolean().withMessage("Passed must be a boolean"),
-    body("exam_status").isIn(['Not taken', 'Pass', 'Retake']).withMessage("Invalid exam status")
+    authenticateToken,
+    authorize(["admin", "staff", "instructor"]),
+    body("score").isFloat({ min: 0, max: 100 }),
+    body("exam_status").isIn(['Not taken', 'Pass', 'Retake']),
+    body("passed").optional().isBoolean(),
   ],
   validateInput,
   async (req, res) => {
+    const connection = await pool.getConnection();
+
     try {
-      const { studentId, competencyType } = req.params;
-      const { score, passed, exam_status } = req.body;
+      const { studentId, competencyTypeId } = req.params;
+      const { score, exam_status, passed } = req.body;
 
-      // Validate competency type
-      const validCompetencyTypes = ['Basic', 'Common', 'Core'];
-      if (!validCompetencyTypes.includes(competencyType)) {
-        return res.status(400).json({ 
-          error: "Invalid competency type. Must be Basic, Common, or Core" 
-        });
-      }
+      await connection.beginTransaction();
 
-      // Check if student exists
-      const [studentExists] = await pool.execute(
-        "SELECT student_id FROM students WHERE student_id = ?",
-        [studentId]
-      );
-
-      if (studentExists.length === 0) {
-        return res.status(404).json({ error: "Student not found" });
-      }
-
-      // Check if competency progress record exists
-      const [existingProgress] = await pool.execute(
-        "SELECT progress_id FROM competency_progress WHERE student_id = ? AND competency_type = ?",
-        [studentId, competencyType]
+      // Check if the competency progress record exists
+      const [existingProgress] = await connection.execute(
+        "SELECT progress_id FROM competency_progress WHERE student_id = ? AND competency_type_id = ?",
+        [studentId, competencyTypeId]
       );
 
       if (existingProgress.length === 0) {
-        // Create new record if doesn't exist
-        await pool.execute(
-          `
-          INSERT INTO competency_progress (student_id, competency_type, score, passed, exam_status)
-          VALUES (?, ?, ?, ?, ?)
-        `,
-          [studentId, competencyType, score, passed ? 1 : 0, exam_status]
-        );
-      } else {
-        // Update existing record
-        await pool.execute(
-          `
-          UPDATE competency_progress 
-          SET score = ?, passed = ?, exam_status = ?
-          WHERE student_id = ? AND competency_type = ?
-        `,
-          [score, passed ? 1 : 0, exam_status, studentId, competencyType]
-        );
+        await connection.rollback();
+        return res.status(404).json({ error: "Competency progress record not found" });
       }
 
-      // Fetch updated competency progress
-      const [updatedProgress] = await pool.execute(
+      // Get the passing score for this competency type
+      const [competencyType] = await connection.execute(
+        "SELECT passing_score FROM competency_types WHERE competency_type_id = ?",
+        [competencyTypeId]
+      );
+
+      const passingScore = competencyType[0]?.passing_score || 70;
+
+      // Determine if passed based on score if not explicitly provided
+      const isPassed = passed !== undefined ? passed : (score >= passingScore);
+
+      // Update the competency progress
+      await connection.execute(
         `
-        SELECT * FROM competency_progress 
-        WHERE student_id = ? AND competency_type = ?
+        UPDATE competency_progress 
+        SET score = ?, passed = ?, exam_status = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE student_id = ? AND competency_type_id = ?
       `,
-        [studentId, competencyType]
+        [score, isPassed ? 1 : 0, exam_status, studentId, competencyTypeId]
+      );
+
+      await connection.commit();
+
+      // Fetch the updated progress with competency type info
+      const [updatedProgress] = await connection.execute(
+        `
+        SELECT 
+          cp.*,
+          ct.type_name,
+          ct.type_description,
+          ct.passing_score as required_passing_score
+        FROM competency_progress cp
+        JOIN competency_types ct ON cp.competency_type_id = ct.competency_type_id
+        WHERE cp.student_id = ? AND cp.competency_type_id = ?
+      `,
+        [studentId, competencyTypeId]
       );
 
       res.json({
         message: "Competency progress updated successfully",
-        updated_progress: updatedProgress[0]
-      });
-    } catch (error) {
-      console.error("Error updating competency progress:", error);
-      res.status(500).json({ 
-        error: "Failed to update competency progress",
-        details: process.env.NODE_ENV === 'development' ? error.message : undefined
-      });
-    }
-  }
-);
-
-// Initialize competency progress for existing students (migration endpoint)
-app.post(
-  "/api/competency-progress/initialize-existing",
-  authenticateToken,
-  authorize(["admin"]),
-  async (req, res) => {
-    const connection = await pool.getConnection();
-    
-    try {
-      await connection.beginTransaction();
-
-      // Find students without competency progress
-      const [studentsWithoutProgress] = await connection.execute(
-        `
-        SELECT s.student_id 
-        FROM students s
-        LEFT JOIN competency_progress cp ON s.student_id = cp.student_id
-        WHERE cp.student_id IS NULL
-      `
-      );
-
-      let initializedCount = 0;
-
-      for (const student of studentsWithoutProgress) {
-        try {
-          await connection.execute(
-            `
-            INSERT INTO competency_progress (student_id, competency_type, score, passed, exam_status)
-            VALUES 
-            (?, 'Basic', 1.00, 0, 'Not taken'),
-            (?, 'Common', 1.00, 0, 'Not taken'),
-            (?, 'Core', 1.00, 0, 'Not taken')
-          `,
-            [student.student_id, student.student_id, student.student_id]
-          );
-          
-          initializedCount++;
-        } catch (studentError) {
-          console.error(`Error initializing competency for student ${student.student_id}:`, studentError);
-          // Continue with other students
-        }
-      }
-
-      await connection.commit();
-
-      res.json({
-        message: "Competency progress initialized for existing students",
-        students_processed: studentsWithoutProgress.length,
-        students_initialized: initializedCount
+        progress: updatedProgress[0],
       });
     } catch (error) {
       await connection.rollback();
-      console.error("Error initializing competency progress:", error);
-      res.status(500).json({ 
-        error: "Failed to initialize competency progress",
-        details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      console.error("Competency progress update error:", error);
+      res.status(500).json({
+        error: "Failed to update competency progress",
+        details:
+          process.env.NODE_ENV === "development" ? error.message : undefined,
       });
     } finally {
       connection.release();
@@ -2964,51 +2944,89 @@ app.post(
   }
 );
 
-// Get competency statistics
-app.get(
-  "/api/competency-progress/statistics",
-  authenticateToken,
-  authorize(["admin", "staff"]),
+// POST /api/students/:studentId/competency-progress/initialize - Initialize missing competency progress
+app.post(
+  "/api/students/:studentId/competency-progress/initialize",
+  [authenticateToken, authorize(["admin", "staff"])],
   async (req, res) => {
+    const connection = await pool.getConnection();
+
     try {
-      const [statistics] = await pool.execute(
-        `
-        SELECT 
-          competency_type,
-          COUNT(*) as total_students,
-          COUNT(CASE WHEN passed = 1 THEN 1 END) as passed_count,
-          COUNT(CASE WHEN exam_status = 'Pass' THEN 1 END) as exam_passed_count,
-          COUNT(CASE WHEN exam_status = 'Retake' THEN 1 END) as retake_count,
-          COUNT(CASE WHEN exam_status = 'Not taken' THEN 1 END) as not_taken_count,
-          AVG(score) as average_score,
-          MIN(score) as min_score,
-          MAX(score) as max_score
-        FROM competency_progress
-        GROUP BY competency_type
-        ORDER BY competency_type
-      `
+      const { studentId } = req.params;
+
+      await connection.beginTransaction();
+
+      // Check if student exists
+      const [studentExists] = await connection.execute(
+        "SELECT student_id FROM students WHERE student_id = ?",
+        [studentId]
       );
 
-      // Overall statistics
-      const [overallStats] = await pool.execute(
-        `
-        SELECT 
-          COUNT(DISTINCT student_id) as total_students_with_progress,
-          COUNT(DISTINCT CASE WHEN passed = 1 THEN student_id END) as students_with_any_pass
-        FROM competency_progress
-      `
+      if (studentExists.length === 0) {
+        await connection.rollback();
+        return res.status(404).json({ error: "Student not found" });
+      }
+
+      // Get all active competency types
+      const [competencyTypes] = await connection.execute(
+        `SELECT competency_id, type_name 
+         FROM competencies 
+         WHERE is_active = 1 
+         ORDER BY competency_id`
       );
+
+      // Get existing progress for this student
+      const [existingProgress] = await connection.execute(
+        "SELECT competency_id FROM competency_progress WHERE student_id = ?",
+        [studentId]
+      );
+
+      const existingTypeIds = existingProgress.map(p => p.competency_type_id);
+
+      // Find missing competency types
+      const missingTypes = competencyTypes.filter(
+        type => !existingTypeIds.includes(type.competency_type_id)
+      );
+
+      if (missingTypes.length === 0) {
+        await connection.rollback();
+        return res.json({
+          message: "All competency progress records already exist",
+          student_id: studentId,
+          existing_count: existingTypeIds.length
+        });
+      }
+
+      // Insert missing competency progress records
+      const insertValues = missingTypes.map(type => 
+        `('${studentId}', ${type.competency_id}, 1.00, 0, 'Not taken')`
+      ).join(', ');
+
+      const insertQuery = `
+        INSERT INTO competency_progress (student_id, competency_id, score, passed, exam_status)
+        VALUES ${insertValues}
+      `;
+
+      await connection.execute(insertQuery);
+
+      await connection.commit();
 
       res.json({
-        by_competency_type: statistics,
-        overall: overallStats[0]
+        message: "Competency progress initialized successfully",
+        student_id: studentId,
+        initialized_count: missingTypes.length,
+        initialized_types: missingTypes.map(t => t.type_name)
       });
     } catch (error) {
-      console.error("Error fetching competency statistics:", error);
-      res.status(500).json({ 
-        error: "Failed to fetch competency statistics",
-        details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      await connection.rollback();
+      console.error("Competency progress initialization error:", error);
+      res.status(500).json({
+        error: "Failed to initialize competency progress",
+        details:
+          process.env.NODE_ENV === "development" ? error.message : undefined,
       });
+    } finally {
+      connection.release();
     }
   }
 );
@@ -4977,7 +4995,6 @@ app.get(
 // ============================================================================
 // COURSE AND ENROLLMENT ROUTES (Fixed)
 // ============================================================================
-
 app.post(
   "/api/courses",
   [
@@ -6147,7 +6164,6 @@ app.put(
   }
 );
 
-// GET /api/courses/:courseId/competencies - Get competencies for a specific course
 // GET /api/courses/:courseId/competencies
 app.get("/api/courses/:courseId/competencies", authenticateToken, async (req, res) => {
   try {
@@ -6870,7 +6886,43 @@ app.delete(
   }
 );
 
-// Enhanced endpoint to get students with competency progress
+// GET /api/courses/:courseId/competency-enrollment-stats - Get enrollment stats for all competencies in a course
+app.get(
+  "/api/courses/:courseId/competency-enrollment-stats",
+  authenticateToken,
+  authorize(["admin", "staff"]),
+  async (req, res) => {
+    try {
+      const { courseId } = req.params;
+
+      const [enrollmentStats] = await pool.execute(`
+        SELECT 
+          c.competency_id,
+          c.competency_name,
+          COUNT(DISTINCT se.student_id) as student_count
+        FROM competencies c
+        JOIN course_competencies cc ON c.competency_id = cc.competency_id
+        LEFT JOIN competency_progress cp ON c.competency_id = cp.competency_id
+        LEFT JOIN students s ON cp.student_id = s.student_id
+        LEFT JOIN student_enrollments se ON s.student_id = se.student_id
+        LEFT JOIN course_offerings co ON se.offering_id = co.offering_id
+        WHERE cc.course_id = ? 
+          AND co.course_id = ?
+          AND se.enrollment_status = 'enrolled'
+          AND c.is_active = TRUE
+        GROUP BY c.competency_id, c.competency_name
+        ORDER BY c.competency_name
+      `, [courseId, courseId]);
+
+      res.json(enrollmentStats);
+    } catch (error) {
+      console.error("Competency enrollment stats fetch error:", error);
+      res.status(500).json({ error: "Failed to update course competency" });
+    }
+  }
+);
+
+// Enhanced GET /api/courses/:courseId/students - Get students with competency progress
 app.get(
   "/api/courses/:courseId/students",
   authenticateToken,
@@ -6906,15 +6958,14 @@ app.get(
         for (let student of students) {
           const [progress] = await pool.execute(
             `
-          SELECT sp.score, sp.max_score, sp.percentage_score, sp.passed, 
-                 sp.attempt_number, sp.competency_id
-          FROM student_progress sp
-          JOIN student_enrollments se ON sp.enrollment_id = se.enrollment_id
-          WHERE se.student_id = ? AND se.offering_id = ? AND sp.competency_id = ?
-          ORDER BY sp.attempt_date DESC
+          SELECT cp.score, cp.passed, cp.exam_status, cp.competency_id,
+                 cp.created_at, cp.updated_at
+          FROM competency_progress cp
+          WHERE cp.student_id = ? AND cp.competency_id = ?
+          ORDER BY cp.updated_at DESC
           LIMIT 1
         `,
-            [student.student_id, student.offering_id, competency_id]
+            [student.student_id, competency_id]
           );
 
           student.competency_progress = progress[0] || null;
@@ -7269,7 +7320,7 @@ app.get("/api/courses", authenticateToken, async (req, res) => {
   try {
     const [courses] = await pool.execute(`
       SELECT c.course_id, c.course_code, c.course_name, c.course_description,
-             c.duration_weeks, c.credits, c.is_active
+             c.duration_weeks, c.credits, c.is_active, c.created_at, c.updated_at
       FROM courses c
       WHERE c.is_active = TRUE
       ORDER BY c.course_name
@@ -8345,39 +8396,6 @@ app.delete(
     }
   }
 );
-
-// app.get(
-//   "/api/students/:studentId/enrollments",
-//   authenticateToken,
-//   authorize(["admin", "staff", "student"]),
-//   authorizeStudentAccess,
-//   async (req, res) => {
-//     try {
-//       const { studentId } = req.params;
-
-//       const [enrollments] = await pool.execute(
-//         `
-//       SELECT se.enrollment_id, se.enrollment_status, se.enrollment_date, se.completion_date,
-//              se.final_grade, se.completion_percentage, se.attendance_percentage,
-//              c.course_code, c.course_name, co.batch_identifier, co.start_date, co.end_date,
-//              sa.total_due, sa.amount_paid, sa.balance
-//       FROM student_enrollments se
-//       JOIN course_offerings co ON se.offering_id = co.offering_id
-//       JOIN courses c ON co.course_id = c.course_id
-//       LEFT JOIN student_accounts sa ON se.student_id = sa.student_id AND se.offering_id = sa.offering_id
-//       WHERE se.student_id = ?
-//       ORDER BY co.start_date DESC
-//     `,
-//         [studentId]
-//       );
-
-//       res.json(enrollments);
-//     } catch (error) {
-//       console.error("Student enrollments fetch error:", error);
-//       res.status(500).json({ error: "Failed to fetch student enrollments" });
-//     }
-//   }
-// );
 
 // ============================================================================
 // REFERRAL ROUTES (Fixed)
@@ -10470,6 +10488,90 @@ app.post(
       const student_id = studentResult[0].student_id;
       console.log("🎓 Student created with ID:", student_id);
 
+      // Step 7.5: 🎯 SINGLE BASIC COMPETENCY INITIALIZATION 
+      console.log("Starting single basic competency initialization for student:", student_id);
+      
+      try {
+        // Check if competency progress already exists (safety check)
+        const [existingProgress] = await connection.execute(
+          "SELECT competency_id FROM competency_progress WHERE student_id = ?",
+          [student_id]
+        );
+
+        if (existingProgress.length > 0) {
+          console.log(`Competency progress already exists for student ${student_id}, skipping initialization`);
+        } else {
+          // Fetch only ONE basic competency for new students
+          const [basicCompetency] = await connection.execute(
+            `SELECT competency_id, competency_name
+            FROM competencies 
+            WHERE is_active = 1 
+              AND (
+                competency_level = 'basic' 
+                OR competency_level = 'fundamental' 
+                OR competency_level = 'beginner'
+                OR competency_name LIKE '%basic%'
+                OR competency_name LIKE '%fundamental%'
+                OR competency_name LIKE '%introduction%'
+                OR competency_name LIKE '%beginner%'
+                OR is_required_for_new_students = 1
+              )
+            ORDER BY competency_id
+            LIMIT 1`
+          );
+
+          if (basicCompetency.length > 0) {
+            const selectedCompetency = basicCompetency[0];
+            
+            // Initialize competency progress for ONLY ONE basic competency
+            await connection.execute(
+              `INSERT INTO competency_progress 
+              (student_id, competency_id, score, passed, exam_status, created_at, updated_at)
+              VALUES (?, ?, 0.00, 0, 'Not taken', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+              [student_id, selectedCompetency.competency_id]
+            );
+                  
+            console.log(`✅ Single basic competency initialized for student: ${student_id}`);
+            console.log(`   - Competency ID: ${selectedCompetency.competency_id}`);
+            console.log(`   - Competency Name: ${selectedCompetency.competency_name}`);
+          } else {
+            console.warn("⚠️  No basic competency found in database");
+            
+            // Fallback: Get the very first competency available
+            const [fallbackCompetency] = await connection.execute(
+              `SELECT competency_id, competency_name
+              FROM competencies 
+              WHERE is_active = 1 
+              ORDER BY competency_id
+              LIMIT 1`
+            );
+            
+            if (fallbackCompetency.length > 0) {
+              const selectedCompetency = fallbackCompetency[0];
+              
+              await connection.execute(
+                `INSERT INTO competency_progress 
+                (student_id, competency_id, score, passed, exam_status, created_at, updated_at)
+                VALUES (?, ?, 0.00, 0, 'Not taken', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+                [student_id, selectedCompetency.competency_id]
+              );
+              
+              console.log(`✅ Fallback: Single competency initialized for student: ${student_id}`);
+              console.log(`   - Competency ID: ${selectedCompetency.competency_id}`);
+              console.log(`   - Competency Name: ${selectedCompetency.competency_name}`);
+            } else {
+              console.error("❌ No competencies found in database at all!");
+            }
+          }
+        }
+        
+      } catch (competencyError) {
+        console.error("❌ Error initializing single basic competency:", competencyError);
+        // Don't rollback the entire transaction for competency initialization failure
+        // Log the error but continue with the student creation
+        console.log("Continuing with student creation despite competency initialization error");
+      }
+
       // Step 8: Handle sponsor information if provided
       let sponsorInfo = req.body.sponsor_info;
       
@@ -10638,7 +10740,26 @@ app.post(
       await connection.commit();
       console.log("✅ Transaction committed successfully");
 
-      // Step 15: Send email credentials
+      // Step 15: Fetch competency progress data to include in response
+      const [competencyData] = await connection.execute(
+        `SELECT 
+          cp.progress_id,
+          cp.competency_id,
+          cp.passed,
+          cp.exam_status,
+          cp.created_at,
+          cp.updated_at,
+          c.competency_name
+        FROM competency_progress cp
+        JOIN competencies c ON cp.competency_id = c.competency_id
+        WHERE cp.student_id = ?
+        ORDER BY c.competency_id`,
+        [student_id]
+      );
+
+      console.log(`✅ Student creation completed. Competency records created: ${competencyData.length}`);
+
+      // Step 16: Send email credentials
       let emailSent = false;
       let emailError = null;
 
@@ -10671,8 +10792,8 @@ app.post(
       // Final response
       res.status(201).json({
         message: isNewBatch 
-          ? `Student registered successfully in new batch ${courseOffering.batch_identifier}`
-          : "Student registered successfully",
+          ? `Student registered successfully in new batch ${courseOffering.batch_identifier} with competency progress initialized`
+          : "Student registered successfully with competency progress initialized",
         student_id,
         account_id,
         course_offering: {
@@ -10696,6 +10817,13 @@ app.post(
           amount_paid: amountPaid,
           balance: balance,
           due_date: dueDate
+        },
+        competency_progress: competencyData,
+        competency_summary: {
+          total_competencies: competencyData.length,
+          passed: competencyData.filter(p => p.passed === 1).length,
+          in_progress: competencyData.filter(p => p.passed === 0 && p.exam_status !== 'Not taken').length,
+          not_started: competencyData.filter(p => p.exam_status === 'Not taken').length
         },
         sponsor_info: sponsorInfo, // Include sponsor information in response
         email_sent: emailSent,

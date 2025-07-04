@@ -21,11 +21,11 @@ const Batch = () => {
   const [students, setStudents] = useState([]);
   const [courses, setCourses] = useState([]);
   const [courseOfferings, setCourseOfferings] = useState([]);
-  const [competencies, setCompetencies] = useState([]); // Added for competencies
-  const [batchCompetencies, setBatchCompetencies] = useState({}); // Added for batch-specific competencies
+  const [competencies, setCompetencies] = useState([]);
+  const [studentCompetencies, setStudentCompetencies] = useState({}); // Changed to store student-specific competencies
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [activeView, setActiveView] = useState('byBatch'); // 'byBatch', 'byCourse', 'allStudents'
+  const [activeView, setActiveView] = useState('byBatch');
   
   // Selection states
   const [selectedStudents, setSelectedStudents] = useState(new Set());
@@ -79,7 +79,7 @@ const Batch = () => {
         fetchStudents(),
         fetchCourses(),
         fetchCourseOfferings(),
-        fetchCompetencies() // Added competencies fetch
+        fetchCompetencies()
       ]);
     } catch (error) {
       console.error('Error initializing data:', error);
@@ -147,6 +147,11 @@ const Batch = () => {
       const studentsData = await makeAuthenticatedRequest('http://localhost:3000/api/students');
       setStudents(studentsData || []);
       console.log('Fetched students:', studentsData);
+      
+      // After fetching students, get their individual competencies
+      if (studentsData && studentsData.length > 0) {
+        await fetchStudentCompetencies(studentsData);
+      }
     } catch (err) {
       console.error('Failed to fetch students:', err.message);
       setError('Failed to fetch students: ' + err.message);
@@ -173,50 +178,151 @@ const Batch = () => {
     }
   };
 
-  // New function to fetch competencies
   const fetchCompetencies = async () => {
     try {
       const competenciesData = await makeAuthenticatedRequest('http://localhost:3000/api/competencies');
       setCompetencies(competenciesData || []);
       console.log('Fetched competencies:', competenciesData);
-      
-      // After fetching competencies, get batch-specific competencies
-      await fetchBatchCompetencies();
     } catch (err) {
       console.error('Failed to fetch competencies:', err.message);
     }
   };
 
-  // New function to fetch batch-specific competencies
-  const fetchBatchCompetencies = async () => {
+  // Function to fetch student-specific competencies using available endpoints
+  const fetchStudentCompetencies = async (studentsData = students) => {
     try {
-      // Get all batches with their competencies
-      const batchesData = await makeAuthenticatedRequest('http://localhost:3000/api/batches-with-students');
+      const studentCompetencyMap = {};
       
-      if (batchesData && batchesData.batches) {
-        const batchCompetencyMap = {};
-        
-        // For each batch, get its associated competencies through course
-        for (const batch of batchesData.batches) {
+      // Fetch competencies for each student individually
+      for (const student of studentsData) {
+        try {
+          let studentComps = [];
+          
+          // Get competencies from student enrollments (main approach)
           try {
-            // Fetch competencies for this batch's course
-            const courseCompetencies = await makeAuthenticatedRequest(
-              `http://localhost:3000/api/courses/${batch.course.course_id}/competencies`
+            const enrollments = await makeAuthenticatedRequest(
+              `http://localhost:3000/api/students/${student.student_id}/enrollments`
             );
-            batchCompetencyMap[batch.batch_identifier] = courseCompetencies || [];
+            
+            // Get unique course IDs from enrollments
+            const uniqueCourseIds = new Set();
+            
+            // Extract course IDs from enrollments
+            for (const enrollment of enrollments || []) {
+              if (enrollment.course_code) {
+                // Find course by course_code to get course_id
+                const course = courses.find(c => c.course_code === enrollment.course_code);
+                if (course) {
+                  uniqueCourseIds.add(course.course_id);
+                }
+              }
+            }
+            
+            // Get competencies for each unique course
+            for (const courseId of uniqueCourseIds) {
+              try {
+                const courseComps = await makeAuthenticatedRequest(
+                  `http://localhost:3000/api/courses/${courseId}/competencies`
+                );
+                
+                // Add enrollment info to competencies
+                const enrichedComps = (courseComps || []).map(comp => ({
+                  ...comp,
+                  source: 'enrollment',
+                  course_id: courseId,
+                  is_current: true // Mark as current since from active enrollment
+                }));
+                
+                studentComps = [...studentComps, ...enrichedComps];
+              } catch (err) {
+                console.warn(`Failed to fetch competencies for course ${courseId}:`, err.message);
+              }
+            }
+            
           } catch (err) {
-            console.warn(`Failed to fetch competencies for batch ${batch.batch_identifier}:`, err.message);
-            batchCompetencyMap[batch.batch_identifier] = [];
+            console.warn(`Enrollment-based competency fetch failed for student ${student.student_id}:`, err.message);
           }
+          
+          // Fallback: Get competencies from student's primary course if no enrollments found
+          if (studentComps.length === 0) {
+            let courseIdToTry = null;
+            
+            // Try to get course_id from student data
+            if (student.course_id) {
+              courseIdToTry = parseInt(student.course_id);
+            } else if (student.course_code) {
+              const course = courses.find(c => c.course_code === student.course_code);
+              if (course) {
+                courseIdToTry = course.course_id;
+              }
+            } else if (student.enrolled_courses) {
+              // Parse enrolled_courses string to find course
+              const enrolledCoursesList = student.enrolled_courses.split(',').map(c => c.trim());
+              for (const courseStr of enrolledCoursesList) {
+                const courseCode = courseStr.split(' - ')[0].trim();
+                const course = courses.find(c => c.course_code === courseCode);
+                if (course) {
+                  courseIdToTry = course.course_id;
+                  break; // Use first found course
+                }
+              }
+            }
+            
+            if (courseIdToTry) {
+              try {
+                const courseComps = await makeAuthenticatedRequest(
+                  `http://localhost:3000/api/courses/${courseIdToTry}/competencies`
+                );
+                
+                // Mark as fallback competencies
+                const fallbackComps = (courseComps || []).map(comp => ({
+                  ...comp,
+                  source: 'course_fallback',
+                  course_id: courseIdToTry,
+                  is_current: true
+                }));
+                
+                studentComps = [...studentComps, ...fallbackComps];
+              } catch (err) {
+                console.warn(`Course fallback competency fetch failed for student ${student.student_id}:`, err.message);
+              }
+            }
+          }
+          
+          // Remove duplicates based on competency_id
+          const uniqueCompetencies = [];
+          const seenIds = new Set();
+          
+          for (const comp of studentComps) {
+            const compId = comp.competency_id || comp.competency_code || comp.competency_name;
+            if (compId && !seenIds.has(compId)) {
+              seenIds.add(compId);
+              uniqueCompetencies.push(comp);
+            }
+          }
+          
+          // Filter to only active competencies
+          const activeComps = uniqueCompetencies.filter(comp => 
+            comp.is_active === true || 
+            comp.is_active === 1 ||
+            comp.is_current === true ||
+            !comp.hasOwnProperty('is_active') // Include if no is_active field
+          );
+          
+          studentCompetencyMap[student.student_id] = activeComps;
+          
+        } catch (err) {
+          console.warn(`Failed to fetch competencies for student ${student.student_id}:`, err.message);
+          studentCompetencyMap[student.student_id] = [];
         }
-        
-        setBatchCompetencies(batchCompetencyMap);
-        console.log('Fetched batch competencies:', batchCompetencyMap);
       }
+      
+      setStudentCompetencies(studentCompetencyMap);
+      console.log('Fetched student competencies:', studentCompetencyMap);
+      
     } catch (err) {
-      console.error('Failed to fetch batch competencies:', err.message);
-      // If the endpoint doesn't exist, we'll show a fallback
-      setBatchCompetencies({});
+      console.error('Failed to fetch student competencies:', err.message);
+      setStudentCompetencies({});
     }
   };
 
@@ -251,15 +357,12 @@ const Batch = () => {
     const courseCodes = new Set();
     
     selectedStudentData.forEach(student => {
-      // Handle enrolled_courses (comma-separated string)
       if (student.enrolled_courses) {
         const enrolledCourses = student.enrolled_courses.split(',').map(c => c.trim());
         enrolledCourses.forEach(courseStr => {
-          // Extract course code from strings like "BA001 - Business Analytics"
           const courseCode = courseStr.split(' - ')[0].trim();
           courseCodes.add(courseCode);
           
-          // Also try to find the full course by name match
           const matchingCourse = courses.find(c => 
             courseStr.toLowerCase().includes(c.course_name.toLowerCase()) ||
             courseStr.toLowerCase().includes(c.course_code.toLowerCase())
@@ -271,15 +374,12 @@ const Batch = () => {
         });
       }
       
-      // Handle direct course_id
       if (student.course_id) {
         courseIds.add(parseInt(student.course_id));
       }
       
-      // Handle course_code
       if (student.course_code) {
         courseCodes.add(student.course_code);
-        // Also find the course_id for this code
         const matchingCourse = courses.find(c => c.course_code === student.course_code);
         if (matchingCourse) {
           courseIds.add(matchingCourse.course_id);
@@ -298,22 +398,17 @@ const Batch = () => {
     
     const { courseIds, courseCodes } = getCoursesForSelectedStudents;
     
-    // If no courses identified, return empty array
     if (courseIds.size === 0 && courseCodes.size === 0) {
       return [];
     }
     
-    // Filter course offerings to only include relevant courses
     const relevantOfferings = courseOfferings.filter(offering => {
-      // Find the course for this offering
       const course = courses.find(c => c.course_id === offering.course_id);
       if (!course) return false;
       
-      // Check if this course is in the selected students' courses
       return courseIds.has(course.course_id) || courseCodes.has(course.course_code);
     });
     
-    // Extract unique batch identifiers
     const batchIdentifiers = relevantOfferings
       .map(offering => offering.batch_identifier)
       .filter(Boolean);
@@ -425,54 +520,110 @@ const Batch = () => {
     return grouped;
   }, [filteredStudents, courses]);
 
-  // New function to get competencies for a batch
-  const getBatchCompetencies = (batchName) => {
-    const batchCompetencyList = batchCompetencies[batchName] || [];
-    
-    if (batchCompetencyList.length === 0) {
-      // Fallback: try to get competencies based on batch naming pattern
-      // If batch name contains a course code, try to find competencies for that course
-      const courseCode = batchName.split('-')[0]; // e.g., "BA001" from "BA001-2025-01"
-      const matchingCourse = courses.find(c => c.course_code === courseCode);
-      
-      if (matchingCourse) {
-        // Return competencies that match the course pattern or type
-        return competencies.filter(comp => 
-          comp.competency_type?.toLowerCase().includes('basic') ||
-          comp.competency_name?.toLowerCase().includes('basic') ||
-          comp.competency_code?.toLowerCase().includes(courseCode.toLowerCase())
-        );
-      }
-    }
-    
-    return batchCompetencyList;
+  // Function to get competencies for a specific student
+  const getStudentCompetencies = (studentId) => {
+    return studentCompetencies[studentId] || [];
   };
 
-  // New function to format competencies display
-  const formatCompetenciesDisplay = (competenciesList) => {
-    if (!competenciesList || competenciesList.length === 0) {
-      return 'No competencies assigned';
+  // Function to format student competencies display
+  const formatStudentCompetenciesDisplay = (studentId) => {
+    const studentComps = getStudentCompetencies(studentId);
+    
+    if (!studentComps || studentComps.length === 0) {
+      return 'No active competencies';
     }
     
-    if (competenciesList.length === 1) {
-      return competenciesList[0].competency_name || competenciesList[0].competency_type || 'Unknown';
+    if (studentComps.length === 1) {
+      const comp = studentComps[0];
+      return comp.competency_name || 'Active Competency';
     }
     
-    // Group by type if available
-    const groupedByType = competenciesList.reduce((acc, comp) => {
-      const type = comp.competency_type || 'General';
+    // Group by competency type if available
+    const byType = studentComps.reduce((acc, comp) => {
+      const type = comp.competency_type || comp.type_name || 'General';
       if (!acc[type]) acc[type] = [];
       acc[type].push(comp);
       return acc;
     }, {});
     
-    // Format display
-    const typeNames = Object.keys(groupedByType);
-    if (typeNames.length === 1) {
-      return typeNames[0];
+    const typeNames = Object.keys(byType);
+    if (typeNames.length === 1 && byType[typeNames[0]].length <= 3) {
+      // Show individual competency names if few enough
+      return byType[typeNames[0]]
+        .map(comp => comp.competency_name || comp.competency_code)
+        .filter(Boolean)
+        .join(', ') || `${studentComps.length} competencies`;
     }
     
-    return typeNames.join(', ');
+    if (typeNames.length === 1) {
+      return `${studentComps.length} ${typeNames[0]} competencies`;
+    }
+    
+    return `${studentComps.length} competencies (${typeNames.slice(0, 2).join(', ')}${typeNames.length > 2 ? '...' : ''})`;
+  };
+
+  // Function to get detailed competencies for a batch (aggregated from students)
+  const getBatchCompetenciesSummary = (batchStudents) => {
+    const competencyStats = {};
+    const totalStudents = batchStudents.length;
+    
+    batchStudents.forEach(student => {
+      const studentComps = getStudentCompetencies(student.student_id);
+      studentComps.forEach(comp => {
+        const key = comp.competency_id || comp.competency_code || comp.competency_name;
+        const name = comp.competency_name || comp.competency_code || 'Unknown Competency';
+        const type = comp.competency_type || comp.type_name || 'General';
+        
+        if (key) {
+          if (!competencyStats[key]) {
+            competencyStats[key] = {
+              name: name,
+              type: type,
+              studentCount: 0,
+              students: []
+            };
+          }
+          competencyStats[key].studentCount++;
+          competencyStats[key].students.push(student.student_id);
+        }
+      });
+    });
+    
+    return { competencyStats, totalStudents };
+  };
+
+  // Function to format batch competencies summary
+  const formatBatchCompetenciesDisplay = (batchStudents) => {
+    const { competencyStats, totalStudents } = getBatchCompetenciesSummary(batchStudents);
+    const competencyKeys = Object.keys(competencyStats);
+    
+    if (competencyKeys.length === 0) {
+      return 'No competencies found';
+    }
+    
+    if (competencyKeys.length === 1) {
+      const comp = competencyStats[competencyKeys[0]];
+      return `${comp.name} (${comp.studentCount}/${totalStudents} students)`;
+    }
+    
+    // Group by type and show summary
+    const typeGroups = {};
+    competencyKeys.forEach(key => {
+      const comp = competencyStats[key];
+      if (!typeGroups[comp.type]) {
+        typeGroups[comp.type] = [];
+      }
+      typeGroups[comp.type].push(comp);
+    });
+    
+    const typeNames = Object.keys(typeGroups);
+    if (typeNames.length === 1) {
+      const typeName = typeNames[0];
+      const count = typeGroups[typeName].length;
+      return `${count} ${typeName} competencies`;
+    }
+    
+    return `${competencyKeys.length} competencies across ${typeNames.length} types`;
   };
 
   // Handle filter changes
@@ -552,7 +703,6 @@ const Batch = () => {
     try {
       const studentIds = Array.from(selectedStudents);
       
-      // Call API to update batch assignments
       const response = await makeAuthenticatedRequest(
         'http://localhost:3000/api/students/batch-reassign',
         {
@@ -564,10 +714,8 @@ const Batch = () => {
         }
       );
 
-      // Refresh students data
       await fetchStudents();
       
-      // Clear selections and close modal
       setSelectedStudents(new Set());
       setSelectAll(false);
       setShowBatchReassignment(false);
@@ -634,9 +782,10 @@ const Batch = () => {
     return 'No active enrollments';
   };
 
-  // Render student card
+  // Render student card with individual competencies
   const renderStudentCard = (student) => {
     const isSelected = selectedStudents.has(student.student_id);
+    const studentComps = getStudentCompetencies(student.student_id);
     
     return (
       <div
@@ -682,6 +831,30 @@ const Batch = () => {
               {student.batch_identifiers || student.batch_identifier || student.batch_year || 'N/A'}
             </span>
           </div>
+          
+          {/* Student-specific competencies display */}
+          <div style={styles.detailRow}>
+            <span style={styles.detailLabel}>Current Competencies:</span>
+            <span style={styles.detailValue}>
+              {formatStudentCompetenciesDisplay(student.student_id)}
+            </span>
+          </div>
+          
+          {/* Show detailed competencies if available */}
+          {studentComps.length > 0 && (
+            <div style={styles.competencyDetails}>
+              {studentComps.slice(0, 3).map((comp, index) => (
+                <span key={index} style={styles.competencyBadge}>
+                  {comp.competency_name || comp.competency_code || `Competency ${index + 1}`}
+                </span>
+              ))}
+              {studentComps.length > 3 && (
+                <span style={{...styles.competencyBadge, backgroundColor: '#f0f0f0', color: '#666'}}>
+                  +{studentComps.length - 3} more
+                </span>
+              )}
+            </div>
+          )}
           
           <div style={styles.detailRow}>
             <span style={styles.detailLabel}>Email:</span>
@@ -1012,7 +1185,6 @@ const Batch = () => {
       fontSize: '12px',
       fontWeight: '500'
     },
-    // New style for competencies display
     competenciesInfo: {
       display: 'flex',
       alignItems: 'center',
@@ -1029,7 +1201,19 @@ const Batch = () => {
       borderRadius: '12px',
       fontSize: '11px',
       fontWeight: '500',
-      border: '1px solid #d1e7dd'
+      border: '1px solid #d1e7dd',
+      marginRight: '4px',
+      display: 'inline-block'
+    },
+    competencyDetails: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: '4px',
+      marginTop: '8px',
+      padding: '8px',
+      backgroundColor: '#f8f9fa',
+      borderRadius: '6px',
+      border: '1px solid #e9ecef'
     },
     studentsGrid: {
       display: 'grid',
@@ -1372,8 +1556,8 @@ const Batch = () => {
           style={styles.bulkActionButton}
           onClick={() => {
             setShowBatchReassignment(true);
-            setNewBatchId(''); // Clear previous selection when opening modal
-            setReassignmentError(''); // Clear any previous errors
+            setNewBatchId('');
+            setReassignmentError('');
           }}
           disabled={selectedStudents.size === 0}
         >
@@ -1385,8 +1569,8 @@ const Batch = () => {
           style={styles.bulkActionButton}
           onClick={() => {
             setShowBatchReassignment(true);
-            setNewBatchId(''); // Clear previous selection when opening modal
-            setReassignmentError(''); // Clear any previous errors
+            setNewBatchId('');
+            setReassignmentError('');
           }}
           disabled={selectedStudents.size === 0}
         >
@@ -1407,8 +1591,7 @@ const Batch = () => {
               .sort(([a], [b]) => a.localeCompare(b))
               .map(([batchName, batchStudents]) => {
                 const isExpanded = expandedSections.has(`batch-${batchName}`);
-                const batchCompetenciesList = getBatchCompetencies(batchName);
-                const competenciesDisplay = formatCompetenciesDisplay(batchCompetenciesList);
+                const competenciesDisplay = formatBatchCompetenciesDisplay(batchStudents);
                 
                 return (
                   <div key={batchName} style={styles.contentSection}>
@@ -1424,7 +1607,7 @@ const Batch = () => {
                             {batchStudents.length} students
                           </span>
                         </div>
-                        {/* Competencies Display */}
+                        {/* Updated Competencies Display */}
                         <div style={styles.competenciesInfo}>
                           <Award size={16} />
                           <span>Competencies: </span>
